@@ -1,0 +1,6 @@
+/openbayes/home/build/CMakeFiles/tiny_llm_core.dir
+/openbayes/home/build/CMakeFiles/main_app.dir
+/openbayes/home/build/CMakeFiles/kernels.dir
+/openbayes/home/build/CMakeFiles/test.dir
+/openbayes/home/build/CMakeFiles/edit_cache.dir
+/openbayes/home/build/CMakeFiles/rebuild_cache.dir

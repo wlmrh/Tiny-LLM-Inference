@@ -1,0 +1,2 @@
+/usr/bin/ar qc libkernels.a CMakeFiles/kernels.dir/kernels/vector_add.cu.o
+/usr/bin/ranlib libkernels.a
