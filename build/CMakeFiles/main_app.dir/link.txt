@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/main_app.dir/main.cpp.o CMakeFiles/main_app.dir/cmake_device_link.o -o main_app   -L/usr/lib/x86_64-linux-gnu/stubs  -L/usr/lib/gcc/x86_64-linux-gnu/11  libtiny_llm_core.a -lcuda libkernels.a -lcudadevrt -lcudart_static -lrt -lpthread -ldl -lstdc++ -lm -lgcc_s -lgcc -lc -lgcc_s -lgcc 

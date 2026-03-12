@@ -1,54 +1,42 @@
 #pragma once
-
 #include <cstddef>
+#include <cstdint>
 #include <vector>
-#include "tensor.h"
 
 namespace tiny_llm {
 
+class Tensor;
+enum class DType;
+
 class StackAllocator {
 public:
-    explicit StackAllocator(size_t pool_size);
+    explicit StackAllocator(size_t bytes);
     ~StackAllocator();
 
-    // allocate raw bytes from the pool
-    void* allocate(size_t bytes);
-    
-    // reset for next token (deallocation is implicit)
-    void reset();
-    
-    // factory method to create Tensor with memory from this pool
-    Tensor create_tensor(std::vector<int64_t> shape, DType dtype);
+    void reset();                 // called at begin_step
+    void* allocate(size_t bytes); // bump pointer
+
+    Tensor make_tensor(std::vector<int64_t> shape, DType dtype);
 
 private:
-    void* base_ptr_ = nullptr;
-    size_t offset_ = 0;
-    size_t total_size_ = 0;
+    void* base_ = nullptr;  // device pointer
+    size_t cap_ = 0;
+    size_t off_ = 0;
 };
 
 class BlockAllocator {
 public:
-    // Initialize with GPU memory dedicated to KV cache blocks
-    BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool);
-    ~BlockAllocator();
+    BlockAllocator(void* pool, size_t num_blocks, size_t bytes_per_block);
 
-    // allocate a block index
-    int32_t allocate_block();
-    
-    // free a block index back to free list
+    int32_t alloc_block();            // returns block_id or -1
     void free_block(int32_t block_id);
-    
-    // get physical GPU pointer for a given block
-    void* get_block_ptr(int32_t block_id) const;
-    
-    // factory method to create Tensor for KV cache
-    Tensor create_block_tensor(std::vector<int64_t> shape, DType dtype);
+    void* block_ptr(int32_t block_id) const;
 
 private:
-    void* gpu_pool_ = nullptr;              // base pointer to GPU pool for blocks
-    std::vector<int32_t> free_list_;        // free block indices
-    size_t block_size_ = 0;                 // bytes per block
-    size_t num_blocks_ = 0;
+    void* pool_ = nullptr;
+    size_t n_ = 0;
+    size_t bsz_ = 0;
+    std::vector<int32_t> free_;
 };
 
 } // namespace tiny_llm

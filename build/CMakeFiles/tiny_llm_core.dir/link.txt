@@ -1,2 +1,0 @@
-/usr/bin/ar qc libtiny_llm_core.a CMakeFiles/tiny_llm_core.dir/src/core/tensor.cpp.o CMakeFiles/tiny_llm_core.dir/src/core/allocator.cpp.o CMakeFiles/tiny_llm_core.dir/src/models/llama_layer.cpp.o CMakeFiles/tiny_llm_core.dir/src/operators/ops.cpp.o
-/usr/bin/ranlib libtiny_llm_core.a

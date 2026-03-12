@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/dummy_test.dir/tests_dummy.cpp.o -o dummy_test  ../libtiny_llm_core.a -lcuda 
