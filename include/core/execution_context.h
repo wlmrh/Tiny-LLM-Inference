@@ -1,5 +1,5 @@
 #pragma once
-#include <cuda_runtime.h>
+#include "utils/cuda_compat.h"
 
 namespace tiny_llm {
 

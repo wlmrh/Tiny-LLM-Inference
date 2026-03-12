@@ -40,21 +40,24 @@ int main() {
     
     // Allocate tensors from the workspace allocator.
     try {
-        Tensor a = allocator.create_tensor({n}, DType::kFloat32);
-        Tensor b = allocator.create_tensor({n}, DType::kFloat32);
-        Tensor c = allocator.create_tensor({n}, DType::kFloat32);
+        Tensor a = allocator.make_tensor({n}, DType::kFloat32);
+        Tensor b = allocator.make_tensor({n}, DType::kFloat32);
+        Tensor c = allocator.make_tensor({n}, DType::kFloat32);
+
+        float* a_dev = static_cast<float*>(a.data());
+        float* b_dev = static_cast<float*>(b.data());
+        float* c_dev = static_cast<float*>(c.data());
         
         // Upload input vectors to device memory.
-        CHECK_CUDA(cudaMemcpy(a.data<float>(), a_h.data(), tensor_size, cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMemcpy(b.data<float>(), b_h.data(), tensor_size, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(a_dev, a_h.data(), tensor_size, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(b_dev, b_h.data(), tensor_size, cudaMemcpyHostToDevice));
         
         // Launch CUDA kernel on the default stream.
-        launch_vector_add(a.data<const float>(), b.data<const float>(), 
-                         c.data<float>(), n, 0);
+        launch_vector_add(a_dev, b_dev, c_dev, n, 0);
         CHECK_CUDA(cudaDeviceSynchronize());
         
         // Download GPU result for verification.
-        CHECK_CUDA(cudaMemcpy(c_h_gpu.data(), c.data<float>(), tensor_size, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(c_h_gpu.data(), c_dev, tensor_size, cudaMemcpyDeviceToHost));
         
         std::cout << "vector_add completed" << std::endl;
         

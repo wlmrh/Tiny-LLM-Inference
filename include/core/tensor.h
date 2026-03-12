@@ -12,10 +12,10 @@ class Tensor {
 public:
     Tensor() = default;
     Tensor(void* data, std::vector<int64_t> shape, DType dtype)
-        : data_(data), shape_(std::move(shape)), dtype_(dtype) {}
+        : data_ptr_(data), shape_(std::move(shape)), dtype_(dtype) {}
 
     // Returns raw storage pointer.
-    void* data() const { return data_; }
+    void* data() const { return data_ptr_; }
     // Returns tensor dimensions.
     const std::vector<int64_t>& shape() const { return shape_; }
     // Returns tensor element type.
@@ -26,7 +26,7 @@ public:
 
 private:
     // Raw data pointer (typically GPU memory in this project).
-    void* data_ = nullptr;
+    void* data_ptr_ = nullptr;
     // Tensor dimensions in row-major logical order.
     std::vector<int64_t> shape_;
     // Scalar element type for this tensor.

@@ -1,4 +1,4 @@
-#include "models/llama_layer.h"
+#include "models/mini_llama.h"
 
 namespace tiny_llm {
 

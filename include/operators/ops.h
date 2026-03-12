@@ -9,6 +9,6 @@ namespace tiny_llm {
         void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx);
 
         // Paged-attention interface placeholder kept stable for integration.
-        void attention_paged(const Tensor& q, /*...*/, Tensor& out, ExecutionContext& ctx);
+        void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx);
     } // namespace ops
 } // namespace tiny_llm

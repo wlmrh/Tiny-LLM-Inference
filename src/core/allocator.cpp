@@ -1,6 +1,8 @@
 #include "core/allocator.h"
 #include "utils/cuda_utils.h"
 
+#include <stdexcept>
+
 namespace tiny_llm {
 
 StackAllocator::StackAllocator(size_t pool_size) : total_size_(pool_size) {
@@ -27,13 +29,13 @@ void StackAllocator::reset() {
     offset_ = 0;
 }
 
-Tensor StackAllocator::create_tensor(std::vector<int64_t> shape, DType dtype) {
+Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
     // Compute allocation size from tensor shape and scalar type.
     size_t bytes = 0;
     switch (dtype) {
         case DType::kFloat32: bytes = 4; break;
         case DType::kFloat16: bytes = 2; break;
-        case DType::kInt8: bytes = 1; break;
+        case DType::kInt32: bytes = 4; break;
     }
     for (auto d : shape) bytes *= d;
     
@@ -41,7 +43,7 @@ Tensor StackAllocator::create_tensor(std::vector<int64_t> shape, DType dtype) {
     if (ptr == nullptr) {
         throw std::runtime_error("StackAllocator: out of memory");
     }
-    return Tensor(std::move(shape), dtype, ptr);
+    return Tensor(ptr, std::move(shape), dtype);
 }
 
 BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool)
@@ -50,10 +52,6 @@ BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void*
     for (int i = num_blocks - 1; i >= 0; --i) {
         free_list_.push_back(i);
     }
-}
-
-BlockAllocator::~BlockAllocator() {
-    // gpu_pool_ is non-owning and managed by the caller.
 }
 
 int32_t BlockAllocator::allocate_block() {
@@ -72,17 +70,6 @@ void* BlockAllocator::get_block_ptr(int32_t block_id) const {
         return nullptr;
     }
     return static_cast<char*>(gpu_pool_) + block_id * block_size_;
-}
-
-Tensor BlockAllocator::create_block_tensor(std::vector<int64_t> shape, DType dtype) {
-    // Current simplified policy: one block per tensor allocation.
-    // Future implementations may pack multiple KV fragments into one block.
-    int32_t block_id = allocate_block();
-    if (block_id < 0) {
-        throw std::runtime_error("BlockAllocator: no free blocks");
-    }
-    void* ptr = get_block_ptr(block_id);
-    return Tensor(std::move(shape), dtype, ptr);
 }
 
 } // namespace tiny_llm

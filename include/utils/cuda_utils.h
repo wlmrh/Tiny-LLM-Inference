@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cuda_runtime.h>
+#include "utils/cuda_compat.h"
 #include <iostream>
 
 // Wraps a CUDA runtime call and aborts the process with diagnostics on failure.
