@@ -16,7 +16,7 @@ StackAllocator::~StackAllocator() {
 
 void* StackAllocator::allocate(size_t bytes) {
     if (offset_ + bytes > total_size_) {
-        return nullptr; // out of memory
+        return nullptr; // Workspace capacity exceeded.
     }
     void* ptr = static_cast<char*>(base_ptr_) + offset_;
     offset_ += bytes;
@@ -28,7 +28,7 @@ void StackAllocator::reset() {
 }
 
 Tensor StackAllocator::create_tensor(std::vector<int64_t> shape, DType dtype) {
-    // Calculate required bytes based on shape and dtype
+    // Compute allocation size from tensor shape and scalar type.
     size_t bytes = 0;
     switch (dtype) {
         case DType::kFloat32: bytes = 4; break;
@@ -53,7 +53,7 @@ BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void*
 }
 
 BlockAllocator::~BlockAllocator() {
-    // gpu_pool memory is managed externally, not freed here
+    // gpu_pool_ is non-owning and managed by the caller.
 }
 
 int32_t BlockAllocator::allocate_block() {
@@ -75,8 +75,8 @@ void* BlockAllocator::get_block_ptr(int32_t block_id) const {
 }
 
 Tensor BlockAllocator::create_block_tensor(std::vector<int64_t> shape, DType dtype) {
-    // For now, allocate one block per tensor
-    // In reality, one block may contain multiple KV pairs
+    // Current simplified policy: one block per tensor allocation.
+    // Future implementations may pack multiple KV fragments into one block.
     int32_t block_id = allocate_block();
     if (block_id < 0) {
         throw std::runtime_error("BlockAllocator: no free blocks");

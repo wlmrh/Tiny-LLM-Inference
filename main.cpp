@@ -7,10 +7,10 @@
 
 using namespace tiny_llm;
 
-// declare external kernel launcher
+// External CUDA launcher provided by kernels/vector_add.cu.
 extern "C" void launch_vector_add(const float* a, const float* b, float* c, int n, cudaStream_t stream);
 
-// CPU version of vector add
+// Reference CPU implementation used to validate GPU output.
 void vector_add_cpu(const float* a, const float* b, float* c, int n) {
     for (int i = 0; i < n; ++i) {
         c[i] = a[i] + b[i];
@@ -23,42 +23,42 @@ int main() {
     const int n = 16;
     const size_t tensor_size = n * sizeof(float);
     
-    // Host arrays for CPU computation and comparison
+    // Host buffers for inputs and CPU/GPU output comparison.
     std::vector<float> a_h(n), b_h(n), c_h_cpu(n), c_h_gpu(n);
     
-    // Initialize host data
+    // Initialize deterministic input data.
     for (int i = 0; i < n; ++i) {
         a_h[i] = static_cast<float>(i);
         b_h[i] = static_cast<float>(i * 2);
     }
     
-    // CPU computation
+    // Run CPU reference path.
     vector_add_cpu(a_h.data(), b_h.data(), c_h_cpu.data(), n);
     
-    // Create StackAllocator with 1MB pool
+    // Allocate a 1 MB workspace on device memory.
     StackAllocator allocator(1024 * 1024);
     
-    // Create tensors using allocator
+    // Allocate tensors from the workspace allocator.
     try {
         Tensor a = allocator.create_tensor({n}, DType::kFloat32);
         Tensor b = allocator.create_tensor({n}, DType::kFloat32);
         Tensor c = allocator.create_tensor({n}, DType::kFloat32);
         
-        // Copy host data to GPU
+        // Upload input vectors to device memory.
         CHECK_CUDA(cudaMemcpy(a.data<float>(), a_h.data(), tensor_size, cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(b.data<float>(), b_h.data(), tensor_size, cudaMemcpyHostToDevice));
         
-        // Launch kernel
+        // Launch CUDA kernel on the default stream.
         launch_vector_add(a.data<const float>(), b.data<const float>(), 
                          c.data<float>(), n, 0);
         CHECK_CUDA(cudaDeviceSynchronize());
         
-        // Copy result back to host
+        // Download GPU result for verification.
         CHECK_CUDA(cudaMemcpy(c_h_gpu.data(), c.data<float>(), tensor_size, cudaMemcpyDeviceToHost));
         
         std::cout << "vector_add completed" << std::endl;
         
-        // Compare CPU and GPU results
+        // Compare GPU output against the CPU reference.
         bool match = true;
         for (int i = 0; i < n; ++i) {
             if (std::abs(c_h_cpu[i] - c_h_gpu[i]) > 1e-6) {
@@ -73,7 +73,7 @@ int main() {
             std::cout << "CPU and GPU results do not match!" << std::endl;
         }
         
-        // Stack allocator automatically manages memory lifecycle
+        // Rewind workspace for potential reuse in a next step.
         allocator.reset();
         
     } catch (const std::exception& e) {

@@ -2,6 +2,6 @@
 
 namespace tiny_llm {
 
-// TODO: implement model layering
+// Layer-level forward logic will be implemented here in later milestones.
 
 } // namespace tiny_llm

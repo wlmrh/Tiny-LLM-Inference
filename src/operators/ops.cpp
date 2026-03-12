@@ -2,6 +2,6 @@
 
 namespace tiny_llm {
 
-// TODO: implement operator dispatch
+// Operator kernels and dispatch wiring will be added in subsequent iterations.
 
 } // namespace tiny_llm

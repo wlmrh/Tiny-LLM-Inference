@@ -4,23 +4,32 @@
 
 namespace tiny_llm {
 
+// Supported element data types.
 enum class DType { kFloat16, kFloat32, kInt32 };
 
+// Lightweight tensor view over externally managed memory.
 class Tensor {
 public:
     Tensor() = default;
     Tensor(void* data, std::vector<int64_t> shape, DType dtype)
         : data_(data), shape_(std::move(shape)), dtype_(dtype) {}
 
+    // Returns raw storage pointer.
     void* data() const { return data_; }
+    // Returns tensor dimensions.
     const std::vector<int64_t>& shape() const { return shape_; }
+    // Returns tensor element type.
     DType dtype() const { return dtype_; }
 
+    // Returns total element count (product of shape dimensions).
     size_t numel() const;
 
 private:
-    void* data_ = nullptr;                 // device pointer
+    // Raw data pointer (typically GPU memory in this project).
+    void* data_ = nullptr;
+    // Tensor dimensions in row-major logical order.
     std::vector<int64_t> shape_;
+    // Scalar element type for this tensor.
     DType dtype_ = DType::kFloat16;
 };
 

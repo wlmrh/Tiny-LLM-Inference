@@ -7,8 +7,8 @@ namespace tiny_llm {
 
 Tensor::Tensor(std::vector<int64_t> shape, DType dtype, void* gpu_ptr)
     : data_ptr_(gpu_ptr), shape_(std::move(shape)), dtype_(dtype) {
-    // Tensor does not manage memory lifecycle.
-    // gpu_ptr must be allocated by an external allocator (StackAllocator, BlockAllocator, etc.)
+    // Tensor is a non-owning view; allocation/deallocation is external.
+    // gpu_ptr must come from a valid device-memory allocator.
     assert(gpu_ptr != nullptr && "Tensor requires valid GPU pointer from allocator");
 }
 

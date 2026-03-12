@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <iostream>
 
+// Wraps a CUDA runtime call and aborts the process with diagnostics on failure.
 #define CHECK_CUDA(call)                                \
     do                                                  \
     {                                                   \
