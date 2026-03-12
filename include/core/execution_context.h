@@ -31,9 +31,7 @@ public:
     KVCache* kv() const { return kv_; }
 
     // Starts a new step by resetting temporary workspace allocations.
-    void begin_step() {
-        if (ws_) ws_->reset();
-    }
+    void begin_step();
 
     // Creates a guard that calls begin_step() immediately.
     StepGuard step_guard() { return StepGuard(*this); }

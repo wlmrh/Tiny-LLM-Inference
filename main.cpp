@@ -19,6 +19,11 @@ void vector_add_cpu(const float* a, const float* b, float* c, int n) {
 
 int main() {
     std::cout << "TinyLLMInference skeleton start" << std::endl;
+
+    // cudaMemcpyKind numeric values follow CUDA runtime API:
+    // 1 = HostToDevice, 2 = DeviceToHost.
+    constexpr cudaMemcpyKind kMemcpyHostToDevice = static_cast<cudaMemcpyKind>(1);
+    constexpr cudaMemcpyKind kMemcpyDeviceToHost = static_cast<cudaMemcpyKind>(2);
     
     const int n = 16;
     const size_t tensor_size = n * sizeof(float);
@@ -49,15 +54,15 @@ int main() {
         float* c_dev = static_cast<float*>(c.data());
         
         // Upload input vectors to device memory.
-        CHECK_CUDA(cudaMemcpy(a_dev, a_h.data(), tensor_size, cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMemcpy(b_dev, b_h.data(), tensor_size, cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(a_dev, a_h.data(), tensor_size, kMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(b_dev, b_h.data(), tensor_size, kMemcpyHostToDevice));
         
         // Launch CUDA kernel on the default stream.
         launch_vector_add(a_dev, b_dev, c_dev, n, 0);
         CHECK_CUDA(cudaDeviceSynchronize());
         
         // Download GPU result for verification.
-        CHECK_CUDA(cudaMemcpy(c_h_gpu.data(), c_dev, tensor_size, cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(c_h_gpu.data(), c_dev, tensor_size, kMemcpyDeviceToHost));
         
         std::cout << "vector_add completed" << std::endl;
         

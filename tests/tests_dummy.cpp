@@ -1,10 +1,7 @@
-#include <gtest/gtest.h>
+#include <cassert>
 
-TEST(Dummy, Pass) {
-    EXPECT_EQ(1, 1);
-}
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+int main() {
+    // Placeholder test
+    assert(1 + 1 == 2);
+    return 0;
 }

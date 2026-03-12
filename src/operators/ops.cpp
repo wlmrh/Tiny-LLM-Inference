@@ -1,11 +1,18 @@
 #include "operators/ops.h"
 
-#if !TINYLLM_ENABLE_CUDA
-void gemm(...) { throw std::runtime_error("gemm requires CUDA"); }
-#endif
+#include <stdexcept>
 
 namespace tiny_llm {
+namespace ops {
 
-// Operator kernels and dispatch wiring will be added in subsequent iterations.
+#if !TINYLLM_ENABLE_CUDA
+void rmsnorm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&) {
+    throw std::runtime_error("rmsnorm requires CUDA build (TINYLLM_ENABLE_CUDA=ON).");
+}
+void gemm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&) {
+    throw std::runtime_error("gemm requires CUDA build (TINYLLM_ENABLE_CUDA=ON).");
+}
+#endif
 
+} // namespace ops
 } // namespace tiny_llm
