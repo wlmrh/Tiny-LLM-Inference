@@ -14,7 +14,6 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 add_library(tiny_llm_logic
     src/core/tensor.cpp
     src/core/execution_context.cpp
-    # Keep this target CUDA-free so it can build on macOS without NVCC.
 )
 
 target_compile_definitions(tiny_llm_logic PUBLIC
