@@ -1,5 +1,6 @@
-#include "core/execution_context.h"
-#include "core/allocator.h"
+#include "tiny_llm/core/context.h"
+
+#include "tiny_llm/core/allocator.h"
 
 namespace tiny_llm {
 

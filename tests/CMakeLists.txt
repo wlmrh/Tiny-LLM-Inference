@@ -1,8 +1,7 @@
-# tests/CMakeLists.txt
+add_executable(test_allocator test_allocator.cpp)
+target_link_libraries(test_allocator PRIVATE tiny_llm_core)
+add_test(NAME test_allocator COMMAND test_allocator)
 
-add_executable(dummy_test tests_dummy.cpp)
-
-# Link against the portable CPU-only library (available on macOS).
-target_link_libraries(dummy_test PRIVATE tiny_llm_logic)
-
-add_test(NAME dummy_test COMMAND dummy_test)
+add_executable(test_kernels test_kernels.cpp)
+target_link_libraries(test_kernels PRIVATE tiny_llm_operators)
+add_test(NAME test_kernels COMMAND test_kernels)

@@ -1,4 +1,4 @@
-#include "core/tensor.h"
+#include "tiny_llm/core/tensor.h"
 
 namespace tiny_llm {
 
