@@ -8,7 +8,7 @@ namespace tiny_llm {
 class Tensor;
 enum class DType;
 
-// Monotonic workspace allocator backed by a contiguous GPU buffer.
+// Monotonic workspace allocator backed by a contiguous CPU / GPU buffer.
 // The allocator is reset once per inference step and does not support free().
 class StackAllocator {
 public:
@@ -24,7 +24,7 @@ public:
     Tensor make_tensor(std::vector<int64_t> shape, DType dtype);
 
 private:
-    // Base GPU pointer of the workspace pool.
+    // Base CPU / GPU pointer of the workspace pool.
     void* base_ptr_ = nullptr;
     // Total capacity in bytes.
     size_t total_size_ = 0;

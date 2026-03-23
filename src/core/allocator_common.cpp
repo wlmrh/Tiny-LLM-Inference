@@ -7,7 +7,7 @@
 namespace tiny_llm {
 
 namespace {
-
+// Define in an anonymous namespace to restrict visibility to this translation unit.
 size_t dtype_size(DType dtype) {
     switch (dtype) {
         case DType::kFloat16:
@@ -19,7 +19,7 @@ size_t dtype_size(DType dtype) {
     return 0;
 }
 
-} // namespace
+}
 
 Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
     size_t bytes = dtype_size(dtype);

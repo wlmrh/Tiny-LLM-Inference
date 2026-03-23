@@ -21,11 +21,11 @@ public:
     // Returns tensor element type.
     DType dtype() const { return dtype_; }
 
-    // Returns total element count (product of shape dimensions).
+    // Returns total element count.
     size_t numel() const;
 
 private:
-    // Raw data pointer (typically GPU memory in this project).
+    // Raw data pointer.
     void* data_ptr_ = nullptr;
     // Tensor dimensions in row-major logical order.
     std::vector<int64_t> shape_;
