@@ -28,24 +28,30 @@ public:
     /** @brief Destructor. Frees the underlying contiguous buffer. */
     ~StackAllocator();
 
-    /** * @brief Resets the bump offset to zero. 
+    /**
+     * @brief Resets the bump offset to zero. 
      * Must be called at the beginning of each inference step to recycle memory.
      */
     void reset();
 
-    /** * @brief Reserves a contiguous region in the workspace pool.
+    /**
+     * @brief Reserves a contiguous region in the workspace pool.
      * @param bytes Requested allocation size in bytes.
      * @return void* A pointer to the allocated memory, or nullptr if pool capacity is exceeded.
      * @note Implementations should ensure returned pointers meet GPU alignment requirements (e.g., 256 bytes).
      */
     void* allocate(size_t bytes);
 
-    /** * @brief Retrieves the maximum memory usage observed since construction.
+    /**
+     * @brief Retrieves the maximum memory usage observed since construction.
      * @return size_t The peak offset in bytes (High-Water Mark).
      */
-    size_t peak_bytes() const { return peak_offset_; }
+    #if TINYLLM_ENABLE_DEBUG_STATS
+        size_t peak_bytes() const { return peak_offset_; }
+    #endif
 
-    /** * @brief Factory method to create a Tensor using memory from this workspace.
+    /**
+     * @brief Factory method to create a Tensor using memory from this workspace.
      * @param shape Dimensions of the tensor.
      * @param dtype Data type of the tensor elements.
      * @return Tensor A non-owning tensor view backed by workspace memory.
@@ -56,7 +62,9 @@ private:
     void* base_ptr_ = nullptr;     ///< Base CPU/GPU pointer of the workspace pool.
     size_t total_size_ = 0;        ///< Total capacity in bytes.
     size_t offset_ = 0;            ///< Current bump offset in bytes.
-    size_t peak_offset_ = 0;       ///< Maximum observed offset in bytes.
+    #ifdef TINYLLM_ENABLE_DEBUG_STATS
+        size_t peak_offset_ = 0;       ///< Maximum observed offset in bytes.
+    #endif
 };
 
 /**
@@ -82,12 +90,14 @@ public:
      */
     int32_t allocate_block();
 
-    /** * @brief Releases a physical block ID back to the free list for future reuse.
+    /**
+     * @brief Releases a physical block ID back to the free list for future reuse.
      * @param block_id The ID of the block to be released.
      */
     void free_block(int32_t block_id);
 
-    /** * @brief Translates a physical block ID into its actual GPU memory address.
+    /**
+     * @brief Translates a physical block ID into its actual GPU memory address.
      * @param block_id The ID of the physical block.
      * @return void* The GPU pointer to the block's start address, or nullptr if the ID is invalid.
      */
