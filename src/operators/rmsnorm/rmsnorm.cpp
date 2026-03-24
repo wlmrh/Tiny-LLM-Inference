@@ -5,7 +5,7 @@
 namespace tiny_llm {
 namespace ops {
 
-void rmsnorm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&) {
+void rmsnorm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&, float) {
 #if TINYLLM_ENABLE_CUDA
     throw std::runtime_error("rmsnorm CUDA dispatch is not implemented yet.");
 #else

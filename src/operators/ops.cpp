@@ -6,7 +6,7 @@ namespace tiny_llm {
 namespace ops {
 
 #if !TINYLLM_ENABLE_CUDA
-void rmsnorm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&) {
+void rmsnorm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&, float) {
     throw std::runtime_error("rmsnorm requires CUDA build (TINYLLM_ENABLE_CUDA=ON).");
 }
 void gemm(const Tensor&, const Tensor&, Tensor&, ExecutionContext&) {

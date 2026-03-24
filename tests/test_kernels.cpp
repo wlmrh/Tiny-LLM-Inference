@@ -13,7 +13,7 @@ int main() {
 
     bool threw = false;
     try {
-        tiny_llm::ops::rmsnorm(x, w, y, ctx);
+        tiny_llm::ops::rmsnorm(x, w, y, ctx, 1e-5f);
     } catch (const std::runtime_error&) {
         threw = true;
     }

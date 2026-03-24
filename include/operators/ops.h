@@ -5,7 +5,7 @@ namespace tiny_llm {
 
     namespace ops {
         // Minimal operator set for the current skeleton; extend incrementally.
-        void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx);
+        void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx, float eps);
         void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx);
 
         // Paged-attention interface placeholder kept stable for integration.
