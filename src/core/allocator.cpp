@@ -18,10 +18,13 @@ StackAllocator::~StackAllocator() {
 
 void* StackAllocator::allocate(size_t bytes) {
     if (offset_ + bytes > total_size_) {
-        return nullptr; // Workspace capacity exceeded.
+        return nullptr; // Out of memory
     }
     void* ptr = static_cast<char*>(base_ptr_) + offset_;
     offset_ += bytes;
+    if (offset_ > peak_offset_) {
+        peak_offset_ = offset_;
+    }
     return ptr;
 }
 
@@ -48,7 +51,7 @@ Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
 
 BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool)
     : gpu_pool_(gpu_pool), block_size_(block_size_bytes), num_blocks_(num_blocks) {
-    free_list_.reserve(num_blocks);
+    free_list_.reserve(num_blocks); // Preallocate space to reduce element copying
     for (int i = num_blocks - 1; i >= 0; --i) {
         free_list_.push_back(i);
     }

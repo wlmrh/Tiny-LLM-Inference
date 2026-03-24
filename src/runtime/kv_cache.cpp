@@ -13,11 +13,13 @@ void KVCache::start_sequence(int32_t seq_id) {
 }
 
 void KVCache::end_sequence(int32_t seq_id) {
+    // Check if there is a seqence record with seq_id 
     auto it = seqs_.find(seq_id);
     if (it == seqs_.end()) {
         return;
     }
 
+    // Iterate the pagetable to release all the physical_blocks occupied by seq_id
     for (auto& table : it->second.page_tables) {
         for (int32_t physical_block : table) {
             if (blocks_ != nullptr) {

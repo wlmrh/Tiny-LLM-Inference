@@ -8,43 +8,76 @@ namespace tiny_llm {
 
 class BlockAllocator;
 
-// Minimal paged KV cache metadata.
-// Each sequence stores one page table per layer:
-// logical block id -> physical block id.
+/**
+ * @brief Metadata manager for Paged KV Cache.
+ * * Inspired by vLLM, this service decouples logical token positions from physical GPU memory 
+ * using a page table mapping mechanism.
+ * * @note CONTRACT:
+ * - This class manages METADATA (mappings) only; it does not perform raw memory copies.
+ * - OWNERSHIP: Physical blocks are owned by the BlockAllocator and persist across steps.
+ * - CLEANUP: end_sequence() must be explicitly called to prevent physical block leaks.
+ */
 class KVCache {
 public:
-    // num_layers: number of transformer layers.
-    // block_size_tokens: token capacity per cache block.
+    /**
+     * @brief Static configuration for the KV Cache service.
+     */
     struct Config {
-        int32_t num_layers = 0;
-        int32_t block_size_tokens = 16;
+        int32_t num_layers = 0;          // Total number of transformer layers in the model.
+        int32_t block_size_tokens = 16;  // Number of tokens stored in a single physical block.
     };
 
+    /**
+     * @brief Construct a new KVCache object.
+     * @param cfg The cache configuration settings.
+     * @param blocks Pointer to the block allocator for physical memory management.
+     */
     KVCache(Config cfg, BlockAllocator* blocks)
         : cfg_(cfg), blocks_(blocks) {}
 
+    /**
+     * @brief Initializes metadata structures for a new request sequence.
+     * @param seq_id Unique identifier for the sequence session.
+     */
     void start_sequence(int32_t seq_id);
+
+    /**
+     * @brief Return all physical blocks associated with `seq_id` sequence back to the allocator.
+     * @param seq_id Unique identifier for the sequence to be terminated.
+     * @note This must be called at the end of every inference request to prevent memory leaks.
+     */
     void end_sequence(int32_t seq_id);
 
-    // Ensures blocks exist up to token_pos and updates page tables as needed.
-    // This API currently manages metadata only; K/V writes are handled elsewhere.
+    /**
+     * @brief Dynamic capacity check: ensures physical blocks exist for the given token position.
+     * * If the current logical position exceeds assigned blocks, new blocks are allocated 
+     * from the BlockAllocator and the page table is updated.
+     * * @param seq_id Unique identifier for the sequence.
+     * @param layer_id The specific transformer layer index.
+     * @param token_pos The logical index of the token being processed (0-indexed).
+     */
     void ensure_capacity(int32_t seq_id, int32_t layer_id, int32_t token_pos);
 
-    // Returns the host-side page table for one sequence/layer pair.
+    /**
+     * @brief Retrieves the mapping table (page table) for a specific sequence and layer.
+     * @param seq_id Unique identifier for the sequence.
+     * @param layer_id The specific transformer layer index.
+     * @return A constant reference to the page table of `layer_id` layer in `seq_id` sequence
+     */
     const std::vector<int32_t>& page_table(int32_t seq_id, int32_t layer_id) const;
 
 private:
+    /**
+     * @brief Internal state for a single sequence, encapsulating all per-layer page tables.
+     */
     struct SeqState {
-        // page_tables[layer][logical_block] = physical_block_id
+        // page_tables[layer_id][logical_block_idx] = physical_block_id
         std::vector<std::vector<int32_t>> page_tables;
     };
 
-    // Static cache configuration.
-    Config cfg_;
-    // Non-owning allocator used to reserve physical blocks.
-    BlockAllocator* blocks_ = nullptr;
-    // Sequence id -> per-layer page tables.
-    std::unordered_map<int32_t, SeqState> seqs_;
+    Config cfg_;                        ///< Cache configuration.
+    BlockAllocator* blocks_ = nullptr;  ///< Non-owning pointer to the physical block pool.
+    std::unordered_map<int32_t, SeqState> seqs_; ///< Map of active sequence IDs to their states.
 };
 
 } // namespace tiny_llm
