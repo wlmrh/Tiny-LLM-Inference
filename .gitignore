@@ -1,3 +1,5 @@
 build/
 build-mac/
 .vscode/
+.devcontainer/
+Dockerfile
