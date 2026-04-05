@@ -4,18 +4,37 @@
 
 namespace tiny_llm {
 
-EngineCore::EngineCore(Model* model,
-                       ExecutionContext* ctx,
-                       KVCache* kv,
-                       Tokenizer* tokenizer,
-                       int32_t default_max_generated_tokens,
-                       SchedulerConfig scheduler_config)
-    : scheduler_(std::make_unique<Scheduler>(kv, scheduler_config)),
-      executor_(std::make_unique<ModelExecutor>(model, ctx, kv))
-{
-    (void)tokenizer;
+namespace {
 
-    if (default_max_generated_tokens <= 0)
+EngineArgs make_engine_args(Model* model,
+                            ExecutionContext* ctx,
+                            KVCache* kv,
+                            Tokenizer* tokenizer,
+                            int32_t max_generated_tokens,
+                            SchedulerConfig scheduler_config)
+{
+    EngineArgs args;
+    args.model = model;
+    args.ctx = ctx;
+    args.kv = kv;
+    args.tokenizer = tokenizer;
+    args.max_generated_tokens = max_generated_tokens;
+    args.scheduler_config = scheduler_config;
+    return args;
+}
+
+} // namespace
+
+EngineCore::EngineCore(const EngineArgs& args)
+    : scheduler_(std::make_unique<Scheduler>(args)),
+      executor_(std::make_unique<ModelExecutor>(
+          args.model,
+          args.ctx,
+          scheduler_ ? scheduler_->kv_cache() : nullptr))
+{
+    (void)args.tokenizer;
+
+    if (args.max_generated_tokens <= 0)
     {
         throw std::runtime_error("EngineCore: default max_generated_tokens must be positive.");
     }
@@ -24,6 +43,22 @@ EngineCore::EngineCore(Model* model,
     {
         throw std::runtime_error("EngineCore: scheduler/executor must be initialized.");
     }
+}
+
+EngineCore::EngineCore(Model* model,
+                       ExecutionContext* ctx,
+                       KVCache* kv,
+                       Tokenizer* tokenizer,
+                       int32_t default_max_generated_tokens,
+                       SchedulerConfig scheduler_config)
+    : EngineCore(make_engine_args(
+          model,
+          ctx,
+          kv,
+          tokenizer,
+          default_max_generated_tokens,
+          scheduler_config))
+{
 }
 
 void EngineCore::add_request(const EngineCoreRequest& request)

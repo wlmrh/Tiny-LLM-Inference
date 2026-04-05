@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/executor.h"
 #include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/scheduler.h"
@@ -20,6 +21,8 @@ class Tokenizer;
  */
 class EngineCore {
 public:
+    explicit EngineCore(const EngineArgs& args);
+
     EngineCore(Model* model,
                ExecutionContext* ctx,
                KVCache* kv,
