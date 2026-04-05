@@ -65,4 +65,12 @@ void* BlockAllocator::get_block_ptr(int32_t block_id) const {
     return static_cast<char*>(gpu_pool_) + (static_cast<size_t>(block_id) * block_size_);
 }
 
+size_t BlockAllocator::free_block_count() const {
+    return free_list_.size();
+}
+
+size_t BlockAllocator::total_block_count() const {
+    return num_blocks_;
+}
+
 } // namespace tiny_llm

@@ -103,6 +103,16 @@ public:
      */
     void* get_block_ptr(int32_t block_id) const;
 
+    /**
+     * @brief Returns currently available block count.
+     */
+    size_t free_block_count() const;
+
+    /**
+     * @brief Returns total block capacity.
+     */
+    size_t total_block_count() const;
+
 private:
     void* gpu_pool_ = nullptr;        ///< Base GPU pointer for the entire block pool.
     size_t num_blocks_ = 0;           ///< Total capacity in number of blocks.
