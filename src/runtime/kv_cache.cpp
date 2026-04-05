@@ -6,6 +6,30 @@
 
 namespace tiny_llm {
 
+KVCache::KVCache(Config cfg, BlockAllocator* blocks)
+    : cfg_(cfg), blocks_(blocks)
+{
+}
+
+KVCache::KVCache(Config cfg,
+                                 size_t num_blocks,
+                                 size_t block_size_bytes,
+                                 void* gpu_pool)
+        : cfg_(cfg),
+            owned_blocks_(std::make_unique<BlockAllocator>(num_blocks, block_size_bytes, gpu_pool)),
+            blocks_(owned_blocks_.get())
+{
+}
+
+KVCache::~KVCache() = default;
+
+size_t KVCache::free_block_count() const {
+    if (blocks_ == nullptr) {
+        return 0;
+    }
+    return blocks_->free_block_count();
+}
+
 void KVCache::start_sequence(int32_t seq_id) {
     SeqState state;
     state.page_tables.resize(static_cast<size_t>(cfg_.num_layers));

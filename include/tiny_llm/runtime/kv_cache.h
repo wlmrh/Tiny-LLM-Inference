@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include <unordered_map>
 #include "utils/cuda_compat.h"
@@ -32,8 +33,32 @@ public:
      * @param cfg The cache configuration settings.
      * @param blocks Pointer to the block allocator for physical memory management.
      */
-    KVCache(Config cfg, BlockAllocator* blocks)
-        : cfg_(cfg), blocks_(blocks) {}
+    KVCache(Config cfg, BlockAllocator* blocks);
+
+    /**
+     * @brief Constructs KVCache and its internal BlockAllocator from pool parameters.
+     */
+    KVCache(Config cfg,
+            size_t num_blocks,
+            size_t block_size_bytes,
+            void* gpu_pool);
+
+    ~KVCache();
+
+    /**
+     * @brief Returns configured transformer layer count.
+     */
+    int32_t num_layers() const { return cfg_.num_layers; }
+
+    /**
+     * @brief Returns token capacity of each KV block.
+     */
+    int32_t block_size_tokens() const { return cfg_.block_size_tokens; }
+
+    /**
+     * @brief Returns currently free physical blocks in the shared pool.
+     */
+    size_t free_block_count() const;
 
     /**
      * @brief Initializes metadata structures for a new request sequence.
@@ -76,6 +101,7 @@ private:
     };
 
     Config cfg_;                        ///< Cache configuration.
+    std::unique_ptr<BlockAllocator> owned_blocks_; ///< Optional owned allocator when built from raw pool args.
     BlockAllocator* blocks_ = nullptr;  ///< Non-owning pointer to the physical block pool.
     std::unordered_map<int32_t, SeqState> seqs_; ///< Map of active sequence IDs to their states.
 };
