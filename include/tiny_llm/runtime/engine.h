@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/engine_core.h"
 #include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/scheduler.h"
@@ -21,6 +22,8 @@ class Tokenizer;
  */
 class LLMEngine {
 public:
+    explicit LLMEngine(const EngineArgs& args);
+
     LLMEngine(Model* model,
               ExecutionContext* ctx,
               KVCache* kv,
