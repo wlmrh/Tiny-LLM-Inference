@@ -15,6 +15,7 @@
 namespace tiny_llm {
 
 class KVCache;
+struct EngineArgs;
 
 /**
  * @brief Core-only sequence state for token execution and KV bookkeeping.
@@ -116,10 +117,17 @@ struct ModelOutput {
  */
 class BlockManager {
 public:
-    explicit BlockManager(KVCache* kv) : kv_(kv) {}
+    explicit BlockManager(KVCache* kv);
+    BlockManager(int32_t kv_num_layers,
+                 int32_t kv_block_size_tokens,
+                 size_t kv_num_blocks,
+                 size_t kv_block_size_bytes,
+                 void* kv_memory_pool);
+    ~BlockManager();
 
     size_t free_block_count() const;
     int32_t num_layers() const;
+    KVCache* kv_cache() const { return kv_; }
 
     void start_sequence(int32_t core_seq_id) const;
     void end_sequence(int32_t core_seq_id) const;
@@ -142,6 +150,7 @@ public:
         std::vector<int32_t>& block_table) const;
 
 private:
+    std::unique_ptr<KVCache> owned_kv_;
     KVCache* kv_ = nullptr;
 };
 
@@ -182,10 +191,12 @@ public:
  */
 class Scheduler {
 public:
+    explicit Scheduler(const EngineArgs& args);
     explicit Scheduler(SchedulerConfig config = SchedulerConfig{});
     Scheduler(KVCache* kv, SchedulerConfig config = SchedulerConfig{});
 
     const SchedulerConfig& config() const { return config_; }
+    KVCache* kv_cache() const;
 
     void add_request(const EngineCoreRequest& request, int32_t vocab_size);
     void abort_request(uint64_t internal_id);

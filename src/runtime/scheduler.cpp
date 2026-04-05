@@ -1,5 +1,6 @@
 #include "tiny_llm/runtime/scheduler.h"
 
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/kv_cache.h"
 
 #include <algorithm>
@@ -58,6 +59,52 @@ int32_t prompt_token_count(const CoreSequence& seq)
 }
 
 } // namespace
+
+BlockManager::BlockManager(KVCache* kv)
+    : kv_(kv)
+{
+}
+
+BlockManager::~BlockManager() = default;
+
+BlockManager::BlockManager(int32_t kv_num_layers,
+                           int32_t kv_block_size_tokens,
+                           size_t kv_num_blocks,
+                           size_t kv_block_size_bytes,
+                           void* kv_memory_pool)
+{
+    if (kv_num_layers <= 0)
+    {
+        throw std::runtime_error("BlockManager: kv_num_layers must be positive.");
+    }
+    if (kv_block_size_tokens <= 0)
+    {
+        throw std::runtime_error("BlockManager: kv_block_size_tokens must be positive.");
+    }
+    if (kv_num_blocks == 0)
+    {
+        throw std::runtime_error("BlockManager: kv_num_blocks must be positive.");
+    }
+    if (kv_block_size_bytes == 0)
+    {
+        throw std::runtime_error("BlockManager: kv_block_size_bytes must be positive.");
+    }
+    if (kv_memory_pool == nullptr)
+    {
+        throw std::runtime_error("BlockManager: kv_memory_pool must be non-null.");
+    }
+
+    KVCache::Config kv_cfg;
+    kv_cfg.num_layers = kv_num_layers;
+    kv_cfg.block_size_tokens = kv_block_size_tokens;
+
+    owned_kv_ = std::make_unique<KVCache>(
+        kv_cfg,
+        kv_num_blocks,
+        kv_block_size_bytes,
+        kv_memory_pool);
+    kv_ = owned_kv_.get();
+}
 
 size_t BlockManager::free_block_count() const
 {
@@ -244,11 +291,38 @@ Scheduler::Scheduler(SchedulerConfig config)
 {
 }
 
+Scheduler::Scheduler(const EngineArgs& args)
+    : config_(args.scheduler_config),
+      strategy_(build_strategy(args.scheduler_config.policy))
+{
+    if (args.kv != nullptr)
+    {
+        block_manager_ = std::make_unique<BlockManager>(args.kv);
+        return;
+    }
+
+    block_manager_ = std::make_unique<BlockManager>(
+        args.kv_num_layers,
+        args.kv_block_size_tokens,
+        args.kv_num_blocks,
+        args.kv_block_size_bytes,
+        args.kv_memory_pool);
+}
+
 Scheduler::Scheduler(KVCache* kv, SchedulerConfig config)
     : config_(config),
       strategy_(build_strategy(config.policy)),
       block_manager_(std::make_unique<BlockManager>(kv))
 {
+}
+
+KVCache* Scheduler::kv_cache() const
+{
+    if (!block_manager_)
+    {
+        return nullptr;
+    }
+    return block_manager_->kv_cache();
 }
 
 int32_t Scheduler::assign_core_seq_id()
