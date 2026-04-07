@@ -25,24 +25,8 @@ EngineArgs make_engine_args(Model* model,
 
 LLMEngine::LLMEngine(const EngineArgs& args)
     : core_(std::make_unique<EngineCore>(args)),
-      input_preprocessor_(args.tokenizer, args.model, args.max_generated_tokens),
-      output_preprocessor_(args.tokenizer)
-{
-}
-
-LLMEngine::LLMEngine(Model* model,
-                     ExecutionContext* ctx,
-                     KVCache* kv,
-                     Tokenizer* tokenizer,
-                     int32_t max_generated_tokens,
-                     SchedulerConfig scheduler_config)
-    : LLMEngine(make_engine_args(
-          model,
-          ctx,
-          kv,
-          tokenizer,
-          max_generated_tokens,
-          scheduler_config))
+    input_preprocessor_(args),
+    output_preprocessor_(args)
 {
 }
 

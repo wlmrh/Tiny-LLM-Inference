@@ -24,13 +24,6 @@ class LLMEngine {
 public:
     explicit LLMEngine(const EngineArgs& args);
 
-    LLMEngine(Model* model,
-              ExecutionContext* ctx,
-              KVCache* kv,
-              Tokenizer* tokenizer,
-              int32_t max_generated_tokens = 32,
-              SchedulerConfig scheduler_config = SchedulerConfig{});
-
     /**
      * @brief Adds one text request and returns internal request id.
      */
