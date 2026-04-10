@@ -1,8 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <memory>
+#include <tuple>
+#include <unordered_map>
 
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/executor.h"
@@ -32,10 +33,8 @@ public:
     ~EngineCore() = default;
 
     void add_request(const EngineCoreRequest& request);
-    void abort_request(uint64_t internal_id);
 
-    std::map<uint64_t, EngineCoreOutput> step();
-    void post_step();
+    std::tuple<std::unordered_map<int, EngineCoreOutputs>, bool> step();
 
 private:
     std::unique_ptr<Scheduler> scheduler_;
