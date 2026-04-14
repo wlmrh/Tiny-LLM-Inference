@@ -1,6 +1,7 @@
 #include "tiny_llm/runtime/engine_core.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace tiny_llm {
 
@@ -29,7 +30,7 @@ EngineCore::EngineCore(const EngineArgs& args)
     : scheduler_(std::make_unique<Scheduler>(args)),
       executor_(std::make_unique<ModelExecutor>(
           args,
-          scheduler_ ? scheduler_->kv_cache() : nullptr))
+          nullptr))
 {
     (void)args.tokenizer;
 
@@ -67,7 +68,22 @@ void EngineCore::add_request(const EngineCoreRequest& request)
         throw std::runtime_error("EngineCore::add_request: scheduler/executor must be initialized.");
     }
 
-    scheduler_->add_request(request, executor_->vocab_size());
+    const int32_t vocab_size = executor_->vocab_size();
+    for (int32_t token_id : request.prompt_token_ids)
+    {
+        if (token_id < 0 || token_id >= vocab_size)
+        {
+            throw std::runtime_error("EngineCore::add_request: prompt token is out of model vocab range.");
+        }
+    }
+
+    Request scheduler_request;
+    scheduler_request.request_id = request.internal_id;
+    scheduler_request.prompt_token_ids = request.prompt_token_ids;
+    scheduler_request._all_token_ids = request.prompt_token_ids;
+    scheduler_request.sampling_params = request.sampling_params;
+    scheduler_request.status = RequestStatus::WAITING;
+    scheduler_->add_request(std::move(scheduler_request));
 }
 
 std::tuple<std::unordered_map<int, EngineCoreOutputs>, bool> EngineCore::step()
@@ -86,7 +102,13 @@ std::tuple<std::unordered_map<int, EngineCoreOutputs>, bool> EngineCore::step()
     executor_->execute_model(scheduler_output);
     ModelRunnerOutput model_output = executor_->sample_tokens(scheduler_output);
 
-    std::unordered_map<int, EngineCoreOutputs> engine_core_outputs = scheduler_->update_from_output(scheduler_output, model_output);
+    std::map<int, EngineCoreOutput> scheduler_outputs = scheduler_->update_from_output(scheduler_output, model_output);
+    std::unordered_map<int, EngineCoreOutputs> engine_core_outputs;
+    engine_core_outputs.reserve(scheduler_outputs.size());
+    for (auto& item : scheduler_outputs)
+    {
+        engine_core_outputs[item.first] = std::move(item.second);
+    }
 
     return {std::move(engine_core_outputs), scheduler_output.total_num_scheduled_tokens > 0};
 }

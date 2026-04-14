@@ -1,5 +1,7 @@
 #include "tiny_llm/runtime/engine.h"
 
+#include <stdexcept>
+
 namespace tiny_llm {
 
 namespace {
@@ -51,9 +53,19 @@ bool LLMEngine::has_unfinished_requests() const
 
 std::vector<UserOutput> LLMEngine::step()
 {
-    const auto core_outputs = core_->step();
+    auto [core_outputs, has_scheduled_tokens] = core_->step();
+
     std::vector<UserOutput> user_outputs = output_preprocessor_.process_outputs(core_outputs);
-    core_->post_step();
+
+    // Trigger one final core step to reclaim finished Scheduler/KV state.
+    if (!output_preprocessor_.has_unfinished_requests())
+    {
+        auto [cleanup_outputs, cleanup_has_scheduled_tokens] = core_->step();
+        if (!cleanup_outputs.empty() || cleanup_has_scheduled_tokens)
+        {
+            throw std::runtime_error("LLMEngine::step: unexpected outputs during cleanup step.");
+        }
+    }
 
     return user_outputs;
 }
