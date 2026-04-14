@@ -3,3 +3,4 @@ build-mac/
 .vscode/
 .devcontainer/
 Dockerfile
+.DS_Store
