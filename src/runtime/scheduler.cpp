@@ -6,25 +6,51 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
-#include <unordered_set>
 
 namespace tiny_llm {
 
 namespace {
 
-const SchedulerRequestMeta& checked_meta(
-    const std::unordered_map<uint64_t, SchedulerRequestMeta>& requests,
-    uint64_t internal_id)
+int to_output_key(uint64_t request_id)
 {
-    const auto it = requests.find(internal_id);
-    if (it == requests.end())
+    if (request_id > static_cast<uint64_t>(std::numeric_limits<int>::max()))
     {
-        throw std::runtime_error("Scheduler: request metadata is missing for internal_id.");
+        throw std::runtime_error("Scheduler::update_from_output: request_id exceeds output key range.");
     }
-    return it->second;
+    return static_cast<int>(request_id);
 }
 
-void push_unique(std::vector<uint64_t>& ids, uint64_t id)
+int32_t prompt_token_count(const Request& request)
+{
+    return static_cast<int32_t>(request.prompt_token_ids.size());
+}
+
+Request* find_request(std::map<int64_t, Request>& requests, uint64_t request_id)
+{
+    const auto it = requests.find(static_cast<int64_t>(request_id));
+    if (it == requests.end())
+    {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+void remove_from_queue(std::deque<uint64_t>& queue, uint64_t request_id)
+{
+    queue.erase(
+        std::remove(queue.begin(), queue.end(), request_id),
+        queue.end());
+}
+
+void push_to_running_if_absent(std::deque<uint64_t>& running, uint64_t request_id)
+{
+    if (std::find(running.begin(), running.end(), request_id) == running.end())
+    {
+        running.push_back(request_id);
+    }
+}
+
+void push_unique_id(std::vector<uint64_t>& ids, uint64_t id)
 {
     if (std::find(ids.begin(), ids.end(), id) == ids.end())
     {
@@ -32,66 +58,60 @@ void push_unique(std::vector<uint64_t>& ids, uint64_t id)
     }
 }
 
-int32_t prefill_chunk_tokens(const SchedulerConfig& config, const SchedulerRequestMeta& meta)
-{
-    const int32_t remaining = meta.prompt_tokens - meta.num_computed;
-    if (remaining <= 0)
-    {
-        return 0;
-    }
-
-    const int32_t chunk_limit = (config.max_prefill_tokens_per_step > 0)
-        ? config.max_prefill_tokens_per_step
-        : 1;
-    return std::min(remaining, chunk_limit);
-}
-
-template <typename T>
-void erase_all(std::deque<T>& q, const T& value)
-{
-    q.erase(std::remove(q.begin(), q.end(), value), q.end());
-}
-
-int32_t prompt_token_count(const CoreSequence& seq)
-{
-    const int32_t total_tokens = static_cast<int32_t>(seq.token_ids.size());
-    return total_tokens - seq.generated_tokens;
-}
-
 } // namespace
 
-BlockManager::BlockManager(KVCache* kv)
+KVCacheManager::KVCacheManager(KVCache* kv)
     : kv_(kv)
 {
 }
 
-BlockManager::~BlockManager() = default;
+KVCacheManager::KVCacheManager(int32_t kv_num_layers,
+                               int32_t kv_block_size_tokens,
+                               size_t kv_num_blocks,
+                               size_t kv_block_size_bytes,
+                               void* kv_memory_pool)
+{
+    init_owned(
+        kv_num_layers,
+        kv_block_size_tokens,
+        kv_num_blocks,
+        kv_block_size_bytes,
+        kv_memory_pool);
+}
 
-BlockManager::BlockManager(int32_t kv_num_layers,
-                           int32_t kv_block_size_tokens,
-                           size_t kv_num_blocks,
-                           size_t kv_block_size_bytes,
-                           void* kv_memory_pool)
+KVCacheManager::~KVCacheManager() = default;
+
+void KVCacheManager::bind(KVCache* kv)
+{
+    owned_kv_.reset();
+    kv_ = kv;
+}
+
+void KVCacheManager::init_owned(int32_t kv_num_layers,
+                                int32_t kv_block_size_tokens,
+                                size_t kv_num_blocks,
+                                size_t kv_block_size_bytes,
+                                void* kv_memory_pool)
 {
     if (kv_num_layers <= 0)
     {
-        throw std::runtime_error("BlockManager: kv_num_layers must be positive.");
+        throw std::runtime_error("KVCacheManager: kv_num_layers must be positive.");
     }
     if (kv_block_size_tokens <= 0)
     {
-        throw std::runtime_error("BlockManager: kv_block_size_tokens must be positive.");
+        throw std::runtime_error("KVCacheManager: kv_block_size_tokens must be positive.");
     }
     if (kv_num_blocks == 0)
     {
-        throw std::runtime_error("BlockManager: kv_num_blocks must be positive.");
+        throw std::runtime_error("KVCacheManager: kv_num_blocks must be positive.");
     }
     if (kv_block_size_bytes == 0)
     {
-        throw std::runtime_error("BlockManager: kv_block_size_bytes must be positive.");
+        throw std::runtime_error("KVCacheManager: kv_block_size_bytes must be positive.");
     }
     if (kv_memory_pool == nullptr)
     {
-        throw std::runtime_error("BlockManager: kv_memory_pool must be non-null.");
+        throw std::runtime_error("KVCacheManager: kv_memory_pool must be non-null.");
     }
 
     KVCache::Config kv_cfg;
@@ -106,7 +126,7 @@ BlockManager::BlockManager(int32_t kv_num_layers,
     kv_ = owned_kv_.get();
 }
 
-size_t BlockManager::free_block_count() const
+size_t KVCacheManager::free_block_count() const
 {
     if (kv_ == nullptr)
     {
@@ -115,7 +135,7 @@ size_t BlockManager::free_block_count() const
     return kv_->free_block_count();
 }
 
-int32_t BlockManager::num_layers() const
+int32_t KVCacheManager::num_layers() const
 {
     if (kv_ == nullptr)
     {
@@ -124,35 +144,35 @@ int32_t BlockManager::num_layers() const
     return kv_->num_layers();
 }
 
-void BlockManager::start_sequence(int32_t core_seq_id) const
+void KVCacheManager::start_sequence(int32_t core_seq_id) const
 {
     if (kv_ == nullptr)
     {
-        throw std::runtime_error("BlockManager::start_sequence: kv must be non-null.");
+        throw std::runtime_error("KVCacheManager::start_sequence: kv must be non-null.");
     }
     kv_->start_sequence(core_seq_id);
 }
 
-void BlockManager::end_sequence(int32_t core_seq_id) const
+void KVCacheManager::end_sequence(int32_t core_seq_id) const
 {
     if (kv_ == nullptr)
     {
-        throw std::runtime_error("BlockManager::end_sequence: kv must be non-null.");
+        throw std::runtime_error("KVCacheManager::end_sequence: kv must be non-null.");
     }
     kv_->end_sequence(core_seq_id);
 }
 
-size_t BlockManager::estimate_append_new_blocks(
+size_t KVCacheManager::estimate_append_new_blocks(
     int32_t core_seq_id,
-    bool kv_started,
+    bool started,
     int32_t num_computed) const
 {
     if (kv_ == nullptr)
     {
-        throw std::runtime_error("BlockManager::estimate_append_new_blocks: kv must be non-null.");
+        throw std::runtime_error("KVCacheManager::estimate_append_new_blocks: kv must be non-null.");
     }
 
-    if (!kv_started)
+    if (!started)
     {
         return 0;
     }
@@ -182,16 +202,16 @@ size_t BlockManager::estimate_append_new_blocks(
     return additional_blocks;
 }
 
-size_t BlockManager::estimate_prefill_new_blocks(
+size_t KVCacheManager::estimate_prefill_new_blocks(
     int32_t core_seq_id,
-    bool kv_started,
+    bool started,
     int32_t prompt_tokens,
     int32_t num_computed,
     int32_t prefill_tokens) const
 {
     if (kv_ == nullptr)
     {
-        throw std::runtime_error("BlockManager::estimate_prefill_new_blocks: kv must be non-null.");
+        throw std::runtime_error("KVCacheManager::estimate_prefill_new_blocks: kv must be non-null.");
     }
 
     if (prefill_tokens <= 0)
@@ -216,7 +236,7 @@ size_t BlockManager::estimate_prefill_new_blocks(
     for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
     {
         size_t current_blocks = 0;
-        if (kv_started)
+        if (started)
         {
             try
             {
@@ -237,18 +257,18 @@ size_t BlockManager::estimate_prefill_new_blocks(
     return additional_blocks;
 }
 
-void BlockManager::refresh_block_table(
+void KVCacheManager::refresh_block_table(
     int32_t core_seq_id,
-    bool kv_started,
+    bool started,
     std::vector<int32_t>& block_table) const
 {
     if (kv_ == nullptr)
     {
-        throw std::runtime_error("BlockManager::refresh_block_table: kv must be non-null.");
+        throw std::runtime_error("KVCacheManager::refresh_block_table: kv must be non-null.");
     }
 
     block_table.clear();
-    if (!kv_started || kv_->num_layers() <= 0)
+    if (!started || kv_->num_layers() <= 0)
     {
         return;
     }
@@ -257,51 +277,93 @@ void BlockManager::refresh_block_table(
     block_table.insert(block_table.end(), page_table.begin(), page_table.end());
 }
 
-void FcfsSchedulerStrategy::sort_waiting(
-    std::deque<uint64_t>& waiting_queue,
-    const std::unordered_map<uint64_t, SchedulerRequestMeta>& requests) const
+bool KVCacheManager::allocate_slots(
+    int32_t core_seq_id,
+    bool started,
+    int32_t num_computed_tokens,
+    int32_t num_new_tokens) const
 {
-    std::stable_sort(
-        waiting_queue.begin(),
-        waiting_queue.end(),
-        [&](uint64_t lhs, uint64_t rhs) {
-            const auto& left_meta = checked_meta(requests, lhs);
-            const auto& right_meta = checked_meta(requests, rhs);
-            if (left_meta.arrival_order != right_meta.arrival_order)
-            {
-                return left_meta.arrival_order < right_meta.arrival_order;
-            }
-            return left_meta.internal_id < right_meta.internal_id;
-        });
-}
+    if (kv_ == nullptr)
+    {
+        throw std::runtime_error("KVCacheManager::allocate_slots: kv must be non-null.");
+    }
 
-uint64_t FcfsSchedulerStrategy::select_preempt_candidate(
-    const std::deque<uint64_t>& running_queue,
-    const std::unordered_map<uint64_t, SchedulerRequestMeta>& requests,
-    uint64_t current_request_id) const
-{
-    (void)running_queue;
-    (void)requests;
-    // Minimal FCFS implementation: preempt current request on append failure.
-    return current_request_id;
+    if (num_new_tokens <= 0)
+    {
+        return true;
+    }
+
+    const int32_t target_position = num_computed_tokens + num_new_tokens - 1;
+    if (target_position < 0)
+    {
+        return true;
+    }
+
+    const int32_t required_blocks = (target_position / kv_->block_size_tokens()) + 1;
+    size_t needed_blocks = 0;
+    for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
+    {
+        size_t current_blocks = 0;
+        if (started)
+        {
+            try
+            {
+                current_blocks = kv_->page_table(core_seq_id, layer_id).size();
+            }
+            catch (const std::exception&)
+            {
+                return false;
+            }
+        }
+
+        if (static_cast<size_t>(required_blocks) > current_blocks)
+        {
+            needed_blocks += static_cast<size_t>(required_blocks) - current_blocks;
+        }
+    }
+
+    if (needed_blocks > kv_->free_block_count())
+    {
+        return false;
+    }
+
+    try
+    {
+        if (!started)
+        {
+            kv_->start_sequence(core_seq_id);
+        }
+
+        for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
+        {
+            kv_->ensure_capacity(core_seq_id, layer_id, target_position);
+        }
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+
+    return true;
 }
 
 Scheduler::Scheduler(SchedulerConfig config)
-    : config_(config), strategy_(build_strategy(config.policy))
+    : policy(config.policy),
+      max_num_scheduled_tokens(
+          std::max<int64_t>(1, static_cast<int64_t>(config.max_prefill_tokens_per_step)))
 {
 }
 
 Scheduler::Scheduler(const EngineArgs& args)
-    : config_(args.scheduler_config),
-      strategy_(build_strategy(args.scheduler_config.policy))
+    : Scheduler(args.scheduler_config)
 {
     if (args.kv != nullptr)
     {
-        block_manager_ = std::make_unique<BlockManager>(args.kv);
+        kvcache_manager.bind(args.kv);
         return;
     }
 
-    block_manager_ = std::make_unique<BlockManager>(
+    kvcache_manager.init_owned(
         args.kv_num_layers,
         args.kv_block_size_tokens,
         args.kv_num_blocks,
@@ -310,400 +372,392 @@ Scheduler::Scheduler(const EngineArgs& args)
 }
 
 Scheduler::Scheduler(KVCache* kv, SchedulerConfig config)
-    : config_(config),
-      strategy_(build_strategy(config.policy)),
-      block_manager_(std::make_unique<BlockManager>(kv))
+    : Scheduler(config)
 {
+    kvcache_manager.bind(kv);
 }
 
-KVCache* Scheduler::kv_cache() const
+void Scheduler::add_request(Request request)
 {
-    if (!block_manager_)
+    if (request.request_id == 0)
     {
-        return nullptr;
+        throw std::runtime_error("Scheduler::add_request: request_id must be non-zero.");
     }
-    return block_manager_->kv_cache();
-}
-
-int32_t Scheduler::assign_core_seq_id()
-{
-    if (next_core_seq_id_ <= 0)
-    {
-        throw std::runtime_error("Scheduler::assign_core_seq_id: invalid core sequence id state.");
-    }
-
-    if (next_core_seq_id_ == std::numeric_limits<int32_t>::max())
-    {
-        throw std::runtime_error("Scheduler::assign_core_seq_id: exhausted core sequence id space.");
-    }
-
-    const int32_t assigned = next_core_seq_id_;
-    ++next_core_seq_id_;
-    return assigned;
-}
-
-void Scheduler::remove_from_waiting_queue(uint64_t internal_id)
-{
-    erase_all(waiting_queue_, internal_id);
-}
-
-void Scheduler::remove_from_running_queue(uint64_t internal_id)
-{
-    erase_all(running_queue_, internal_id);
-}
-
-void Scheduler::sync_queues()
-{
-    const auto alive = [&](uint64_t internal_id) {
-        const auto it = seqs_.find(internal_id);
-        return it != seqs_.end() && !it->second.finished;
-    };
-
-    waiting_queue_.erase(
-        std::remove_if(
-            waiting_queue_.begin(),
-            waiting_queue_.end(),
-            [&](uint64_t internal_id) { return !alive(internal_id); }),
-        waiting_queue_.end());
-
-    running_queue_.erase(
-        std::remove_if(
-            running_queue_.begin(),
-            running_queue_.end(),
-            [&](uint64_t internal_id) { return !alive(internal_id); }),
-        running_queue_.end());
-
-    std::unordered_set<uint64_t> seen_waiting;
-    waiting_queue_.erase(
-        std::remove_if(
-            waiting_queue_.begin(),
-            waiting_queue_.end(),
-            [&](uint64_t internal_id) {
-                if (seen_waiting.find(internal_id) != seen_waiting.end())
-                {
-                    return true;
-                }
-                seen_waiting.insert(internal_id);
-                return false;
-            }),
-        waiting_queue_.end());
-
-    std::unordered_set<uint64_t> seen_running;
-    running_queue_.erase(
-        std::remove_if(
-            running_queue_.begin(),
-            running_queue_.end(),
-            [&](uint64_t internal_id) {
-                if (seen_running.find(internal_id) != seen_running.end())
-                {
-                    return true;
-                }
-                if (seen_waiting.find(internal_id) != seen_waiting.end())
-                {
-                    return true;
-                }
-                seen_running.insert(internal_id);
-                return false;
-            }),
-        running_queue_.end());
-}
-
-std::unordered_map<uint64_t, SchedulerRequestMeta> Scheduler::build_scheduler_meta() const
-{
-    std::unordered_map<uint64_t, SchedulerRequestMeta> meta;
-    meta.reserve(seqs_.size());
-    for (const auto& item : seqs_)
-    {
-        const CoreSequence& seq = item.second;
-        if (seq.finished)
-        {
-            continue;
-        }
-
-        SchedulerRequestMeta request_meta;
-        request_meta.internal_id = seq.internal_id;
-        request_meta.arrival_order = seq.arrival_order;
-        request_meta.prompt_tokens = prompt_token_count(seq);
-        request_meta.num_computed = seq.num_computed;
-        meta[seq.internal_id] = request_meta;
-    }
-    return meta;
-}
-
-void Scheduler::validate_schedule_contracts() const
-{
-    if (!strategy_)
-    {
-        throw std::runtime_error("Scheduler::schedule: strategy is not configured.");
-    }
-
-    if (!block_manager_)
-    {
-        throw std::runtime_error("Scheduler::schedule: block_manager must be configured for runtime state.");
-    }
-}
-
-CoreSequence* Scheduler::find_sequence(uint64_t internal_id)
-{
-    const auto it = seqs_.find(internal_id);
-    if (it == seqs_.end())
-    {
-        return nullptr;
-    }
-    return &it->second;
-}
-
-void Scheduler::add_request(const EngineCoreRequest& request, int32_t vocab_size)
-{
-    if (vocab_size <= 0)
-    {
-        throw std::runtime_error("Scheduler::add_request: vocab size must be positive.");
-    }
-
-    if (request.internal_id == 0)
-    {
-        throw std::runtime_error("Scheduler::add_request: internal_id must be non-zero.");
-    }
-
     if (request.prompt_token_ids.empty())
     {
-        throw std::runtime_error("Scheduler::add_request: prompt tokens must be non-empty.");
+        throw std::runtime_error("Scheduler::add_request: prompt_token_ids must be non-empty.");
+    }
+    if (request.request_id > static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))
+    {
+        throw std::runtime_error("Scheduler::add_request: request_id exceeds supported core_seq_id range.");
     }
 
-    for (int32_t token : request.prompt_token_ids)
+    for (int32_t token_id : request.prompt_token_ids)
     {
-        if (token < 0 || token >= vocab_size)
+        if (token_id < 0)
         {
-            throw std::runtime_error("Scheduler::add_request: prompt token is out of model vocab range.");
+            throw std::runtime_error("Scheduler::add_request: token id must be non-negative.");
         }
     }
 
-    if (seqs_.find(request.internal_id) != seqs_.end())
+    const int64_t key = static_cast<int64_t>(request.request_id);
+    if (requests.find(key) != requests.end())
     {
-        throw std::runtime_error("Scheduler::add_request: duplicated internal_id.");
+        throw std::runtime_error("Scheduler::add_request: duplicated request_id.");
     }
 
-    const int32_t core_seq_id = assign_core_seq_id();
-    for (const auto& item : seqs_)
+    request.reset_generated_tokens();
+    if (!request.has_valid_token_layout())
     {
-        if (item.second.core_seq_id == core_seq_id)
+        throw std::runtime_error("Scheduler::add_request: invalid token layout.");
+    }
+
+    request.status = RequestStatus::WAITING;
+    request.num_computed = 0;
+
+    requests[key] = request;
+    waiting.push_back(request.request_id);
+}
+
+int Scheduler::get_num_unfinished_requests()
+{
+    int unfinished = 0;
+    for (const auto& item : requests)
+    {
+        if (item.second.status != RequestStatus::FINISHED)
         {
-            throw std::runtime_error("Scheduler::add_request: duplicated core_seq_id.");
+            ++unfinished;
+        }
+    }
+    return unfinished;
+}
+
+bool Scheduler::has_unfinished_requests()
+{
+    return get_num_unfinished_requests() > 0;
+}
+
+void Scheduler::_preempt_request(Request request)
+{
+    Request* req = find_request(requests, request.request_id);
+    if (req == nullptr || req->status == RequestStatus::FINISHED)
+    {
+        return;
+    }
+
+    const int32_t core_seq_id = static_cast<int32_t>(req->request_id);
+    if (req->status == RequestStatus::RUNNING)
+    {
+        try
+        {
+            kvcache_manager.end_sequence(core_seq_id);
+        }
+        catch (const std::exception&)
+        {
+            // Keep preemption best-effort and preserve scheduler forward progress.
         }
     }
 
-    CoreSequence seq;
-    seq.internal_id = request.internal_id;
-    seq.core_seq_id = core_seq_id;
-    seq.arrival_order = next_arrival_order_++;
-    seq.token_ids = request.prompt_token_ids;
-    seq.sampling_params = request.sampling_params;
-    seq.generated_tokens = 0;
-    seq.num_computed = 0;
-    seq.kv_started = false;
-    seq.finished = false;
+    req->status = RequestStatus::WAITING;
+    req->num_computed = 0;
 
-    seqs_[request.internal_id] = std::move(seq);
-    waiting_queue_.push_back(request.internal_id);
-    sync_queues();
+    remove_from_queue(running, req->request_id);
+    remove_from_queue(waiting, req->request_id);
+    waiting.push_front(req->request_id);
 }
 
 SchedulerOutput Scheduler::schedule()
 {
-    validate_schedule_contracts();
-    sync_queues();
-
-    SchedulerOutput scheduler_output;
-
-    const std::unordered_map<uint64_t, SchedulerRequestMeta> scheduler_meta = build_scheduler_meta();
-
-    size_t available_blocks = block_manager_->free_block_count();
-    auto can_append_one_token = [&](uint64_t internal_id) -> bool {
-        CoreSequence* seq = find_sequence(internal_id);
-        if (seq == nullptr || seq->finished)
-        {
-            return false;
-        }
-
-        const size_t needed = block_manager_->estimate_append_new_blocks(
-            seq->core_seq_id,
-            seq->kv_started,
-            seq->num_computed);
-        if (needed == std::numeric_limits<size_t>::max())
-        {
-            return false;
-        }
-        if (needed > available_blocks)
-        {
-            return false;
-        }
-        available_blocks -= needed;
-        return true;
-    };
-
-    auto can_allocate_prefill = [&](uint64_t internal_id, int32_t prefill_tokens) -> bool {
-        CoreSequence* seq = find_sequence(internal_id);
-        if (seq == nullptr || seq->finished)
-        {
-            return false;
-        }
-
-        const int32_t prompt_tokens = prompt_token_count(*seq);
-        const size_t needed = block_manager_->estimate_prefill_new_blocks(
-            seq->core_seq_id,
-            seq->kv_started,
-            prompt_tokens,
-            seq->num_computed,
-            prefill_tokens);
-        if (needed == std::numeric_limits<size_t>::max())
-        {
-            return false;
-        }
-        if (needed > available_blocks)
-        {
-            return false;
-        }
-        available_blocks -= needed;
-        return true;
-    };
-
-    const SchedulerResult schedule_result = schedule(
-        running_queue_,
-        waiting_queue_,
-        scheduler_meta,
-        can_append_one_token,
-        can_allocate_prefill);
-
-    scheduler_output.preempted_ids = schedule_result.preempted_ids;
-
-    sync_queues();
-    scheduler_output.tasks.reserve(schedule_result.tasks.size());
-
-    for (const ScheduleTask& task : schedule_result.tasks)
+    if (kvcache_manager.num_layers() <= 0)
     {
-        CoreSequence* seq = find_sequence(task.internal_id);
-        if (seq == nullptr || seq->finished)
-        {
-            continue;
-        }
-
-        SchedulerTaskDescriptor descriptor;
-        descriptor.internal_id = seq->internal_id;
-        descriptor.core_seq_id = seq->core_seq_id;
-        descriptor.is_prefill = task.is_prefill;
-
-        if (task.is_prefill)
-        {
-            const int32_t prompt_tokens = prompt_token_count(*seq);
-            if (prompt_tokens <= 0 || seq->num_computed >= prompt_tokens)
-            {
-                continue;
-            }
-
-            if (!seq->kv_started)
-            {
-                block_manager_->start_sequence(seq->core_seq_id);
-                seq->kv_started = true;
-            }
-
-            descriptor.start_position = seq->num_computed;
-            const int32_t target_computed = std::min(prompt_tokens, seq->num_computed + task.num_tokens_to_process);
-            descriptor.token_ids.reserve(static_cast<size_t>(target_computed - descriptor.start_position));
-            for (int32_t pos = descriptor.start_position; pos < target_computed; ++pos)
-            {
-                descriptor.token_ids.push_back(seq->token_ids[static_cast<size_t>(pos)]);
-            }
-
-            if (descriptor.token_ids.empty())
-            {
-                continue;
-            }
-            scheduler_output.tasks.push_back(std::move(descriptor));
-            continue;
-        }
-
-        const int32_t prompt_tokens = prompt_token_count(*seq);
-        if (seq->num_computed < prompt_tokens)
-        {
-            continue;
-        }
-
-        if (!seq->kv_started)
-        {
-            block_manager_->start_sequence(seq->core_seq_id);
-            seq->kv_started = true;
-        }
-
-        descriptor.start_position = seq->num_computed;
-        if (!seq->token_ids.empty())
-        {
-            descriptor.token_ids.push_back(seq->token_ids.back());
-        }
-        scheduler_output.tasks.push_back(std::move(descriptor));
+        throw std::runtime_error("Scheduler::schedule: KVCacheManager is not initialized.");
     }
 
-    sync_queues();
+    SchedulerOutput scheduler_output;
+    int64_t remaining_token_budget = std::max<int64_t>(1, max_num_scheduled_tokens);
+    bool preempted_during_running = false;
+
+    auto try_allocate_with_tail_preempt = [&](Request& req, int32_t num_new_tokens, bool is_running) -> bool {
+        if (num_new_tokens <= 0)
+        {
+            return false;
+        }
+
+        const int32_t core_seq_id = static_cast<int32_t>(req.request_id);
+        while (true)
+        {
+            const bool started = req.status == RequestStatus::RUNNING;
+            if (kvcache_manager.allocate_slots(core_seq_id, started, req.num_computed, num_new_tokens))
+            {
+                req.status = RequestStatus::RUNNING;
+                return true;
+            }
+            
+            // 从队尾找到第一个合法的 Request，将其 preempt
+            Request* victim = nullptr;
+            for (auto it = running.rbegin(); it != running.rend(); ++it)
+            {
+                Request* candidate = find_request(requests, *it);
+                if (candidate == nullptr || candidate->status != RequestStatus::RUNNING)
+                {
+                    continue;
+                }
+                victim = candidate;
+                break;
+            }
+
+            if (victim == nullptr)
+            {
+                return false;
+            }
+
+            const uint64_t victim_id = victim->request_id;
+            _preempt_request(*victim);
+            push_unique_id(scheduler_output.preempted_req_ids, victim_id);
+            if (is_running)
+            {
+                preempted_during_running = true;
+            }
+
+            if (victim_id == req.request_id)
+            {
+                return false;
+            }
+        }
+    };
+
+    const std::deque<uint64_t> running_snapshot = running;
+    for (uint64_t request_id : running_snapshot)
+    {
+        if (remaining_token_budget <= 0)
+        {
+            break;
+        }
+
+        // 检测该 Request 是否已经被调度
+        if (scheduler_output.num_scheduled_tokens.find(request_id) != scheduler_output.num_scheduled_tokens.end())
+        {
+            continue;
+        }
+
+        Request* req = find_request(requests, request_id);
+        if (req == nullptr || req->status != RequestStatus::RUNNING)
+        {
+            continue;
+        }
+
+        const int32_t core_seq_id = static_cast<int32_t>(request_id);
+        const int32_t prompt_tokens = prompt_token_count(*req);
+
+        if (req->num_computed < prompt_tokens)
+        {// 处于 prefilling 阶段
+            const int32_t remaining_prefill = prompt_tokens - req->num_computed;
+            const int32_t chunk = std::min(remaining_prefill, static_cast<int32_t>(remaining_token_budget)); // 本轮调度的 token 数量
+            if (!try_allocate_with_tail_preempt(*req, chunk, true))
+            {
+                continue;
+            }
+
+            std::vector<int32_t> block_table;
+            kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+
+            NewRequestData new_req;
+            new_req.req_id = request_id;
+            new_req.core_seq_id = core_seq_id;
+            new_req.prompt_token_ids = req->prompt_token_ids;
+            new_req.block_ids = std::move(block_table);
+            new_req.num_computed_tokens = req->num_computed;
+            new_req.sampling_params = req->sampling_params;
+
+            scheduler_output.num_scheduled_tokens[new_req.req_id] = chunk;
+            scheduler_output.scheduled_new_reqs.push_back(std::move(new_req));
+            remaining_token_budget -= chunk;
+            continue;
+        }
+
+        if (req->_all_token_ids.empty())
+        {
+            req->status = RequestStatus::FINISHED;
+            continue;
+        }
+
+        if (!try_allocate_with_tail_preempt(*req, 1, true))
+        {
+            continue;
+        }
+
+        scheduler_output.scheduled_cached_reqs.req_ids.push_back(request_id);
+        scheduler_output.scheduled_cached_reqs.core_seq_ids.push_back(core_seq_id);
+        scheduler_output.scheduled_cached_reqs.input_token_ids.push_back(req->_all_token_ids.back());
+        scheduler_output.scheduled_cached_reqs.num_computed_tokens.push_back(req->num_computed);
+        scheduler_output.scheduled_cached_reqs.new_block_ids.push_back(std::nullopt);
+        scheduler_output.num_scheduled_tokens[request_id] = 1;
+        remaining_token_budget -= 1;
+    }
+
+    if (!preempted_during_running)
+    {
+        const std::deque<uint64_t> waiting_snapshot = waiting;
+        for (uint64_t request_id : waiting_snapshot)
+        {
+            if (remaining_token_budget <= 0)
+            {
+                break;
+            }
+
+            if (scheduler_output.num_scheduled_tokens.find(request_id) != scheduler_output.num_scheduled_tokens.end())
+            {
+                continue;
+            }
+
+            Request* req = find_request(requests, request_id);
+            if (req == nullptr || req->status == RequestStatus::FINISHED)
+            {
+                continue;
+            }
+
+            const int32_t core_seq_id = static_cast<int32_t>(request_id);
+            const int32_t prompt_tokens = prompt_token_count(*req);
+            const int32_t remaining_prefill = prompt_tokens - req->num_computed;
+
+            if (remaining_prefill <= 0)
+            {
+                if (req->_all_token_ids.empty())
+                {
+                    req->status = RequestStatus::FINISHED;
+                    continue;
+                }
+
+                if (!try_allocate_with_tail_preempt(*req, 1, false))
+                {
+                    break;
+                }
+
+                scheduler_output.scheduled_cached_reqs.req_ids.push_back(request_id);
+                scheduler_output.scheduled_cached_reqs.core_seq_ids.push_back(core_seq_id);
+                scheduler_output.scheduled_cached_reqs.input_token_ids.push_back(req->_all_token_ids.back());
+                scheduler_output.scheduled_cached_reqs.num_computed_tokens.push_back(req->num_computed);
+                scheduler_output.scheduled_cached_reqs.new_block_ids.push_back(std::nullopt);
+                scheduler_output.num_scheduled_tokens[request_id] = 1;
+                remaining_token_budget -= 1;
+                continue;
+            }
+
+            const int32_t chunk = std::min(remaining_prefill, static_cast<int32_t>(remaining_token_budget));
+            if (!try_allocate_with_tail_preempt(*req, chunk, false))
+            {
+                break;
+            }
+
+            std::vector<int32_t> block_table;
+            kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+
+            NewRequestData new_req;
+            new_req.req_id = request_id;
+            new_req.core_seq_id = core_seq_id;
+            new_req.prompt_token_ids = req->prompt_token_ids;
+            new_req.block_ids = std::move(block_table);
+            new_req.num_computed_tokens = req->num_computed;
+            new_req.sampling_params = req->sampling_params;
+
+            scheduler_output.num_scheduled_tokens[new_req.req_id] = chunk;
+            scheduler_output.scheduled_new_reqs.push_back(std::move(new_req));
+            remaining_token_budget -= chunk;
+        }
+    }
+
+    for (const auto& item : requests)
+    {
+        if (item.second.status == RequestStatus::FINISHED)
+        {
+            scheduler_output.finished_req_ids.push_back(item.second.request_id);
+        }
+    }
+
+    for (const auto& item : scheduler_output.num_scheduled_tokens)
+    {
+        scheduler_output.total_num_scheduled_tokens += item.second;
+    }
+
     return scheduler_output;
 }
 
-std::map<uint64_t, EngineCoreOutput> Scheduler::update_from_output(
-    const SchedulerOutput& scheduler_output,
-    const ModelOutput& model_output)
+std::map<int, EngineCoreOutput> Scheduler::update_from_output(
+    SchedulerOutput scheduler_output,
+    ModelRunnerOutput model_runner_output)
 {
-    validate_schedule_contracts();
+    std::map<int, EngineCoreOutput> results;
 
-    std::map<uint64_t, EngineCoreOutput> results;
+    auto mark_running = [&](Request& req) {
+        req.status = RequestStatus::RUNNING;
+        remove_from_queue(waiting, req.request_id);
+        push_to_running_if_absent(running, req.request_id);
+    };
 
-    for (uint64_t internal_id : scheduler_output.preempted_ids)
-    {
-        const std::string error_message = "preempted by FCFS scheduler due to KV capacity.";
-
-        CoreSequence* seq = find_sequence(internal_id);
-        if (seq != nullptr)
+    auto cleanup_finished = [&]() {
+        for (auto it = requests.begin(); it != requests.end();)
         {
-            seq->finished = true;
+            Request& req = it->second;
+            if (req.status != RequestStatus::FINISHED)
+            {
+                ++it;
+                continue;
+            }
+
+            remove_from_queue(waiting, req.request_id);
+            remove_from_queue(running, req.request_id);
+            it = requests.erase(it);
+        }
+    };
+
+    auto finish_request = [&](Request& req) {
+        if (req.status == RequestStatus::RUNNING)
+        {
+            try
+            {
+                kvcache_manager.end_sequence(static_cast<int32_t>(req.request_id));
+            }
+            catch (const std::exception&)
+            {
+                // Keep finish cleanup best-effort.
+            }
         }
 
-        EngineCoreOutput result;
-        result.internal_id = internal_id;
-        result.sequence = seq;
-        result.has_error = true;
-        result.error_message = error_message;
-        results[internal_id] = std::move(result);
-    }
+        req.status = RequestStatus::FINISHED;
+    };
 
-    for (const ModelTaskOutput& task_output : model_output.tasks)
+    cleanup_finished();
+
+    for (const ModelTaskOutput& task_output : model_runner_output.tasks)
     {
-        CoreSequence* seq = find_sequence(task_output.internal_id);
-        if (seq == nullptr || seq->finished)
+        Request* req = find_request(requests, task_output.internal_id);
+        if (req == nullptr || req->status == RequestStatus::FINISHED)
         {
             continue;
         }
 
         if (task_output.has_error)
         {
-            seq->finished = true;
+            finish_request(*req);
 
             EngineCoreOutput result;
             result.internal_id = task_output.internal_id;
-            result.sequence = seq;
+            result.sequence = nullptr;
             result.has_error = true;
             result.error_message = task_output.error_message;
-            results[task_output.internal_id] = std::move(result);
+            results[to_output_key(task_output.internal_id)] = std::move(result);
             continue;
         }
 
         if (task_output.is_prefill)
         {
-            if (task_output.processed_tokens <= 0)
+            if (task_output.processed_tokens > 0)
             {
-                continue;
+                mark_running(*req);
+                const int32_t prompt_tokens = prompt_token_count(*req);
+                const int32_t target_computed = std::min(prompt_tokens, req->num_computed + task_output.processed_tokens);
+                req->num_computed = target_computed;
             }
-
-            const int32_t prompt_tokens = prompt_token_count(*seq);
-            const int32_t target_computed = std::min(prompt_tokens, seq->num_computed + task_output.processed_tokens);
-            seq->num_computed = target_computed;
-            block_manager_->refresh_block_table(seq->core_seq_id, seq->kv_started, seq->block_table);
             continue;
         }
 
@@ -712,194 +766,33 @@ std::map<uint64_t, EngineCoreOutput> Scheduler::update_from_output(
             continue;
         }
 
-        seq->token_ids.push_back(task_output.sampled_token_id);
-        seq->generated_tokens += task_output.processed_tokens;
-        seq->num_computed += task_output.processed_tokens;
-        block_manager_->refresh_block_table(seq->core_seq_id, seq->kv_started, seq->block_table);
+        mark_running(*req);
+        req->_all_token_ids.push_back(task_output.sampled_token_id);
+        req->num_computed += task_output.processed_tokens;
 
         EngineCoreOutput result;
-        result.internal_id = seq->internal_id;
+        result.internal_id = req->request_id;
         result.new_token_id = task_output.sampled_token_id;
-        result.generated_tokens = seq->generated_tokens;
-        result.sequence = seq;
-        results[seq->internal_id] = std::move(result);
+        result.generated_tokens = req->generated_tokens();
+        result.sequence = nullptr;
+        results[to_output_key(req->request_id)] = std::move(result);
+
+        const bool stop_by_token =
+            std::find(
+                req->sampling_params.stop_token_ids.begin(),
+                req->sampling_params.stop_token_ids.end(),
+                task_output.sampled_token_id)
+            != req->sampling_params.stop_token_ids.end();
+        const bool stop_by_length =
+            req->generated_tokens() >= req->sampling_params.max_tokens;
+        if (stop_by_token || stop_by_length)
+        {
+            finish_request(*req);
+        }
     }
 
-    sync_queues();
+    cleanup_finished();
     return results;
-}
-
-void Scheduler::abort_request(uint64_t internal_id)
-{
-    CoreSequence* seq = find_sequence(internal_id);
-    if (seq == nullptr)
-    {
-        return;
-    }
-
-    if (seq->kv_started)
-    {
-        block_manager_->end_sequence(seq->core_seq_id);
-        seq->kv_started = false;
-    }
-    seq->finished = true;
-
-    seq->block_table.clear();
-    remove_from_waiting_queue(internal_id);
-    remove_from_running_queue(internal_id);
-    seqs_.erase(internal_id);
-}
-
-void Scheduler::post_step()
-{
-    std::vector<uint64_t> finished_ids;
-    finished_ids.reserve(seqs_.size());
-
-    for (const auto& item : seqs_)
-    {
-        if (item.second.finished)
-        {
-            finished_ids.push_back(item.first);
-        }
-    }
-
-    for (uint64_t internal_id : finished_ids)
-    {
-        abort_request(internal_id);
-    }
-}
-
-SchedulerResult Scheduler::schedule(
-    std::deque<uint64_t>& running_queue,
-    std::deque<uint64_t>& waiting_queue,
-    const std::unordered_map<uint64_t, SchedulerRequestMeta>& requests,
-    const std::function<bool(uint64_t)>& can_append_one_token,
-    const std::function<bool(uint64_t, int32_t)>& can_allocate_prefill) const
-{
-    if (!strategy_)
-    {
-        throw std::runtime_error("Scheduler::schedule: strategy is not configured.");
-    }
-
-    SchedulerResult result;
-
-    // Step A: build execution tasks for running requests.
-    std::deque<uint64_t> next_running;
-    for (uint64_t internal_id : running_queue)
-    {
-        const SchedulerRequestMeta& meta = checked_meta(requests, internal_id);
-        const bool in_prefill = meta.num_computed < meta.prompt_tokens;
-
-        if (in_prefill)
-        {
-            const int32_t chunk = prefill_chunk_tokens(config_, meta);
-            if (chunk <= 0)
-            {
-                next_running.push_back(internal_id);
-                continue;
-            }
-
-            if (!can_allocate_prefill(internal_id, chunk))
-            {
-                if (config_.enable_preemption)
-                {
-                    const uint64_t victim =
-                        strategy_->select_preempt_candidate(running_queue, requests, internal_id);
-                    push_unique(result.preempted_ids, victim);
-                    if (victim != internal_id)
-                    {
-                        push_unique(result.preempted_ids, internal_id);
-                    }
-                    continue;
-                }
-
-                next_running.push_back(internal_id);
-                continue;
-            }
-
-            ScheduleTask task;
-            task.internal_id = internal_id;
-            task.is_prefill = true;
-            task.num_tokens_to_process = chunk;
-            result.tasks.push_back(task);
-            next_running.push_back(internal_id);
-            continue;
-        }
-
-        if (!can_append_one_token(internal_id))
-        {
-            if (config_.enable_preemption)
-            {
-                const uint64_t victim =
-                    strategy_->select_preempt_candidate(running_queue, requests, internal_id);
-                push_unique(result.preempted_ids, victim);
-                if (victim != internal_id)
-                {
-                    push_unique(result.preempted_ids, internal_id);
-                }
-                continue;
-            }
-
-            next_running.push_back(internal_id);
-            continue;
-        }
-
-        ScheduleTask task;
-        task.internal_id = internal_id;
-        task.is_prefill = false;
-        task.num_tokens_to_process = 1;
-        result.tasks.push_back(task);
-        next_running.push_back(internal_id);
-    }
-    running_queue = std::move(next_running);
-
-    // Step B: sort waiting by strategy before trying admissions.
-    strategy_->sort_waiting(waiting_queue, requests);
-
-    const auto under_running_limit = [&]() -> bool {
-        return config_.max_running_requests == 0
-            || running_queue.size() < config_.max_running_requests;
-    };
-
-    while (!waiting_queue.empty() && under_running_limit())
-    {
-        const uint64_t internal_id = waiting_queue.front();
-        const SchedulerRequestMeta& meta = checked_meta(requests, internal_id);
-        const int32_t chunk = prefill_chunk_tokens(config_, meta);
-        if (chunk <= 0)
-        {
-            waiting_queue.pop_front();
-            running_queue.push_back(internal_id);
-            continue;
-        }
-
-        if (!can_allocate_prefill(internal_id, chunk))
-        {
-            break;
-        }
-
-        waiting_queue.pop_front();
-        running_queue.push_back(internal_id);
-
-        ScheduleTask task;
-        task.internal_id = internal_id;
-        task.is_prefill = true;
-        task.num_tokens_to_process = chunk;
-        result.tasks.push_back(task);
-    }
-
-    return result;
-}
-
-std::unique_ptr<SchedulerStrategy> Scheduler::build_strategy(SchedulerPolicy policy) const
-{
-    switch (policy)
-    {
-        case SchedulerPolicy::kFcfs:
-            return std::make_unique<FcfsSchedulerStrategy>();
-    }
-
-    throw std::runtime_error("Scheduler: unknown scheduler policy.");
 }
 
 } // namespace tiny_llm
