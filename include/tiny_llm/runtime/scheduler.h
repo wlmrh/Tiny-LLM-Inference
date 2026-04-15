@@ -34,12 +34,12 @@ struct SchedulerConfig {
 };
 
 struct NewRequestData {
-    uint64_t req_id = 0;
+    uint64_t req_id = 0; // 该请求的 id
     int32_t core_seq_id = -1;
-    std::vector<int32_t> prompt_token_ids;
-    std::vector<int32_t> block_ids;
-    int32_t num_computed_tokens = 0;
-    SamplingParams sampling_params;
+    std::vector<int32_t> prompt_token_ids; // 该请求的 token id 序列
+    std::vector<int32_t> block_ids; // 该请求拥有的所有 kv block 序号
+    int32_t num_computed_tokens = 0; // 该请求已经计算的 token 数量
+    SamplingParams sampling_params; // 采样参数
 };
 
 struct CachedRequestData {
@@ -55,12 +55,12 @@ struct CachedRequestData {
  * @brief Scheduler output package for one runtime step.
  */
 struct SchedulerOutput {
-    std::vector<NewRequestData> scheduled_new_reqs;
-    CachedRequestData scheduled_cached_reqs;
-    std::unordered_map<uint64_t, int32_t> num_scheduled_tokens;
-    std::vector<uint64_t> finished_req_ids;
-    std::vector<uint64_t> preempted_req_ids;
-    int32_t total_num_scheduled_tokens = 0;
+    std::vector<NewRequestData> scheduled_new_reqs; // 首次调度的请求对象
+    CachedRequestData scheduled_cached_reqs; // 之前已经调度过的请求，它们的数据已经 cached
+    std::unordered_map<uint64_t, int32_t> num_scheduled_tokens; // 每个 request 调度的 token 数量
+    std::vector<uint64_t> finished_req_ids; // 在上一步中完成的请求，供 ModelRunner 清除这些请求的cache
+    int32_t total_num_scheduled_tokens = 0; // 本轮调度中，所有请求要处理的 Token 总和
+    // std::vector<int32_t> new_block_ids_to_zero; // 本轮新分配的，需要初始化的物理块 id（由于 persistent caching 机制，ModelRunner 中存储着每个请求执行状态的副本）
 };
 
 /**
@@ -78,12 +78,12 @@ struct ModelTaskOutput {
 /**
  * @brief Aggregated model execution results for one runtime step.
  */
-struct ModelOutput {
-    std::vector<ModelTaskOutput> tasks;
+struct ModelRunnerOutput {
+    std::vector<uint64_t> req_ids; // 本轮执行的所有请求 id
+    std::unordered_map<uint64_t, int32_t> req_id_to_index; // id -> index（该请求在sampled_token_ids 的第几项）
+    std::vector<int32_t> sampled_token_ids; // 本轮迭代中，每个请求的产出（idx -> token_id），prefill 请求为 -1
+    // std::vector<ModelTaskOutput> tasks;
 };
-
-using ModelRunnerOutput = ModelOutput;
-using EngineCoreOutput = EngineCoreOutputs;
 
 /**
  * @brief KV block estimation and block table refresh helper for scheduler/runtime.

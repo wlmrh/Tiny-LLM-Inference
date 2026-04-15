@@ -50,14 +50,6 @@ void push_to_running_if_absent(std::deque<uint64_t>& running, uint64_t request_i
     }
 }
 
-void push_unique_id(std::vector<uint64_t>& ids, uint64_t id)
-{
-    if (std::find(ids.begin(), ids.end(), id) == ids.end())
-    {
-        ids.push_back(id);
-    }
-}
-
 } // namespace
 
 KVCacheManager::KVCacheManager(KVCache* kv)
@@ -513,7 +505,6 @@ SchedulerOutput Scheduler::schedule()
 
             const uint64_t victim_id = victim->request_id;
             _preempt_request(*victim);
-            push_unique_id(scheduler_output.preempted_req_ids, victim_id);
             if (is_running)
             {
                 preempted_during_running = true;
@@ -728,51 +719,77 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
 
     cleanup_finished();
 
-    for (const ModelTaskOutput& task_output : model_runner_output.tasks)
+    for (const NewRequestData& new_req : scheduler_output.scheduled_new_reqs)
     {
-        Request* req = find_request(requests, task_output.internal_id);
+        Request* req = find_request(requests, new_req.req_id);
         if (req == nullptr || req->status == RequestStatus::FINISHED)
         {
             continue;
         }
 
-        if (task_output.has_error)
+        const auto scheduled_it = scheduler_output.num_scheduled_tokens.find(new_req.req_id);
+        if (scheduled_it == scheduler_output.num_scheduled_tokens.end())
         {
-            finish_request(*req);
-
-            EngineCoreOutput result;
-            result.internal_id = task_output.internal_id;
-            result.sequence = nullptr;
-            result.has_error = true;
-            result.error_message = task_output.error_message;
-            results[to_output_key(task_output.internal_id)] = std::move(result);
             continue;
         }
 
-        if (task_output.is_prefill)
-        {
-            if (task_output.processed_tokens > 0)
-            {
-                mark_running(*req);
-                const int32_t prompt_tokens = prompt_token_count(*req);
-                const int32_t target_computed = std::min(prompt_tokens, req->num_computed + task_output.processed_tokens);
-                req->num_computed = target_computed;
-            }
-            continue;
-        }
-
-        if (task_output.processed_tokens <= 0)
+        const int32_t processed_tokens = scheduled_it->second;
+        if (processed_tokens <= 0)
         {
             continue;
         }
 
         mark_running(*req);
-        req->_all_token_ids.push_back(task_output.sampled_token_id);
-        req->num_computed += task_output.processed_tokens;
+        const int32_t prompt_tokens = prompt_token_count(*req);
+        const int32_t target_computed = std::min(prompt_tokens, req->num_computed + processed_tokens);
+        req->num_computed = target_computed;
+    }
+
+    for (uint64_t req_id : scheduler_output.scheduled_cached_reqs.req_ids)
+    {
+        Request* req = find_request(requests, req_id);
+        if (req == nullptr || req->status == RequestStatus::FINISHED)
+        {
+            continue;
+        }
+
+        const auto scheduled_it = scheduler_output.num_scheduled_tokens.find(req_id);
+        if (scheduled_it == scheduler_output.num_scheduled_tokens.end())
+        {
+            continue;
+        }
+
+        const int32_t processed_tokens = scheduled_it->second;
+        if (processed_tokens <= 0)
+        {
+            continue;
+        }
+
+        const auto index_it = model_runner_output.req_id_to_index.find(req_id);
+        if (index_it == model_runner_output.req_id_to_index.end())
+        {
+            continue;
+        }
+
+        const int32_t index = index_it->second;
+        if (index < 0 || static_cast<size_t>(index) >= model_runner_output.sampled_token_ids.size())
+        {
+            continue;
+        }
+
+        const int32_t sampled_token_id = model_runner_output.sampled_token_ids[static_cast<size_t>(index)];
+        if (sampled_token_id < 0)
+        {
+            continue;
+        }
+
+        mark_running(*req);
+        req->_all_token_ids.push_back(sampled_token_id);
+        req->num_computed += processed_tokens;
 
         EngineCoreOutput result;
         result.internal_id = req->request_id;
-        result.new_token_id = task_output.sampled_token_id;
+        result.new_token_id = sampled_token_id;
         result.generated_tokens = req->generated_tokens();
         result.sequence = nullptr;
         results[to_output_key(req->request_id)] = std::move(result);
@@ -781,7 +798,7 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
             std::find(
                 req->sampling_params.stop_token_ids.begin(),
                 req->sampling_params.stop_token_ids.end(),
-                task_output.sampled_token_id)
+                sampled_token_id)
             != req->sampling_params.stop_token_ids.end();
         const bool stop_by_length =
             req->generated_tokens() >= req->sampling_params.max_tokens;

@@ -34,7 +34,7 @@ public:
 
     void add_request(const EngineCoreRequest& request);
 
-    std::tuple<std::unordered_map<int, EngineCoreOutputs>, bool> step();
+    std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> step();
 
 private:
     std::unique_ptr<Scheduler> scheduler_;

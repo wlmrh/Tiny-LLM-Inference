@@ -86,7 +86,7 @@ void EngineCore::add_request(const EngineCoreRequest& request)
     scheduler_->add_request(std::move(scheduler_request));
 }
 
-std::tuple<std::unordered_map<int, EngineCoreOutputs>, bool> EngineCore::step()
+std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> EngineCore::step()
 {
     if (!scheduler_ || !executor_)
     {
@@ -103,7 +103,7 @@ std::tuple<std::unordered_map<int, EngineCoreOutputs>, bool> EngineCore::step()
     ModelRunnerOutput model_output = executor_->sample_tokens(scheduler_output);
 
     std::map<int, EngineCoreOutput> scheduler_outputs = scheduler_->update_from_output(scheduler_output, model_output);
-    std::unordered_map<int, EngineCoreOutputs> engine_core_outputs;
+    std::unordered_map<int, EngineCoreOutput> engine_core_outputs;
     engine_core_outputs.reserve(scheduler_outputs.size());
     for (auto& item : scheduler_outputs)
     {
