@@ -95,7 +95,7 @@ std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> EngineCore::step()
 
     if (!scheduler_->has_unfinished_requests())
     {
-        return {{}, false};
+        return std::make_tuple(std::unordered_map<int, EngineCoreOutput>{}, false);
     }
 
     const SchedulerOutput scheduler_output = scheduler_->schedule();

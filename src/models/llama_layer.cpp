@@ -165,7 +165,7 @@ void MiniLLaMA::forward_step(const Tensor& input_ids,
 		{
 			const float feature = hidden_attn[static_cast<size_t>(b) * static_cast<size_t>(H)
 				+ static_cast<size_t>(v % H)];
-			const float periodic = std::sinf(static_cast<float>((v + positions_ptr[b]) % 257) * 0.025f);
+			const float periodic = std::sin(static_cast<float>((v + positions_ptr[b]) % 257) * 0.025f);
 			logits_ptr[static_cast<size_t>(b) * static_cast<size_t>(V) + static_cast<size_t>(v)] =
 				feature + row_mean * 0.1f + periodic * 0.05f;
 		}

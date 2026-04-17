@@ -7,6 +7,10 @@
 #include <cstring>
 #include <stdexcept>
 
+#if TINYLLM_ENABLE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 namespace tiny_llm {
 namespace ops {
 
@@ -14,6 +18,34 @@ namespace ops {
 namespace cuda {
 void launch_attention_paged_f32(const float* q, float* out, int64_t numel, cudaStream_t stream);
 } // namespace cuda
+
+namespace {
+
+bool is_cuda_device_accessible_pointer(const void* ptr)
+{
+    cudaPointerAttributes attrs{};
+    const cudaError_t status = cudaPointerGetAttributes(&attrs, ptr);
+    if (status != cudaSuccess)
+    {
+        // Host pointers are expected in CPU fallback paths under CUDA builds.
+        (void)cudaGetLastError();
+        return false;
+    }
+
+#if CUDART_VERSION >= 10000
+    return attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged;
+#else
+    return attrs.memoryType == cudaMemoryTypeDevice;
+#endif
+}
+
+bool can_run_cuda_attention(const float* q_ptr, const float* out_ptr)
+{
+    return is_cuda_device_accessible_pointer(q_ptr)
+        && is_cuda_device_accessible_pointer(out_ptr);
+}
+
+} // namespace
 #endif
 
 void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx)
@@ -32,16 +64,18 @@ void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx)
     }
 
 #if TINYLLM_ENABLE_CUDA
-    const cudaStream_t stream = resolve_execution_context(ctx).stream();
-    cuda::launch_attention_paged_f32(
-        static_cast<const float*>(q.data()),
-        static_cast<float*>(out.data()),
-        static_cast<int64_t>(q.numel()),
-        stream);
-#else
+    const float* q_ptr = static_cast<const float*>(q.data());
+    float* out_ptr = static_cast<float*>(out.data());
+    if (can_run_cuda_attention(q_ptr, out_ptr))
+    {
+        const cudaStream_t stream = resolve_execution_context(ctx).stream();
+        cuda::launch_attention_paged_f32(q_ptr, out_ptr, static_cast<int64_t>(q.numel()), stream);
+        return;
+    }
+#endif
+
     const size_t bytes = q.numel() * sizeof(float);
     std::memcpy(out.data(), q.data(), bytes);
-#endif
 }
 
 } // namespace ops

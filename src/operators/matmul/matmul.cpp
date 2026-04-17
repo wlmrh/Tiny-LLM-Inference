@@ -8,6 +8,10 @@
 #include <stdexcept>
 #include <string>
 
+#if TINYLLM_ENABLE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 namespace tiny_llm {
 namespace ops {
 
@@ -68,6 +72,55 @@ void validate_gemm_inputs(const Tensor& a, const Tensor& b, const Tensor& c)
     }
 }
 
+void run_gemm_cpu(const float* a_ptr,
+                  const float* b_ptr,
+                  float* c_ptr,
+                  int M,
+                  int N,
+                  int K)
+{
+    for (int m = 0; m < M; ++m)
+    {
+        for (int n = 0; n < N; ++n)
+        {
+            float sum = 0.0f;
+            for (int k = 0; k < K; ++k)
+            {
+                sum += a_ptr[static_cast<size_t>(m) * static_cast<size_t>(K) + static_cast<size_t>(k)]
+                    * b_ptr[static_cast<size_t>(k) * static_cast<size_t>(N) + static_cast<size_t>(n)];
+            }
+            c_ptr[static_cast<size_t>(m) * static_cast<size_t>(N) + static_cast<size_t>(n)] = sum;
+        }
+    }
+}
+
+#if TINYLLM_ENABLE_CUDA
+bool is_cuda_device_accessible_pointer(const void* ptr)
+{
+    cudaPointerAttributes attrs{};
+    const cudaError_t status = cudaPointerGetAttributes(&attrs, ptr);
+    if (status != cudaSuccess)
+    {
+        // Host pointers are expected in CPU fallback paths under CUDA builds.
+        (void)cudaGetLastError();
+        return false;
+    }
+
+#if CUDART_VERSION >= 10000
+    return attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged;
+#else
+    return attrs.memoryType == cudaMemoryTypeDevice;
+#endif
+}
+
+bool can_run_cuda_gemm(const float* a_ptr, const float* b_ptr, const float* c_ptr)
+{
+    return is_cuda_device_accessible_pointer(a_ptr)
+        && is_cuda_device_accessible_pointer(b_ptr)
+        && is_cuda_device_accessible_pointer(c_ptr);
+}
+#endif
+
 } // namespace
 
 void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx)
@@ -83,23 +136,15 @@ void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx)
     float* c_ptr = static_cast<float*>(c.data());
 
 #if TINYLLM_ENABLE_CUDA
-    const cudaStream_t stream = resolve_execution_context(ctx).stream();
-    cuda::launch_gemm_f32(a_ptr, b_ptr, c_ptr, M, N, K, stream);
-#else
-    for (int m = 0; m < M; ++m)
+    if (can_run_cuda_gemm(a_ptr, b_ptr, c_ptr))
     {
-        for (int n = 0; n < N; ++n)
-        {
-            float sum = 0.0f;
-            for (int k = 0; k < K; ++k)
-            {
-                sum += a_ptr[static_cast<size_t>(m) * static_cast<size_t>(K) + static_cast<size_t>(k)]
-                    * b_ptr[static_cast<size_t>(k) * static_cast<size_t>(N) + static_cast<size_t>(n)];
-            }
-            c_ptr[static_cast<size_t>(m) * static_cast<size_t>(N) + static_cast<size_t>(n)] = sum;
-        }
+        const cudaStream_t stream = resolve_execution_context(ctx).stream();
+        cuda::launch_gemm_f32(a_ptr, b_ptr, c_ptr, M, N, K, stream);
+        return;
     }
 #endif
+
+    run_gemm_cpu(a_ptr, b_ptr, c_ptr, M, N, K);
 }
 
 } // namespace ops

@@ -71,6 +71,7 @@ add_library(tiny_llm_models STATIC
 )
 
 target_link_libraries(tiny_llm_models PUBLIC tiny_llm_operators tiny_llm_core)
+target_link_libraries(tiny_llm_core PUBLIC tiny_llm_models)
 
 add_executable(llama_inference
     examples/llama_inference.cpp
