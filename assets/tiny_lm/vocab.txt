@@ -1,0 +1,15 @@
+[PAD]
+[BOS]
+[EOS]
+[UNK]
+hello
+world
+tiny
+llm
+inference
+works
+!
+##ly
+model
+runs
+fast

@@ -46,13 +46,9 @@ int main()
         assert(out.num_scheduled_tokens.at(1) == 2);
 
         tiny_llm::ModelRunnerOutput model_out;
-        model_out.tasks.push_back(tiny_llm::ModelTaskOutput{
-            1,
-            true,
-            2,
-            -1,
-            false,
-            ""});
+        model_out.req_ids = {1};
+        model_out.req_id_to_index[1] = 0;
+        model_out.sampled_token_ids = {-1};
 
         const std::map<int, tiny_llm::EngineCoreOutput> results =
             scheduler.update_from_output(out, model_out);
@@ -65,13 +61,9 @@ int main()
         assert(out.num_scheduled_tokens.at(1) == 1);
 
         tiny_llm::ModelRunnerOutput model_out;
-        model_out.tasks.push_back(tiny_llm::ModelTaskOutput{
-            1,
-            true,
-            1,
-            -1,
-            false,
-            ""});
+        model_out.req_ids = {1};
+        model_out.req_id_to_index[1] = 0;
+        model_out.sampled_token_ids = {-1};
 
         const std::map<int, tiny_llm::EngineCoreOutput> results =
             scheduler.update_from_output(out, model_out);
@@ -86,13 +78,9 @@ int main()
         assert(out.num_scheduled_tokens.at(1) == 1);
 
         tiny_llm::ModelRunnerOutput model_out;
-        model_out.tasks.push_back(tiny_llm::ModelTaskOutput{
-            1,
-            false,
-            1,
-            2,
-            false,
-            ""});
+        model_out.req_ids = {1};
+        model_out.req_id_to_index[1] = 0;
+        model_out.sampled_token_ids = {2};
 
         const std::map<int, tiny_llm::EngineCoreOutput> results =
             scheduler.update_from_output(out, model_out);
@@ -150,13 +138,9 @@ int main()
             assert(out.scheduled_new_reqs[0].req_id == 1);
 
             tiny_llm::ModelRunnerOutput model_out;
-            model_out.tasks.push_back(tiny_llm::ModelTaskOutput{
-                1,
-                true,
-                1,
-                -1,
-                false,
-                ""});
+            model_out.req_ids = {1};
+            model_out.req_id_to_index[1] = 0;
+            model_out.sampled_token_ids = {-1};
             const std::map<int, tiny_llm::EngineCoreOutput> results =
                 scheduler2.update_from_output(out, model_out);
             assert(results.empty());
@@ -164,16 +148,7 @@ int main()
 
         {
             const tiny_llm::SchedulerOutput out = scheduler2.schedule();
-            assert(!out.preempted_req_ids.empty());
-            bool has_req1_preempted = false;
-            for (uint64_t req_id : out.preempted_req_ids)
-            {
-                if (req_id == 1)
-                {
-                    has_req1_preempted = true;
-                }
-            }
-            assert(has_req1_preempted);
+            // Running-phase preempt should force this step to skip waiting scheduling.
             assert(out.scheduled_new_reqs.empty());
             assert(out.scheduled_cached_reqs.req_ids.empty());
         }

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -12,7 +11,8 @@ namespace tiny_llm {
 class Model;
 class Tokenizer;
 class TokenizerRegistry;
-struct CoreSequence;
+struct EngineArgs;
+struct Request;
 
 /**
  * @brief User-facing sampling configuration.
@@ -53,11 +53,10 @@ struct EngineCoreOutput {
     uint64_t internal_id = 0;
     int32_t new_token_id = -1;
     int32_t generated_tokens = 0;
-    CoreSequence* sequence = nullptr;
+    Request* sequence = nullptr;
     bool has_error = false;
     std::string error_message;
 };
-
 /**
  * @brief User-facing output emitted by OutPreprocessor.
  */
@@ -92,13 +91,7 @@ struct RequestState {
  */
 class InputPreprocessor {
 public:
-    InputPreprocessor(Tokenizer* tokenizer,
-                      const Model* model,
-                      int32_t default_max_tokens);
-
-    InputPreprocessor(TokenizerRegistry* tokenizer_registry,
-                      const Model* model,
-                      int32_t default_max_tokens);
+    explicit InputPreprocessor(const EngineArgs& args);
 
     EngineCoreRequest process_inputs(const std::string& prompt,
                                      const UserSamplingParams& user_params,
@@ -110,7 +103,7 @@ private:
     std::string apply_chat_template(const std::string& text) const;
     SamplingParams normalize_sampling_params(const UserSamplingParams& user_params) const;
     void bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id) const;
-    void validate_model_tokenizer_contract() const;
+    void validate_tokenizer_contract() const;
     void validate_prompt_tokens(const std::vector<int32_t>& token_ids) const;
     void validate_sampling_params(const SamplingParams& sampling_params) const;
 
@@ -126,11 +119,10 @@ private:
  */
 class OutPreprocessor {
 public:
-    explicit OutPreprocessor(const Tokenizer* tokenizer);
-    explicit OutPreprocessor(const TokenizerRegistry* tokenizer_registry);
+    explicit OutPreprocessor(const EngineArgs& args);
 
     void add_request(const EngineCoreRequest& request);
-    std::vector<UserOutput> process_outputs(const std::map<uint64_t, EngineCoreOutput>& core_outputs);
+    std::vector<UserOutput> process_outputs(const std::unordered_map<int, EngineCoreOutput>& core_outputs);
     bool has_unfinished_requests() const;
 
 private:

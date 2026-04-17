@@ -15,7 +15,15 @@ add_library(tiny_llm_core STATIC
     src/core/tensor.cpp
     src/core/execution_context.cpp
     src/core/allocator_common.cpp
+    src/runtime/tokenizer.cpp
+    src/runtime/request.cpp
+    src/runtime/scheduler.cpp
+    src/runtime/execution_context.cpp
+    src/runtime/processors.cpp
+    src/runtime/executor.cpp
     src/runtime/kv_cache.cpp
+    src/runtime/engine_core.cpp
+    src/runtime/engine.cpp
 )
 
 if (TINYLLM_ENABLE_CUDA)
@@ -52,12 +60,14 @@ if (TINYLLM_ENABLE_CUDA)
     target_sources(tiny_llm_operators PRIVATE
         src/operators/rmsnorm/rmsnorm.cu
         src/operators/matmul/gemm_kernels.cu
+        src/operators/paged_attention/paged_attention_kernels.cu
     )
     target_link_libraries(tiny_llm_operators PUBLIC CUDA::cublas)
 endif()
 
 add_library(tiny_llm_models STATIC
     src/models/llama_layer.cpp
+    src/models/tiny_lm.cpp
 )
 
 target_link_libraries(tiny_llm_models PUBLIC tiny_llm_operators tiny_llm_core)
@@ -68,5 +78,11 @@ add_executable(llama_inference
 
 target_link_libraries(llama_inference PRIVATE tiny_llm_models)
 
-enable_testing()
+add_executable(tiny_lm_inference
+    examples/tiny_lm_inference.cpp
+)
+
+target_link_libraries(tiny_lm_inference PRIVATE tiny_llm_models)
+
+include(CTest)
 add_subdirectory(tests)

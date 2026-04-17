@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "tiny_llm/models/model.h"
+
 namespace tiny_llm {
 
 class ExecutionContext;
@@ -26,9 +28,18 @@ struct MiniLLaMAConfig {
 /**
  * @brief Minimal model wrapper exposing a single-token forward API.
  */
-class MiniLLaMA {
+class MiniLLaMA : public Model {
 public:
     explicit MiniLLaMA(MiniLLaMAConfig cfg) : cfg_(cfg) {}
+
+    /**
+     * @brief Returns model hyper-parameters.
+     */
+    const MiniLLaMAConfig& config() const { return cfg_; }
+
+    int32_t num_layers() const override { return cfg_.num_layers; }
+
+    int32_t vocab_size() const override { return cfg_.vocab; }
 
     /**
      * @brief Run one decoding step and write logits for next-token sampling.
@@ -36,7 +47,7 @@ public:
     void forward_step(const Tensor& input_ids,
                       const Tensor& positions,
                       Tensor& logits,
-                      ExecutionContext& ctx);
+                      ExecutionContext& ctx) override;
 
 private:
     /// Static model hyper-parameters.

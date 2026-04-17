@@ -64,18 +64,6 @@ struct SchedulerOutput {
 };
 
 /**
- * @brief Per-task execution result returned by ModelExecutor stage.
- */
-struct ModelTaskOutput {
-    uint64_t internal_id = 0;
-    bool is_prefill = false;
-    int32_t processed_tokens = 0;
-    int32_t sampled_token_id = -1;
-    bool has_error = false;
-    std::string error_message;
-};
-
-/**
  * @brief Aggregated model execution results for one runtime step.
  */
 struct ModelRunnerOutput {

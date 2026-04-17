@@ -2,6 +2,7 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
+#include "tiny_llm/runtime/execution_context.h"
 
 #include <limits>
 #include <string>
@@ -106,17 +107,13 @@ void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx,
     const RmsNormShape shape = parse_xy_shape(x);
 
 #if TINYLLM_ENABLE_CUDA
+    const cudaStream_t stream = resolve_execution_context(ctx).stream();
     cuda::launch_rmsnorm_f32(
         static_cast<const float*>(x.data()),
         static_cast<const float*>(w.data()),
         static_cast<float*>(y.data()),
-        shape.B, shape.D, eps, ctx.stream());
+        shape.B, shape.D, eps, stream);
 #else
-    (void)x;
-    (void)w;
-    (void)y;
-    (void)ctx;
-    (void)eps;
     throw std::runtime_error("rmsnorm CPU backend is not implemented. Rebuild with -DTINYLLM_ENABLE_CUDA=ON.");
 #endif
 }

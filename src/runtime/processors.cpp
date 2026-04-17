@@ -1,6 +1,6 @@
 #include "tiny_llm/runtime/processors.h"
 
-#include "tiny_llm/models/model.h"
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/engine_core.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
@@ -19,31 +19,19 @@ std::string default_external_id(uint64_t internal_id)
 
 } // namespace
 
-InputPreprocessor::InputPreprocessor(Tokenizer* tokenizer,
-                                     const Model* model,
-                                     int32_t default_max_tokens)
-    : tokenizer_(tokenizer), model_(model), default_max_tokens_(default_max_tokens)
+InputPreprocessor::InputPreprocessor(const EngineArgs& args)
+    : tokenizer_(args.tokenizer), default_max_tokens_(args.max_generated_tokens)
 {
-    if (tokenizer_ == nullptr || model_ == nullptr)
+    if (tokenizer_ == nullptr)
     {
-        throw std::runtime_error("InputPreprocessor: tokenizer/model must be non-null.");
+        throw std::runtime_error("InputPreprocessor: tokenizer must be non-null.");
     }
     if (default_max_tokens_ <= 0)
     {
         throw std::runtime_error("InputPreprocessor: default_max_tokens must be positive.");
     }
 
-    validate_model_tokenizer_contract();
-}
-
-InputPreprocessor::InputPreprocessor(TokenizerRegistry* tokenizer_registry,
-                                     const Model* model,
-                                     int32_t default_max_tokens)
-    : InputPreprocessor(
-          tokenizer_registry != nullptr ? tokenizer_registry->mutable_tokenizer() : nullptr,
-          model,
-          default_max_tokens)
-{
+    validate_tokenizer_contract();
 }
 
 EngineCoreRequest InputPreprocessor::process_inputs(const std::string& prompt,
@@ -88,24 +76,14 @@ void InputPreprocessor::bind_external_id(EngineCoreRequest& request, const std::
     }
 }
 
-void InputPreprocessor::validate_model_tokenizer_contract() const
+void InputPreprocessor::validate_tokenizer_contract() const
 {
     const Tokenizer* tokenizer = tokenizer_;
-
-    if (model_->vocab_size() <= 0)
-    {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: model vocab size must be positive.");
-    }
 
     const int32_t tokenizer_vocab = tokenizer->vocab_size();
     if (tokenizer_vocab <= 0)
     {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: tokenizer vocab size must be positive.");
-    }
-
-    if (tokenizer->is_fixed_vocab() && tokenizer_vocab != model_->vocab_size())
-    {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: tokenizer vocab size must match model vocab size.");
+        throw std::runtime_error("InputPreprocessor::validate_tokenizer_contract: tokenizer vocab size must be positive.");
     }
 
     const int32_t bos_id = tokenizer->bos_id();
@@ -115,25 +93,7 @@ void InputPreprocessor::validate_model_tokenizer_contract() const
         || !tokenizer->is_valid_token_id(eos_id)
         || !tokenizer->is_valid_token_id(unk_id))
     {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: tokenizer special token id is out of range.");
-    }
-
-    const int32_t expected_bos = model_->expected_bos_id();
-    if (expected_bos >= 0 && expected_bos != bos_id)
-    {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: tokenizer bos_id mismatches model checkpoint.");
-    }
-
-    const int32_t expected_eos = model_->expected_eos_id();
-    if (expected_eos >= 0 && expected_eos != eos_id)
-    {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: tokenizer eos_id mismatches model checkpoint.");
-    }
-
-    const int32_t expected_unk = model_->expected_unk_id();
-    if (expected_unk >= 0 && expected_unk != unk_id)
-    {
-        throw std::runtime_error("InputPreprocessor::validate_model_tokenizer_contract: tokenizer unk_id mismatches model checkpoint.");
+        throw std::runtime_error("InputPreprocessor::validate_tokenizer_contract: tokenizer special token id is out of range.");
     }
 }
 
@@ -156,6 +116,14 @@ SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingPa
     params.top_k = user_params.top_k;
     params.max_tokens = user_params.max_tokens > 0 ? user_params.max_tokens : default_max_tokens_;
     params.stop_token_ids = user_params.stop_token_ids;
+
+    const int32_t eos_token = tokenizer_->eos_id();
+    if (std::find(params.stop_token_ids.begin(), params.stop_token_ids.end(), eos_token)
+        == params.stop_token_ids.end())
+    {
+        params.stop_token_ids.push_back(eos_token);
+    }
+
     return params;
 }
 
@@ -173,10 +141,6 @@ void InputPreprocessor::validate_prompt_tokens(const std::vector<int32_t>& token
         if (!tokenizer->is_valid_token_id(token_id))
         {
             throw std::runtime_error("InputPreprocessor::validate_prompt_tokens: token id out of tokenizer range.");
-        }
-        if (token_id < 0 || token_id >= model_->vocab_size())
-        {
-            throw std::runtime_error("InputPreprocessor::validate_prompt_tokens: token id out of model vocab range.");
         }
     }
 }
@@ -208,25 +172,16 @@ void InputPreprocessor::validate_sampling_params(const SamplingParams& sampling_
         {
             throw std::runtime_error("InputPreprocessor::validate_sampling_params: stop token id out of tokenizer range.");
         }
-        if (token_id < 0 || token_id >= model_->vocab_size())
-        {
-            throw std::runtime_error("InputPreprocessor::validate_sampling_params: stop token id out of model vocab range.");
-        }
     }
 }
 
-OutPreprocessor::OutPreprocessor(const Tokenizer* tokenizer)
-    : tokenizer_(tokenizer)
+OutPreprocessor::OutPreprocessor(const EngineArgs& args)
+    : tokenizer_(args.tokenizer)
 {
     if (tokenizer_ == nullptr)
     {
         throw std::runtime_error("OutPreprocessor: tokenizer must be non-null.");
     }
-}
-
-OutPreprocessor::OutPreprocessor(const TokenizerRegistry* tokenizer_registry)
-    : OutPreprocessor(tokenizer_registry != nullptr ? tokenizer_registry->tokenizer() : nullptr)
-{
 }
 
 void OutPreprocessor::add_request(const EngineCoreRequest& request)
@@ -261,7 +216,7 @@ void OutPreprocessor::add_request(const EngineCoreRequest& request)
     states_[request.internal_id] = std::move(state);
 }
 
-std::vector<UserOutput> OutPreprocessor::process_outputs(const std::map<uint64_t, EngineCoreOutput>& core_outputs)
+std::vector<UserOutput> OutPreprocessor::process_outputs(const std::unordered_map<int, EngineCoreOutput>& core_outputs)
 {
     std::vector<UserOutput> user_outputs;
     user_outputs.reserve(core_outputs.size());
@@ -301,18 +256,11 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::map<uint64_t
             state.is_finished = true;
             state.finish_reason = "error";
             out.error_message = core.error_message;
-            if (core.sequence != nullptr)
-            {
-                core.sequence->finished = true;
-            }
         }
         else
         {
             out.delta_text = incremental_decode(state, core.new_token_id);
-            if (check_stop_criteria(state, core.new_token_id) && core.sequence != nullptr)
-            {
-                core.sequence->finished = true;
-            }
+            check_stop_criteria(state, core.new_token_id);
         }
 
         out.text = state.cached_text;

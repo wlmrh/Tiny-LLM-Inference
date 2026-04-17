@@ -1,8 +1,21 @@
-ModelRunner 负责根据 *scheduler_output*，预处理出正向计算的 Tensor，然后将 Tensor 交给底层的 Model 层来执行，将得到的结果采样并交还给 EngineCore。
+#pragma once
 
-ModelRunnerOutput 交给 EngineCore。具体实现中，它控制缓存、kvcache 等，将数据放到显存中，然后将具体的计算任务交给 Model 层来执行。具体实现如下：
+#include <cstdint>
+#include <memory>
+#include <optional>
 
-```c++
+#include "tiny_llm/runtime/scheduler.h"
+
+namespace tiny_llm {
+
+class ExecutionContext;
+class KVCache;
+class Model;
+struct EngineArgs;
+
+/**
+ * @brief Thin executor wrapper around single-device model forward and sampling.
+ */
 class ModelExecutor {
 public:
     ModelExecutor(const EngineArgs& args, KVCache* kv);
@@ -19,10 +32,11 @@ private:
     void validate_handles() const;
     void run_prefill_token(int32_t core_seq_id, int32_t token, int32_t position) const;
     int32_t run_decode_and_sample(int32_t core_seq_id, int32_t token, int32_t position) const;
+
+    std::unique_ptr<Model> owned_model_;
     std::optional<ModelRunnerOutput> staged_model_output_;
     Model* model_ = nullptr;
-    ExecutionContext* ctx_ = nullptr;
     KVCache* kv_ = nullptr;
 };
-```
 
+} // namespace tiny_llm
