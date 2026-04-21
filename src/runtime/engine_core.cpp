@@ -99,8 +99,7 @@ std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> EngineCore::step()
     }
 
     const SchedulerOutput scheduler_output = scheduler_->schedule();
-    executor_->execute_model(scheduler_output);
-    ModelRunnerOutput model_output = executor_->sample_tokens(scheduler_output);
+    ModelRunnerOutput model_output = executor_->execute_model(scheduler_output);
 
     std::map<int, EngineCoreOutput> scheduler_outputs = scheduler_->update_from_output(scheduler_output, model_output);
     std::unordered_map<int, EngineCoreOutput> engine_core_outputs;
