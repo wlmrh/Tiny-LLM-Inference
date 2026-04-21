@@ -3,10 +3,9 @@
 #include <cstdint>
 #include <vector>
 
-namespace tiny_llm {
+#include "tiny_llm/core/tensor.h"
 
-class Tensor;
-enum class DType;
+namespace tiny_llm {
 
 /**
  * @brief Monotonic bump-pointer workspace allocator backed by a contiguous buffer.

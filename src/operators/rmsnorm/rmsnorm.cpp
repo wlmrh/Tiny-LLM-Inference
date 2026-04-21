@@ -39,16 +39,17 @@ int checked_dim_to_int(int64_t dim, const char* name)
 
 RmsNormShape parse_xy_shape(const Tensor& t)
 {
-    if (t.shape().empty())
+    const std::vector<int64_t> shape = tensor_shape(t);
+    if (shape.empty())
     {
         throw std::runtime_error("rmsnorm: x and y must have rank >= 1.");
     }
 
-    const int D = checked_dim_to_int(t.shape().back(), "D");
+    const int D = checked_dim_to_int(shape.back(), "D");
     int64_t B64 = 1;
-    for (size_t i = 0; i + 1 < t.shape().size(); ++i)
+    for (size_t i = 0; i + 1 < shape.size(); ++i)
     {
-        const int64_t dim = t.shape()[i];
+        const int64_t dim = shape[i];
         if (dim <= 0)
         {
             throw std::runtime_error("rmsnorm: all dimensions in x and y must be positive.");
@@ -71,29 +72,33 @@ void validate_rmsnorm_inputs(const Tensor& x, const Tensor& w, const Tensor& y, 
         throw std::runtime_error("rmsnorm: eps must be > 0.");
     }
 
-    if (x.dtype() != DType::kFloat32 || w.dtype() != DType::kFloat32 || y.dtype() != DType::kFloat32)
+    if (tensor_dtype(x) != DType::kFloat32 || tensor_dtype(w) != DType::kFloat32 || tensor_dtype(y) != DType::kFloat32)
     {
         throw std::runtime_error("rmsnorm: only float32 tensors are supported.");
     }
 
-    if (w.shape().size() != 1)
+    const std::vector<int64_t> x_shape = tensor_shape(x);
+    const std::vector<int64_t> w_shape = tensor_shape(w);
+    const std::vector<int64_t> y_shape = tensor_shape(y);
+
+    if (w_shape.size() != 1)
     {
         throw std::runtime_error("rmsnorm: w must be a rank-1 tensor [D].");
     }
     
-    if (x.shape() != y.shape())
+    if (x_shape != y_shape)
     {
         throw std::runtime_error("rmsnorm: x and y shapes must match.");
     }
 
     const RmsNormShape shape = parse_xy_shape(x);
 
-    if (w.shape()[0] != static_cast<int64_t>(shape.D))
+    if (w_shape[0] != static_cast<int64_t>(shape.D))
     {
         throw std::runtime_error("rmsnorm: w shape must equal D.");
     }
 
-    if (x.data() == nullptr || w.data() == nullptr || y.data() == nullptr)
+    if (tensor_data(x) == nullptr || tensor_data(w) == nullptr || tensor_data(y) == nullptr)
     {
         throw std::runtime_error("rmsnorm: x, w, y data pointers must be non-null.");
     }
@@ -109,9 +114,9 @@ void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx,
 #if TINYLLM_ENABLE_CUDA
     const cudaStream_t stream = resolve_execution_context(ctx).stream();
     cuda::launch_rmsnorm_f32(
-        static_cast<const float*>(x.data()),
-        static_cast<const float*>(w.data()),
-        static_cast<float*>(y.data()),
+        static_cast<const float*>(tensor_data(x)),
+        static_cast<const float*>(tensor_data(w)),
+        static_cast<float*>(tensor_data(y)),
         shape.B, shape.D, eps, stream);
 #else
     throw std::runtime_error("rmsnorm CPU backend is not implemented. Rebuild with -DTINYLLM_ENABLE_CUDA=ON.");

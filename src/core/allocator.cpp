@@ -46,7 +46,7 @@ Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
     if (ptr == nullptr) {
         throw std::runtime_error("StackAllocator: out of memory");
     }
-    return Tensor(ptr, std::move(shape), dtype);
+    return make_tensor_from_blob(ptr, shape, dtype);
 }
 
 BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool)

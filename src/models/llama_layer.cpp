@@ -34,33 +34,37 @@ void validate_forward_inputs(const Tensor& input_ids,
 							 const Tensor& logits,
 							 const MiniLLaMAConfig& cfg)
 {
-	if (input_ids.dtype() != DType::kInt32 || positions.dtype() != DType::kInt32)
+	if (tensor_dtype(input_ids) != DType::kInt32 || tensor_dtype(positions) != DType::kInt32)
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: input_ids and positions must be int32.");
 	}
-	if (logits.dtype() != DType::kFloat32)
+	if (tensor_dtype(logits) != DType::kFloat32)
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: logits must be float32.");
 	}
 
-	if (input_ids.shape().size() != 1 || positions.shape().size() != 1)
+	const std::vector<int64_t> input_shape = tensor_shape(input_ids);
+	const std::vector<int64_t> position_shape = tensor_shape(positions);
+	const std::vector<int64_t> logits_shape = tensor_shape(logits);
+
+	if (input_shape.size() != 1 || position_shape.size() != 1)
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: input_ids and positions must be rank-1 [B].");
 	}
-	if (input_ids.shape() != positions.shape())
+	if (input_shape != position_shape)
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: input_ids and positions must have the same shape.");
 	}
 
-	if (logits.shape().size() != 2)
+	if (logits_shape.size() != 2)
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: logits must be rank-2 [B, vocab].");
 	}
 
-	const int B = checked_positive_dim(input_ids.shape()[0], "B");
-	const int V = checked_positive_dim(logits.shape()[1], "vocab");
+	const int B = checked_positive_dim(input_shape[0], "B");
+	const int V = checked_positive_dim(logits_shape[1], "vocab");
 
-	if (logits.shape()[0] != input_ids.shape()[0])
+	if (logits_shape[0] != input_shape[0])
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: logits batch size must match input_ids.");
 	}
@@ -72,7 +76,7 @@ void validate_forward_inputs(const Tensor& input_ids,
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: model config is invalid.");
 	}
-	if (input_ids.data() == nullptr || positions.data() == nullptr || logits.data() == nullptr)
+	if (tensor_data(input_ids) == nullptr || tensor_data(positions) == nullptr || tensor_data(logits) == nullptr)
 	{
 		throw std::runtime_error("MiniLLaMA::forward_step: input/output pointers must be non-null.");
 	}
@@ -127,13 +131,14 @@ void MiniLLaMA::forward_step(const Tensor& input_ids,
 {
 	validate_forward_inputs(input_ids, positions, logits, cfg_);
 
-	const int B = checked_positive_dim(input_ids.shape()[0], "B");
+	const std::vector<int64_t> input_shape = tensor_shape(input_ids);
+	const int B = checked_positive_dim(input_shape[0], "B");
 	const int H = cfg_.hidden;
 	const int V = cfg_.vocab;
 
-	const int32_t* input_ids_ptr = static_cast<const int32_t*>(input_ids.data());
-	const int32_t* positions_ptr = static_cast<const int32_t*>(positions.data());
-	float* logits_ptr = static_cast<float*>(logits.data());
+	const int32_t* input_ids_ptr = static_cast<const int32_t*>(tensor_data(input_ids));
+	const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
+	float* logits_ptr = static_cast<float*>(tensor_data(logits));
 
 	std::vector<float> hidden(static_cast<size_t>(B) * static_cast<size_t>(H), 0.0f);
 	std::vector<float> proj_w(static_cast<size_t>(H) * static_cast<size_t>(H), 0.0f);
@@ -143,10 +148,10 @@ void MiniLLaMA::forward_step(const Tensor& input_ids,
 	fill_hidden_features(input_ids_ptr, positions_ptr, B, H, hidden);
 	fill_projection_weight(H, proj_w);
 
-	Tensor hidden_tensor(hidden.data(), {B, H}, DType::kFloat32);
-	Tensor proj_w_tensor(proj_w.data(), {H, H}, DType::kFloat32);
-	Tensor hidden_proj_tensor(hidden_proj.data(), {B, H}, DType::kFloat32);
-	Tensor hidden_attn_tensor(hidden_attn.data(), {B, H}, DType::kFloat32);
+	Tensor hidden_tensor = make_tensor_from_blob(hidden.data(), {B, H}, DType::kFloat32);
+	Tensor proj_w_tensor = make_tensor_from_blob(proj_w.data(), {H, H}, DType::kFloat32);
+	Tensor hidden_proj_tensor = make_tensor_from_blob(hidden_proj.data(), {B, H}, DType::kFloat32);
+	Tensor hidden_attn_tensor = make_tensor_from_blob(hidden_attn.data(), {B, H}, DType::kFloat32);
 	ExecutionContext& exec_ctx = resolve_execution_context(ctx);
 
 	ops::gemm(hidden_tensor, proj_w_tensor, hidden_proj_tensor, exec_ctx);

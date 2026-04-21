@@ -7,7 +7,6 @@
 namespace tiny_llm {
 
 class ExecutionContext;
-class Tensor;
 
 /**
  * @brief Compact model configuration used by the MiniLLaMA skeleton.

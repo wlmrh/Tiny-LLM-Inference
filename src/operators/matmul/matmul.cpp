@@ -44,29 +44,34 @@ int checked_dim_to_int64(int64_t dim, const char* name)
 
 void validate_gemm_inputs(const Tensor& a, const Tensor& b, const Tensor& c)
 {
-    if (a.dtype() != DType::kFloat32 || b.dtype() != DType::kFloat32 || c.dtype() != DType::kFloat32)
+    if (tensor_dtype(a) != DType::kFloat32 || tensor_dtype(b) != DType::kFloat32 || tensor_dtype(c) != DType::kFloat32)
     {
         throw std::runtime_error("gemm: only float32 tensors are supported.");
     }
-    if (a.shape().size() != 2 || b.shape().size() != 2 || c.shape().size() != 2)
+
+    const std::vector<int64_t> a_shape = tensor_shape(a);
+    const std::vector<int64_t> b_shape = tensor_shape(b);
+    const std::vector<int64_t> c_shape = tensor_shape(c);
+
+    if (a_shape.size() != 2 || b_shape.size() != 2 || c_shape.size() != 2)
     {
         throw std::runtime_error("gemm: a, b, c must all be rank-2 tensors.");
     }
 
-    const int64_t M = a.shape()[0];
-    const int64_t K = a.shape()[1];
-    const int64_t Kb = b.shape()[0];
-    const int64_t N = b.shape()[1];
+    const int64_t M = a_shape[0];
+    const int64_t K = a_shape[1];
+    const int64_t Kb = b_shape[0];
+    const int64_t N = b_shape[1];
 
     if (K != Kb)
     {
         throw std::runtime_error("gemm: incompatible inner dimensions between a and b.");
     }
-    if (c.shape()[0] != M || c.shape()[1] != N)
+    if (c_shape[0] != M || c_shape[1] != N)
     {
         throw std::runtime_error("gemm: c shape must be [a.rows, b.cols].");
     }
-    if (a.data() == nullptr || b.data() == nullptr || c.data() == nullptr)
+    if (tensor_data(a) == nullptr || tensor_data(b) == nullptr || tensor_data(c) == nullptr)
     {
         throw std::runtime_error("gemm: input/output data pointers must be non-null.");
     }
@@ -127,13 +132,15 @@ void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx)
 {
     validate_gemm_inputs(a, b, c);
 
-    const int M = checked_dim_to_int64(a.shape()[0], "M");
-    const int K = checked_dim_to_int64(a.shape()[1], "K");
-    const int N = checked_dim_to_int64(b.shape()[1], "N");
+    const std::vector<int64_t> a_shape = tensor_shape(a);
+    const std::vector<int64_t> b_shape = tensor_shape(b);
+    const int M = checked_dim_to_int64(a_shape[0], "M");
+    const int K = checked_dim_to_int64(a_shape[1], "K");
+    const int N = checked_dim_to_int64(b_shape[1], "N");
 
-    const float* a_ptr = static_cast<const float*>(a.data());
-    const float* b_ptr = static_cast<const float*>(b.data());
-    float* c_ptr = static_cast<float*>(c.data());
+    const float* a_ptr = static_cast<const float*>(tensor_data(a));
+    const float* b_ptr = static_cast<const float*>(tensor_data(b));
+    float* c_ptr = static_cast<float*>(tensor_data(c));
 
 #if TINYLLM_ENABLE_CUDA
     if (can_run_cuda_gemm(a_ptr, b_ptr, c_ptr))

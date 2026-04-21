@@ -2,10 +2,11 @@
 
 #include <cstdint>
 
+#include "tiny_llm/core/tensor.h"
+
 namespace tiny_llm {
 
 class ExecutionContext;
-class Tensor;
 
 /**
  * @brief Runtime model contract used by the scheduler.

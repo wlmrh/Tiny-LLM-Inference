@@ -1,7 +1,8 @@
 #pragma once
 
+#include "tiny_llm/core/tensor.h"
+
 namespace tiny_llm {
-class Tensor;
 class ExecutionContext;
 
 namespace ops {
