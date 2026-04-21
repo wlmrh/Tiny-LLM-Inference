@@ -2,8 +2,9 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
+#include <vector>
 
+#include "tiny_llm/core/tensor.h"
 #include "tiny_llm/runtime/scheduler.h"
 
 namespace tiny_llm {
@@ -24,19 +25,24 @@ public:
 
     int32_t vocab_size() const;
 
-    void execute_model(const SchedulerOutput& scheduler_output);
-    ModelRunnerOutput sample_tokens(const SchedulerOutput& grammar_output);
+    ModelRunnerOutput execute_model(const SchedulerOutput& scheduler_output);
 
 private:
     void init_from_args(const EngineArgs& args);
     void validate_handles() const;
-    void run_prefill_token(int32_t core_seq_id, int32_t token, int32_t position) const;
-    int32_t run_decode_and_sample(int32_t core_seq_id, int32_t token, int32_t position) const;
+    std::vector<int32_t> run_forward_batch(const Tensor& input_tokens,
+                                           const Tensor& position_ids,
+                                           const Tensor& slot_mapping,
+                                           const Tensor& context_lens,
+                                           const Tensor& block_tables,
+                                           const std::vector<int32_t>& core_seq_ids,
+                                           const std::vector<int32_t>& req_end_offsets,
+                                           bool need_sampling) const;
 
     std::unique_ptr<Model> owned_model_;
-    std::optional<ModelRunnerOutput> staged_model_output_;
     Model* model_ = nullptr;
     KVCache* kv_ = nullptr;
+    int32_t kv_block_size_tokens_ = 16;
 };
 
 } // namespace tiny_llm
