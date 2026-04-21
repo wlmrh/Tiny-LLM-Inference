@@ -113,9 +113,9 @@ int main(int argc, char** argv)
         // device Memory, value, count
         CHECK_CUDA(cudaMemset(d_y, 0, x_numel * sizeof(float)));
 
-        tiny_llm::Tensor x(d_x, {B, D}, tiny_llm::DType::kFloat32);
-        tiny_llm::Tensor w(d_w, {D}, tiny_llm::DType::kFloat32);
-        tiny_llm::Tensor y(d_y, {B, D}, tiny_llm::DType::kFloat32);
+        tiny_llm::Tensor x = tiny_llm::make_tensor_from_blob(d_x, {B, D}, tiny_llm::DType::kFloat32);
+        tiny_llm::Tensor w = tiny_llm::make_tensor_from_blob(d_w, {D}, tiny_llm::DType::kFloat32);
+        tiny_llm::Tensor y = tiny_llm::make_tensor_from_blob(d_y, {B, D}, tiny_llm::DType::kFloat32);
         tiny_llm::ExecutionContext ctx(0, nullptr, nullptr);
 
         for (int i = 0; i < kWarmupIters; ++i)

@@ -1,8 +1,14 @@
 #pragma once
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
+#include <stdexcept>
 #include <vector>
+
+#include <torch/torch.h>
+
+#include "utils/cuda_compat.h"
+
 namespace tiny_llm {
 
 /**
@@ -11,58 +17,120 @@ namespace tiny_llm {
  */
 enum class DType { kFloat16, kFloat32, kInt32 };
 
-/**
- * @class Tensor
- * @brief A lightweight tensor view over externally managed memory.
- *
- * @note CONTRACT:
- * - This object does not own the underlying memory buffer.
- * - It never performs allocation or deallocation on destruction.
- * - Multiple Tensor views may safely reference the same storage.
- */
-class Tensor {
-public:
-    /**
-     * @brief Default constructor. Creates an empty tensor with a null pointer.
-     */
-    Tensor() = default;
+using Tensor = torch::Tensor;
 
-    /**
-     * @brief Constructs a Tensor view from existing memory.
-     * @param data Raw pointer to the external memory buffer.
-     * @param shape Vector containing tensor dimensions.
-     * @param dtype Scalar data type of tensor elements.
-     */
-    Tensor(void* data, std::vector<int64_t> shape, DType dtype)
-        : data_ptr_(data), shape_(std::move(shape)), dtype_(dtype) {}
+inline c10::ScalarType to_torch_scalar_type(DType dtype)
+{
+    switch (dtype)
+    {
+        case DType::kFloat16:
+            return c10::ScalarType::Half;
+        case DType::kFloat32:
+            return c10::ScalarType::Float;
+        case DType::kInt32:
+            return c10::ScalarType::Int;
+    }
 
-    /**
-     * @brief Returns raw storage pointer.
-     */
-    void* data() const { return data_ptr_; }
+    throw std::runtime_error("to_torch_scalar_type: unsupported DType.");
+}
 
-    /**
-     * @brief Returns tensor dimensions.
-     */
-    const std::vector<int64_t>& shape() const { return shape_; }
+inline DType from_torch_scalar_type(c10::ScalarType scalar_type)
+{
+    switch (scalar_type)
+    {
+        case c10::ScalarType::Half:
+            return DType::kFloat16;
+        case c10::ScalarType::Float:
+            return DType::kFloat32;
+        case c10::ScalarType::Int:
+            return DType::kInt32;
+        default:
+            throw std::runtime_error("from_torch_scalar_type: unsupported torch scalar type.");
+    }
+}
 
-    /**
-     * @brief Returns tensor element data type.
-     */
-    DType dtype() const { return dtype_; }
+inline DType tensor_dtype(const Tensor& tensor)
+{
+    if (!tensor.defined())
+    {
+        throw std::runtime_error("tensor_dtype: tensor must be defined.");
+    }
+    return from_torch_scalar_type(tensor.scalar_type());
+}
 
-    /**
-     * @brief Calculates total number of elements.
-     */
-    size_t numel() const;
+inline std::vector<int64_t> tensor_shape(const Tensor& tensor)
+{
+    if (!tensor.defined())
+    {
+        return {};
+    }
 
-private:
-    /// Raw data pointer to external storage (non-owning).
-    void* data_ptr_ = nullptr;
-    /// Tensor dimensions in row-major logical order.
-    std::vector<int64_t> shape_;
-    /// Scalar element type for this tensor.
-    DType dtype_ = DType::kFloat16;
-};
+    const auto sizes = tensor.sizes();
+    return std::vector<int64_t>(sizes.begin(), sizes.end());
+}
+
+inline void* tensor_data(const Tensor& tensor)
+{
+    if (!tensor.defined())
+    {
+        return nullptr;
+    }
+    return tensor.data_ptr();
+}
+
+inline size_t tensor_numel(const Tensor& tensor)
+{
+    if (!tensor.defined())
+    {
+        return 0;
+    }
+    return static_cast<size_t>(tensor.numel());
+}
+
+inline c10::Device infer_blob_device(const void* data)
+{
+#if TINYLLM_ENABLE_CUDA
+    if (data != nullptr)
+    {
+        cudaPointerAttributes attrs{};
+        const cudaError_t status = cudaPointerGetAttributes(&attrs, data);
+        if (status == cudaSuccess)
+        {
+#if CUDART_VERSION >= 10000
+            if (attrs.type == cudaMemoryTypeDevice || attrs.type == cudaMemoryTypeManaged)
+            {
+                const int device = attrs.device >= 0 ? attrs.device : 0;
+                return c10::Device(c10::DeviceType::CUDA, device);
+            }
+#else
+            if (attrs.memoryType == cudaMemoryTypeDevice)
+            {
+                return c10::Device(c10::DeviceType::CUDA, 0);
+            }
+#endif
+        }
+
+        (void)cudaGetLastError();
+    }
+#endif
+
+    return c10::Device(c10::DeviceType::CPU);
+}
+
+inline Tensor make_tensor_from_blob(void* data,
+                                    const std::vector<int64_t>& shape,
+                                    DType dtype)
+{
+    const auto options = torch::TensorOptions()
+        .dtype(to_torch_scalar_type(dtype))
+        .device(infer_blob_device(data));
+
+    if (data == nullptr)
+    {
+        return torch::empty(shape, options);
+    }
+
+    return torch::from_blob(data, shape, options);
+}
 
 } // namespace tiny_llm
