@@ -5,7 +5,6 @@
 #include <deque>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -33,34 +32,23 @@ struct SchedulerConfig {
     int32_t max_prefill_tokens_per_step = 256;
 };
 
-struct NewRequestData {
-    uint64_t req_id = 0; // 该请求的 id
-    int32_t core_seq_id = -1;
-    std::vector<int32_t> prompt_token_ids; // 该请求的 token id 序列
-    std::vector<int32_t> block_ids; // 该请求拥有的所有 kv block 序号
-    int32_t num_computed_tokens = 0; // 该请求已经计算的 token 数量
-    SamplingParams sampling_params; // 采样参数
-};
-
-struct CachedRequestData {
-    std::vector<uint64_t> req_ids;
-    std::vector<int32_t> core_seq_ids;
-    std::vector<int32_t> input_token_ids;
-    std::vector<std::optional<std::vector<int32_t>>> new_block_ids;
-    std::vector<int32_t> num_computed_tokens;
-    std::unordered_set<uint64_t> resumed_req_ids;
+struct RequestData {
+    uint64_t req_id = 0; // 请求 id
+    std::vector<int32_t> new_token_ids; // 本轮要计算的新 token 集合
+    int32_t num_computed_tokens = 0; // 已经计算过 kvcache 的 token 长度
+    std::vector<int32_t> block_ids; // 该请求的映射表，将逻辑上的 block id 映射到物理块编号
 };
 
 /**
  * @brief Scheduler output package for one runtime step.
  */
 struct SchedulerOutput {
-    std::vector<NewRequestData> scheduled_new_reqs; // 首次调度的请求对象
-    CachedRequestData scheduled_cached_reqs; // 之前已经调度过的请求，它们的数据已经 cached
-    std::unordered_map<uint64_t, int32_t> num_scheduled_tokens; // 每个 request 调度的 token 数量
-    std::vector<uint64_t> finished_req_ids; // 在上一步中完成的请求，供 ModelRunner 清除这些请求的cache
-    int32_t total_num_scheduled_tokens = 0; // 本轮调度中，所有请求要处理的 Token 总和
-    // std::vector<int32_t> new_block_ids_to_zero; // 本轮新分配的，需要初始化的物理块 id（由于 persistent caching 机制，ModelRunner 中存储着每个请求执行状态的副本）
+    std::vector<RequestData> scheduled_reqs;
+    std::unordered_map<uint64_t, int32_t> num_scheduled_tokens; ///< 每个 request 调度的 token 数量
+    int32_t total_num_scheduled_tokens = 0; ///< 本轮调度中，所有请求要处理的 Token 总和
+    std::vector<uint64_t> finished_req_ids; ///< 在上一步中完成的请求，供 ModelRunner 清除这些请求的cache
+    std::vector<uint64_t> preempted_req_ids; ///< 本轮中被抢占的请求 id 序列，供 ModelRunner 释放资源
+    // std::vector<int32_t> new_block_ids_to_zero; ///< 本轮新分配的，需要初始化的物理块 id（由于 persistent caching 机制，ModelRunner 中存储着每个请求执行状态的副本）
 };
 
 /**

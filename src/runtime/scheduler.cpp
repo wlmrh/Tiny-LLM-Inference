@@ -505,6 +505,13 @@ SchedulerOutput Scheduler::schedule()
 
             const uint64_t victim_id = victim->request_id;
             _preempt_request(*victim);
+            if (std::find(
+                    scheduler_output.preempted_req_ids.begin(),
+                    scheduler_output.preempted_req_ids.end(),
+                    victim_id) == scheduler_output.preempted_req_ids.end())
+            {
+                scheduler_output.preempted_req_ids.push_back(victim_id);
+            }
             if (is_running)
             {
                 preempted_during_running = true;
@@ -552,16 +559,19 @@ SchedulerOutput Scheduler::schedule()
             std::vector<int32_t> block_table;
             kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
 
-            NewRequestData new_req;
-            new_req.req_id = request_id;
-            new_req.core_seq_id = core_seq_id;
-            new_req.prompt_token_ids = req->prompt_token_ids;
-            new_req.block_ids = std::move(block_table);
-            new_req.num_computed_tokens = req->num_computed;
-            new_req.sampling_params = req->sampling_params;
+            RequestData req_data;
+            req_data.req_id = request_id;
+            req_data.num_computed_tokens = req->num_computed;
+            req_data.block_ids = std::move(block_table);
+            req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
+            for (int32_t i = 0; i < chunk; ++i)
+            {
+                const int32_t prompt_index = req->num_computed + i;
+                req_data.new_token_ids.push_back(req->prompt_token_ids[static_cast<size_t>(prompt_index)]);
+            }
 
-            scheduler_output.num_scheduled_tokens[new_req.req_id] = chunk;
-            scheduler_output.scheduled_new_reqs.push_back(std::move(new_req));
+            scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
+            scheduler_output.scheduled_reqs.push_back(std::move(req_data));
             remaining_token_budget -= chunk;
             continue;
         }
@@ -577,12 +587,17 @@ SchedulerOutput Scheduler::schedule()
             continue;
         }
 
-        scheduler_output.scheduled_cached_reqs.req_ids.push_back(request_id);
-        scheduler_output.scheduled_cached_reqs.core_seq_ids.push_back(core_seq_id);
-        scheduler_output.scheduled_cached_reqs.input_token_ids.push_back(req->_all_token_ids.back());
-        scheduler_output.scheduled_cached_reqs.num_computed_tokens.push_back(req->num_computed);
-        scheduler_output.scheduled_cached_reqs.new_block_ids.push_back(std::nullopt);
+        std::vector<int32_t> block_table;
+        kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+
+        RequestData req_data;
+        req_data.req_id = request_id;
+        req_data.num_computed_tokens = req->num_computed;
+        req_data.block_ids = std::move(block_table);
+        req_data.new_token_ids.push_back(req->_all_token_ids.back());
+
         scheduler_output.num_scheduled_tokens[request_id] = 1;
+        scheduler_output.scheduled_reqs.push_back(std::move(req_data));
         remaining_token_budget -= 1;
     }
 
@@ -624,12 +639,17 @@ SchedulerOutput Scheduler::schedule()
                     break;
                 }
 
-                scheduler_output.scheduled_cached_reqs.req_ids.push_back(request_id);
-                scheduler_output.scheduled_cached_reqs.core_seq_ids.push_back(core_seq_id);
-                scheduler_output.scheduled_cached_reqs.input_token_ids.push_back(req->_all_token_ids.back());
-                scheduler_output.scheduled_cached_reqs.num_computed_tokens.push_back(req->num_computed);
-                scheduler_output.scheduled_cached_reqs.new_block_ids.push_back(std::nullopt);
+                std::vector<int32_t> block_table;
+                kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+
+                RequestData req_data;
+                req_data.req_id = request_id;
+                req_data.num_computed_tokens = req->num_computed;
+                req_data.block_ids = std::move(block_table);
+                req_data.new_token_ids.push_back(req->_all_token_ids.back());
+
                 scheduler_output.num_scheduled_tokens[request_id] = 1;
+                scheduler_output.scheduled_reqs.push_back(std::move(req_data));
                 remaining_token_budget -= 1;
                 continue;
             }
@@ -643,16 +663,19 @@ SchedulerOutput Scheduler::schedule()
             std::vector<int32_t> block_table;
             kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
 
-            NewRequestData new_req;
-            new_req.req_id = request_id;
-            new_req.core_seq_id = core_seq_id;
-            new_req.prompt_token_ids = req->prompt_token_ids;
-            new_req.block_ids = std::move(block_table);
-            new_req.num_computed_tokens = req->num_computed;
-            new_req.sampling_params = req->sampling_params;
+            RequestData req_data;
+            req_data.req_id = request_id;
+            req_data.num_computed_tokens = req->num_computed;
+            req_data.block_ids = std::move(block_table);
+            req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
+            for (int32_t i = 0; i < chunk; ++i)
+            {
+                const int32_t prompt_index = req->num_computed + i;
+                req_data.new_token_ids.push_back(req->prompt_token_ids[static_cast<size_t>(prompt_index)]);
+            }
 
-            scheduler_output.num_scheduled_tokens[new_req.req_id] = chunk;
-            scheduler_output.scheduled_new_reqs.push_back(std::move(new_req));
+            scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
+            scheduler_output.scheduled_reqs.push_back(std::move(req_data));
             remaining_token_budget -= chunk;
         }
     }
@@ -719,15 +742,15 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
 
     cleanup_finished();
 
-    for (const NewRequestData& new_req : scheduler_output.scheduled_new_reqs)
+    for (const RequestData& req_data : scheduler_output.scheduled_reqs)
     {
-        Request* req = find_request(requests, new_req.req_id);
+        Request* req = find_request(requests, req_data.req_id);
         if (req == nullptr || req->status == RequestStatus::FINISHED)
         {
             continue;
         }
 
-        const auto scheduled_it = scheduler_output.num_scheduled_tokens.find(new_req.req_id);
+        const auto scheduled_it = scheduler_output.num_scheduled_tokens.find(req_data.req_id);
         if (scheduled_it == scheduler_output.num_scheduled_tokens.end())
         {
             continue;
@@ -739,33 +762,17 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
             continue;
         }
 
-        mark_running(*req);
         const int32_t prompt_tokens = prompt_token_count(*req);
-        const int32_t target_computed = std::min(prompt_tokens, req->num_computed + processed_tokens);
-        req->num_computed = target_computed;
-    }
+        mark_running(*req);
 
-    for (uint64_t req_id : scheduler_output.scheduled_cached_reqs.req_ids)
-    {
-        Request* req = find_request(requests, req_id);
-        if (req == nullptr || req->status == RequestStatus::FINISHED)
+        if (req->num_computed < prompt_tokens)
         {
+            const int32_t target_computed = std::min(prompt_tokens, req->num_computed + processed_tokens);
+            req->num_computed = target_computed;
             continue;
         }
 
-        const auto scheduled_it = scheduler_output.num_scheduled_tokens.find(req_id);
-        if (scheduled_it == scheduler_output.num_scheduled_tokens.end())
-        {
-            continue;
-        }
-
-        const int32_t processed_tokens = scheduled_it->second;
-        if (processed_tokens <= 0)
-        {
-            continue;
-        }
-
-        const auto index_it = model_runner_output.req_id_to_index.find(req_id);
+        const auto index_it = model_runner_output.req_id_to_index.find(req_data.req_id);
         if (index_it == model_runner_output.req_id_to_index.end())
         {
             continue;
@@ -783,7 +790,6 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
             continue;
         }
 
-        mark_running(*req);
         req->_all_token_ids.push_back(sampled_token_id);
         req->num_computed += processed_tokens;
 
