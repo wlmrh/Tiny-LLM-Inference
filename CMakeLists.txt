@@ -6,13 +6,61 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(TINYLLM_ENABLE_CUDA "Enable CUDA backend" OFF)
 
+find_package(Torch QUIET)
+if (NOT Torch_FOUND)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_Interpreter_FOUND)
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -c "import torch, sys; sys.stdout.write(torch.utils.cmake_prefix_path)"
+            RESULT_VARIABLE _torch_prefix_result
+            OUTPUT_VARIABLE _torch_cmake_prefix
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if (_torch_prefix_result EQUAL 0 AND _torch_cmake_prefix)
+            list(PREPEND CMAKE_PREFIX_PATH "${_torch_cmake_prefix}")
+            find_package(Torch QUIET)
+        endif()
+    endif()
+endif()
+
+if (NOT Torch_FOUND AND DEFINED ENV{HOME})
+    set(_torch_home "$ENV{HOME}")
+    set(_torch_home_default "${_torch_home}/libtorch")
+
+    if (EXISTS "${_torch_home_default}/share/cmake/Torch/TorchConfig.cmake")
+        list(PREPEND CMAKE_PREFIX_PATH "${_torch_home_default}")
+        find_package(Torch QUIET)
+    endif()
+
+    if (NOT Torch_FOUND)
+        file(GLOB _torch_home_candidates "${_torch_home}/libtorch*")
+        foreach(_torch_candidate IN LISTS _torch_home_candidates)
+            if (EXISTS "${_torch_candidate}/share/cmake/Torch/TorchConfig.cmake")
+                list(PREPEND CMAKE_PREFIX_PATH "${_torch_candidate}")
+                find_package(Torch QUIET)
+                if (Torch_FOUND)
+                    break()
+                endif()
+            endif()
+        endforeach()
+    endif()
+endif()
+
+if (NOT Torch_FOUND)
+    message(FATAL_ERROR "Torch not found. Set Torch_DIR/CMAKE_PREFIX_PATH to libtorch, or install Python torch.")
+endif()
+
+if (TORCH_CXX_FLAGS)
+    string(APPEND CMAKE_CXX_FLAGS " ${TORCH_CXX_FLAGS}")
+endif()
+
 if (TINYLLM_ENABLE_CUDA)
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
 endif()
 
 add_library(tiny_llm_core STATIC
-    src/core/tensor.cpp
     src/core/execution_context.cpp
     src/core/allocator_common.cpp
     src/runtime/tokenizer.cpp
@@ -43,9 +91,10 @@ target_include_directories(tiny_llm_core
 
 if (TINYLLM_ENABLE_CUDA)
     target_compile_definitions(tiny_llm_core PUBLIC TINYLLM_ENABLE_CUDA=1)
-    target_link_libraries(tiny_llm_core PUBLIC CUDA::cudart)
+    target_link_libraries(tiny_llm_core PUBLIC CUDA::cudart ${TORCH_LIBRARIES})
 else()
     target_compile_definitions(tiny_llm_core PUBLIC TINYLLM_ENABLE_CUDA=0)
+    target_link_libraries(tiny_llm_core PUBLIC ${TORCH_LIBRARIES})
 endif()
 
 add_library(tiny_llm_operators STATIC
