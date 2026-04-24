@@ -1,6 +1,7 @@
 build/
 build-mac/
 .vscode/
+.cache/
 .devcontainer/
 Dockerfile
 .DS_Store
