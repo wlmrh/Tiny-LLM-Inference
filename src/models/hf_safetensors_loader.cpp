@@ -204,23 +204,31 @@ HFSafeTensorLoader HFSafeTensorLoader::from_file(const std::string& path)
             continue;
         }
 
-        (void)item.second.as_object(
+        if (item.second == nullptr)
+        {
+            throw std::runtime_error(
+                "HFSafeTensorLoader::from_file: tensor descriptor pointer must be non-null.");
+        }
+
+        const hf_json::Value& tensor_descriptor = *item.second;
+
+        (void)tensor_descriptor.as_object(
             "HFSafeTensorLoader::from_file: tensor descriptor must be object");
 
         const std::string dtype_token = hf_json::require_object_field(
-            item.second,
+            tensor_descriptor,
             "dtype",
             "HFSafeTensorLoader::from_file")
                                        .as_string("HFSafeTensorLoader::from_file: dtype must be string");
         const DType dtype = parse_dtype(dtype_token);
 
         const std::vector<int64_t> shape = parse_shape(
-            hf_json::require_object_field(item.second,
+            hf_json::require_object_field(tensor_descriptor,
                                           "shape",
                                           "HFSafeTensorLoader::from_file"));
 
         const auto [offset_begin, offset_end] = parse_offsets(
-            hf_json::require_object_field(item.second,
+            hf_json::require_object_field(tensor_descriptor,
                                           "data_offsets",
                                           "HFSafeTensorLoader::from_file"));
 

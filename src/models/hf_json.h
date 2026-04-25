@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -28,7 +29,63 @@ struct Value {
     double number_value = 0.0;
     std::string string_value;
     std::vector<Value> array_value;
-    std::unordered_map<std::string, Value> object_value;
+    std::unordered_map<std::string, std::unique_ptr<Value>> object_value;
+
+    Value() = default;
+
+    Value(const Value& other)
+        : type(other.type),
+          bool_value(other.bool_value),
+          number_value(other.number_value),
+          string_value(other.string_value),
+          array_value(other.array_value)
+    {
+        object_value.reserve(other.object_value.size());
+        for (const auto& item : other.object_value)
+        {
+            if (item.second)
+            {
+                object_value.emplace(item.first, std::make_unique<Value>(*item.second));
+            }
+            else
+            {
+                object_value.emplace(item.first, nullptr);
+            }
+        }
+    }
+
+    Value& operator=(const Value& other)
+    {
+        if (this == &other)
+        {
+            return *this;
+        }
+
+        type = other.type;
+        bool_value = other.bool_value;
+        number_value = other.number_value;
+        string_value = other.string_value;
+        array_value = other.array_value;
+        object_value.clear();
+        object_value.reserve(other.object_value.size());
+        for (const auto& item : other.object_value)
+        {
+            if (item.second)
+            {
+                object_value.emplace(item.first, std::make_unique<Value>(*item.second));
+            }
+            else
+            {
+                object_value.emplace(item.first, nullptr);
+            }
+        }
+
+        return *this;
+    }
+
+    Value(Value&&) noexcept = default;
+    Value& operator=(Value&&) noexcept = default;
+    ~Value() = default;
 
     static Value make_null()
     {
@@ -67,7 +124,7 @@ struct Value {
         return out;
     }
 
-    static Value make_object(std::unordered_map<std::string, Value> value)
+    static Value make_object(std::unordered_map<std::string, std::unique_ptr<Value>> value)
     {
         Value out;
         out.type = ValueType::kObject;
@@ -80,7 +137,7 @@ struct Value {
     bool is_string() const { return type == ValueType::kString; }
     bool is_number() const { return type == ValueType::kNumber; }
 
-    const std::unordered_map<std::string, Value>& as_object(const std::string& error_prefix) const
+    const std::unordered_map<std::string, std::unique_ptr<Value>>& as_object(const std::string& error_prefix) const
     {
         if (!is_object())
         {
@@ -381,7 +438,7 @@ private:
         expect_char('{');
         skip_whitespace();
 
-        std::unordered_map<std::string, Value> object;
+        std::unordered_map<std::string, std::unique_ptr<Value>> object;
         if (consume_if('}'))
         {
             return Value::make_object(std::move(object));
@@ -399,7 +456,7 @@ private:
             skip_whitespace();
             expect_char(':');
             skip_whitespace();
-            object[key] = parse_value();
+            object[key] = std::make_unique<Value>(parse_value());
             skip_whitespace();
 
             if (consume_if('}'))
@@ -473,7 +530,7 @@ inline const Value* find_object_field(const Value& object,
     {
         return nullptr;
     }
-    return &it->second;
+    return it->second.get();
 }
 
 inline const Value& require_object_field(const Value& object,
