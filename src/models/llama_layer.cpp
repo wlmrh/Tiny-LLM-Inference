@@ -1,180 +1,372 @@
-#include "tiny_llm/models/mini_llama.h"
+#include "tiny_llm/models/llama_decoder_layer.h"
 
-#include "tiny_llm/core/context.h"
-#include "tiny_llm/core/tensor.h"
-#include "tiny_llm/operators/matmul.h"
 #include "tiny_llm/operators/paged_attention.h"
-#include "tiny_llm/runtime/execution_context.h"
 
 #include <cmath>
-#include <limits>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 namespace tiny_llm {
 
 namespace {
 
-int checked_positive_dim(int64_t dim, const char* name)
+void validate_cpu_tensor(const Tensor& tensor, const char* name)
 {
-	if (dim <= 0)
-	{
-		throw std::runtime_error(std::string("MiniLLaMA::forward_step: ") + name + " must be positive.");
-	}
-	if (dim > std::numeric_limits<int>::max())
-	{
-		throw std::runtime_error(std::string("MiniLLaMA::forward_step: ") + name + " is too large.");
-	}
-	return static_cast<int>(dim);
+    if (tensor.device().is_cuda())
+    {
+        throw std::runtime_error(std::string(name) + ": CUDA tensor path is not implemented for this helper.");
+    }
 }
 
-void validate_forward_inputs(const Tensor& input_ids,
-							 const Tensor& positions,
-							 const Tensor& logits,
-							 const MiniLLaMAConfig& cfg)
+void validate_float_tensor_2d(const Tensor& tensor,
+                              int64_t rows,
+                              int64_t cols,
+                              const char* name)
 {
-	if (tensor_dtype(input_ids) != DType::kInt32 || tensor_dtype(positions) != DType::kInt32)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: input_ids and positions must be int32.");
-	}
-	if (tensor_dtype(logits) != DType::kFloat32)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: logits must be float32.");
-	}
-
-	const std::vector<int64_t> input_shape = tensor_shape(input_ids);
-	const std::vector<int64_t> position_shape = tensor_shape(positions);
-	const std::vector<int64_t> logits_shape = tensor_shape(logits);
-
-	if (input_shape.size() != 1 || position_shape.size() != 1)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: input_ids and positions must be rank-1 [B].");
-	}
-	if (input_shape != position_shape)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: input_ids and positions must have the same shape.");
-	}
-
-	if (logits_shape.size() != 2)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: logits must be rank-2 [B, vocab].");
-	}
-
-	const int B = checked_positive_dim(input_shape[0], "B");
-	const int V = checked_positive_dim(logits_shape[1], "vocab");
-
-	if (logits_shape[0] != input_shape[0])
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: logits batch size must match input_ids.");
-	}
-	if (V != cfg.vocab)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: logits vocab size must match config.vocab.");
-	}
-	if (cfg.hidden <= 0 || cfg.vocab <= 0)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: model config is invalid.");
-	}
-	if (tensor_data(input_ids) == nullptr || tensor_data(positions) == nullptr || tensor_data(logits) == nullptr)
-	{
-		throw std::runtime_error("MiniLLaMA::forward_step: input/output pointers must be non-null.");
-	}
-	(void)B;
+    if (!tensor.defined())
+    {
+        throw std::runtime_error(std::string(name) + ": tensor must be defined.");
+    }
+    if (tensor_dtype(tensor) != DType::kFloat32)
+    {
+        throw std::runtime_error(std::string(name) + ": tensor must be float32.");
+    }
+    if (tensor.dim() != 2 || tensor.size(0) != rows || tensor.size(1) != cols)
+    {
+        throw std::runtime_error(std::string(name) + ": unexpected shape.");
+    }
+    if (tensor_data(tensor) == nullptr)
+    {
+        throw std::runtime_error(std::string(name) + ": tensor data pointer must be non-null.");
+    }
 }
 
-void fill_hidden_features(const int32_t* input_ids,
-						  const int32_t* positions,
-						  int B,
-						  int H,
-						  std::vector<float>& hidden)
+void validate_int_tensor_1d(const Tensor& tensor, int64_t size, const char* name)
 {
-	for (int b = 0; b < B; ++b)
-	{
-		const float token_base = static_cast<float>(input_ids[b] % 997) * 0.01f;
-		const float pos_base = static_cast<float>(positions[b] % 509) * 0.001f;
-		for (int h = 0; h < H; ++h)
-		{
-			const float feature = static_cast<float>((h * 31 + 7) % 101) * 0.0005f;
-			hidden[static_cast<size_t>(b) * static_cast<size_t>(H) + static_cast<size_t>(h)] =
-				token_base + pos_base + feature;
-		}
-	}
-}
-
-void fill_projection_weight(int H, std::vector<float>& w)
-{
-	for (int i = 0; i < H; ++i)
-	{
-		for (int j = 0; j < H; ++j)
-		{
-			float v = 0.0f;
-			if (i == j)
-			{
-				v = 1.0f;
-			}
-			else if (((i + j) % 29) == 0)
-			{
-				v = 0.01f;
-			}
-			w[static_cast<size_t>(i) * static_cast<size_t>(H) + static_cast<size_t>(j)] = v;
-		}
-	}
+    if (!tensor.defined())
+    {
+        throw std::runtime_error(std::string(name) + ": tensor must be defined.");
+    }
+    if (tensor_dtype(tensor) != DType::kInt32)
+    {
+        throw std::runtime_error(std::string(name) + ": tensor must be int32.");
+    }
+    if (tensor.dim() != 1 || tensor.size(0) != size)
+    {
+        throw std::runtime_error(std::string(name) + ": unexpected shape.");
+    }
+    if (tensor_data(tensor) == nullptr)
+    {
+        throw std::runtime_error(std::string(name) + ": tensor data pointer must be non-null.");
+    }
 }
 
 } // namespace
 
-void MiniLLaMA::forward_step(const Tensor& input_ids,
-							 const Tensor& positions,
-							 Tensor& logits,
-							 ExecutionContext& ctx)
+LlamaSelfAttention::LlamaSelfAttention(const LlamaConfig& config)
+    : config_(config),
+      qkv_proj_(config.hidden_size, config.hidden_size * 3),
+      o_proj_(config.hidden_size, config.hidden_size)
 {
-	validate_forward_inputs(input_ids, positions, logits, cfg_);
+}
 
-	const std::vector<int64_t> input_shape = tensor_shape(input_ids);
-	const int B = checked_positive_dim(input_shape[0], "B");
-	const int H = cfg_.hidden;
-	const int V = cfg_.vocab;
+void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::string& prefix)
+{
+    qkv_descs_[0] = {
+        weight_map.get_tensor_as<float>(prefix + "self_attn.q_proj.weight"),
+        config_.hidden_size,
+        config_.hidden_size,
+        0,
+        modules::WeightLayout::kOutIn,
+    };
+    qkv_descs_[1] = {
+        weight_map.get_tensor_as<float>(prefix + "self_attn.k_proj.weight"),
+        config_.hidden_size,
+        config_.hidden_size,
+        config_.hidden_size,
+        modules::WeightLayout::kOutIn,
+    };
+    qkv_descs_[2] = {
+        weight_map.get_tensor_as<float>(prefix + "self_attn.v_proj.weight"),
+        config_.hidden_size,
+        config_.hidden_size,
+        config_.hidden_size * 2,
+        modules::WeightLayout::kOutIn,
+    };
+    qkv_proj_.bind_stacked_weights(qkv_descs_.data(), static_cast<int32_t>(qkv_descs_.size()));
+    o_proj_.bind_weight(
+        weight_map.get_tensor_as<float>(prefix + "self_attn.o_proj.weight"),
+        config_.hidden_size,
+        config_.hidden_size,
+        modules::WeightLayout::kOutIn);
+}
 
-	const int32_t* input_ids_ptr = static_cast<const int32_t*>(tensor_data(input_ids));
-	const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
-	float* logits_ptr = static_cast<float*>(tensor_data(logits));
+void LlamaSelfAttention::forward(const Tensor& hidden_states,
+                                 const Tensor& positions,
+                                 LlamaAttentionBuffers& buffers,
+                                 ExecutionContext& ctx) const
+{
+    validate_forward_inputs(hidden_states, positions, buffers);
 
-	std::vector<float> hidden(static_cast<size_t>(B) * static_cast<size_t>(H), 0.0f);
-	std::vector<float> proj_w(static_cast<size_t>(H) * static_cast<size_t>(H), 0.0f);
-	std::vector<float> hidden_proj(static_cast<size_t>(B) * static_cast<size_t>(H), 0.0f);
-	std::vector<float> hidden_attn(static_cast<size_t>(B) * static_cast<size_t>(H), 0.0f);
+    qkv_proj_.forward(hidden_states, buffers.qkv, ctx);
+    split_qkv(buffers.qkv, buffers.q, buffers.k, buffers.v);
+    apply_rope(positions, buffers.q, buffers.k);
+    combine_qkv(buffers.q, buffers.k, buffers.v, buffers.attn_input);
+    ops::attention_paged(buffers.attn_input, buffers.attn_output, ctx);
+    o_proj_.forward(buffers.attn_output, buffers.proj_output, ctx);
+}
 
-	fill_hidden_features(input_ids_ptr, positions_ptr, B, H, hidden);
-	fill_projection_weight(H, proj_w);
+void LlamaSelfAttention::validate_forward_inputs(const Tensor& hidden_states,
+                                                 const Tensor& positions,
+                                                 const LlamaAttentionBuffers& buffers) const
+{
+    const int64_t rows = hidden_states.size(0);
+    validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaSelfAttention::hidden_states");
+    validate_int_tensor_1d(positions, rows, "LlamaSelfAttention::positions");
+    validate_float_tensor_2d(buffers.qkv, rows, config_.hidden_size * 3, "LlamaSelfAttention::qkv");
+    validate_float_tensor_2d(buffers.q, rows, config_.hidden_size, "LlamaSelfAttention::q");
+    validate_float_tensor_2d(buffers.k, rows, config_.hidden_size, "LlamaSelfAttention::k");
+    validate_float_tensor_2d(buffers.v, rows, config_.hidden_size, "LlamaSelfAttention::v");
+    validate_float_tensor_2d(buffers.attn_input, rows, config_.hidden_size, "LlamaSelfAttention::attn_input");
+    validate_float_tensor_2d(buffers.attn_output, rows, config_.hidden_size, "LlamaSelfAttention::attn_output");
+    validate_float_tensor_2d(buffers.proj_output, rows, config_.hidden_size, "LlamaSelfAttention::proj_output");
+}
 
-	Tensor hidden_tensor = make_tensor_from_blob(hidden.data(), {B, H}, DType::kFloat32);
-	Tensor proj_w_tensor = make_tensor_from_blob(proj_w.data(), {H, H}, DType::kFloat32);
-	Tensor hidden_proj_tensor = make_tensor_from_blob(hidden_proj.data(), {B, H}, DType::kFloat32);
-	Tensor hidden_attn_tensor = make_tensor_from_blob(hidden_attn.data(), {B, H}, DType::kFloat32);
-	ExecutionContext& exec_ctx = resolve_execution_context(ctx);
+void LlamaSelfAttention::split_qkv(const Tensor& qkv, Tensor& q, Tensor& k, Tensor& v) const
+{
+    validate_cpu_tensor(qkv, "LlamaSelfAttention::split_qkv");
+    const int64_t rows = qkv.size(0);
+    const float* qkv_ptr = static_cast<const float*>(tensor_data(qkv));
+    float* q_ptr = static_cast<float*>(tensor_data(q));
+    float* k_ptr = static_cast<float*>(tensor_data(k));
+    float* v_ptr = static_cast<float*>(tensor_data(v));
 
-	ops::gemm(hidden_tensor, proj_w_tensor, hidden_proj_tensor, exec_ctx);
-	ops::attention_paged(hidden_proj_tensor, hidden_attn_tensor, exec_ctx);
+    for (int64_t row = 0; row < rows; ++row)
+    {
+        const size_t qkv_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size * 3);
+        const size_t out_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size);
+        for (int32_t col = 0; col < config_.hidden_size; ++col)
+        {
+            q_ptr[out_offset + static_cast<size_t>(col)] = qkv_ptr[qkv_offset + static_cast<size_t>(col)];
+            k_ptr[out_offset + static_cast<size_t>(col)] =
+                qkv_ptr[qkv_offset + static_cast<size_t>(config_.hidden_size + col)];
+            v_ptr[out_offset + static_cast<size_t>(col)] =
+                qkv_ptr[qkv_offset + static_cast<size_t>(config_.hidden_size * 2 + col)];
+        }
+    }
+}
 
-	for (int b = 0; b < B; ++b)
-	{
-		float row_mean = 0.0f;
-		for (int h = 0; h < H; ++h)
-		{
-			row_mean += hidden_attn[static_cast<size_t>(b) * static_cast<size_t>(H) + static_cast<size_t>(h)];
-		}
-		row_mean /= static_cast<float>(H);
+void LlamaSelfAttention::apply_rope(const Tensor& positions, Tensor& q, Tensor& k) const
+{
+    validate_cpu_tensor(positions, "LlamaSelfAttention::apply_rope");
+    validate_cpu_tensor(q, "LlamaSelfAttention::apply_rope");
+    validate_cpu_tensor(k, "LlamaSelfAttention::apply_rope");
 
-		for (int v = 0; v < V; ++v)
-		{
-			const float feature = hidden_attn[static_cast<size_t>(b) * static_cast<size_t>(H)
-				+ static_cast<size_t>(v % H)];
-			const float periodic = std::sin(static_cast<float>((v + positions_ptr[b]) % 257) * 0.025f);
-			logits_ptr[static_cast<size_t>(b) * static_cast<size_t>(V) + static_cast<size_t>(v)] =
-				feature + row_mean * 0.1f + periodic * 0.05f;
-		}
-	}
+    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
+    float* q_ptr = static_cast<float*>(tensor_data(q));
+    float* k_ptr = static_cast<float*>(tensor_data(k));
+    const int64_t rows = q.size(0);
+
+    for (int64_t row = 0; row < rows; ++row)
+    {
+        const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size);
+        const float position = static_cast<float>(positions_ptr[row]);
+        for (int32_t head = 0; head < config_.num_attention_heads; ++head)
+        {
+            const int32_t head_offset = head * config_.head_dim;
+            for (int32_t dim = 0; dim + 1 < config_.head_dim; dim += 2)
+            {
+                const int32_t idx0 = head_offset + dim;
+                const int32_t idx1 = idx0 + 1;
+                const float theta = position / std::pow(config_.rope_theta, static_cast<float>(dim) / static_cast<float>(config_.head_dim));
+                const float cos_theta = std::cos(theta);
+                const float sin_theta = std::sin(theta);
+
+                const size_t q0 = row_offset + static_cast<size_t>(idx0);
+                const size_t q1 = row_offset + static_cast<size_t>(idx1);
+                const float qv0 = q_ptr[q0];
+                const float qv1 = q_ptr[q1];
+                q_ptr[q0] = qv0 * cos_theta - qv1 * sin_theta;
+                q_ptr[q1] = qv0 * sin_theta + qv1 * cos_theta;
+
+                const size_t k0 = row_offset + static_cast<size_t>(idx0);
+                const size_t k1 = row_offset + static_cast<size_t>(idx1);
+                const float kv0 = k_ptr[k0];
+                const float kv1 = k_ptr[k1];
+                k_ptr[k0] = kv0 * cos_theta - kv1 * sin_theta;
+                k_ptr[k1] = kv0 * sin_theta + kv1 * cos_theta;
+            }
+        }
+    }
+}
+
+void LlamaSelfAttention::combine_qkv(const Tensor& q,
+                                     const Tensor& k,
+                                     const Tensor& v,
+                                     Tensor& combined) const
+{
+    validate_cpu_tensor(q, "LlamaSelfAttention::combine_qkv");
+    const size_t count = tensor_numel(q);
+    const float* q_ptr = static_cast<const float*>(tensor_data(q));
+    const float* k_ptr = static_cast<const float*>(tensor_data(k));
+    const float* v_ptr = static_cast<const float*>(tensor_data(v));
+    float* out_ptr = static_cast<float*>(tensor_data(combined));
+    for (size_t i = 0; i < count; ++i)
+    {
+        out_ptr[i] = (q_ptr[i] + k_ptr[i] + v_ptr[i]) / 3.0f;
+    }
+}
+
+LlamaMLP::LlamaMLP(const LlamaConfig& config)
+    : config_(config),
+      gate_proj_(config.hidden_size, config.intermediate_size),
+      up_proj_(config.hidden_size, config.intermediate_size),
+      down_proj_(config.intermediate_size, config.hidden_size)
+{
+    if (config_.hidden_act != "silu")
+    {
+        throw std::runtime_error("LlamaMLP: only silu hidden_act is supported in Phase 3.");
+    }
+}
+
+void LlamaMLP::load_weights(const WeightMap& weight_map, const std::string& prefix)
+{
+    gate_proj_.bind_weight(
+        weight_map.get_tensor_as<float>(prefix + "mlp.gate_proj.weight"),
+        config_.intermediate_size,
+        config_.hidden_size,
+        modules::WeightLayout::kOutIn);
+    up_proj_.bind_weight(
+        weight_map.get_tensor_as<float>(prefix + "mlp.up_proj.weight"),
+        config_.intermediate_size,
+        config_.hidden_size,
+        modules::WeightLayout::kOutIn);
+    down_proj_.bind_weight(
+        weight_map.get_tensor_as<float>(prefix + "mlp.down_proj.weight"),
+        config_.hidden_size,
+        config_.intermediate_size,
+        modules::WeightLayout::kOutIn);
+}
+
+void LlamaMLP::forward(const Tensor& hidden_states,
+                       LlamaMLPBuffers& buffers,
+                       ExecutionContext& ctx) const
+{
+    validate_forward_inputs(hidden_states, buffers);
+    gate_proj_.forward(hidden_states, buffers.gate, ctx);
+    up_proj_.forward(hidden_states, buffers.up, ctx);
+    apply_activation(buffers.gate, buffers.up, buffers.activated);
+    down_proj_.forward(buffers.activated, buffers.down, ctx);
+}
+
+void LlamaMLP::validate_forward_inputs(const Tensor& hidden_states,
+                                       const LlamaMLPBuffers& buffers) const
+{
+    const int64_t rows = hidden_states.size(0);
+    validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaMLP::hidden_states");
+    validate_float_tensor_2d(buffers.gate, rows, config_.intermediate_size, "LlamaMLP::gate");
+    validate_float_tensor_2d(buffers.up, rows, config_.intermediate_size, "LlamaMLP::up");
+    validate_float_tensor_2d(buffers.activated, rows, config_.intermediate_size, "LlamaMLP::activated");
+    validate_float_tensor_2d(buffers.down, rows, config_.hidden_size, "LlamaMLP::down");
+}
+
+void LlamaMLP::apply_activation(const Tensor& gate, const Tensor& up, Tensor& activated) const
+{
+    validate_cpu_tensor(gate, "LlamaMLP::apply_activation");
+    const size_t count = tensor_numel(gate);
+    const float* gate_ptr = static_cast<const float*>(tensor_data(gate));
+    const float* up_ptr = static_cast<const float*>(tensor_data(up));
+    float* out_ptr = static_cast<float*>(tensor_data(activated));
+    for (size_t i = 0; i < count; ++i)
+    {
+        const float gate_value = gate_ptr[i];
+        const float silu = gate_value / (1.0f + std::exp(-gate_value));
+        out_ptr[i] = silu * up_ptr[i];
+    }
+}
+
+LlamaDecoderLayer::LlamaDecoderLayer(const LlamaConfig& config)
+    : config_(config),
+      input_layernorm_(config.hidden_size, config.rms_norm_eps),
+      self_attn_(config),
+      post_attention_layernorm_(config.hidden_size, config.rms_norm_eps),
+      mlp_(config)
+{
+}
+
+void LlamaDecoderLayer::load_weights(const WeightMap& weight_map, int layer_id)
+{
+    if (layer_id < 0)
+    {
+        throw std::runtime_error("LlamaDecoderLayer::load_weights: layer_id must be non-negative.");
+    }
+
+    layer_id_ = layer_id;
+    const std::string prefix = "model.layers." + std::to_string(layer_id) + ".";
+    input_layernorm_.bind_weights(weight_map.get_tensor_as<float>(prefix + "input_layernorm.weight"));
+    self_attn_.load_weights(weight_map, prefix);
+    post_attention_layernorm_.bind_weights(weight_map.get_tensor_as<float>(prefix + "post_attention_layernorm.weight"));
+    mlp_.load_weights(weight_map, prefix);
+}
+
+void LlamaDecoderLayer::forward(Tensor& hidden_states,
+                                const Tensor& positions,
+                                LlamaDecoderLayerBuffers& buffers,
+                                ExecutionContext& ctx) const
+{
+    validate_forward_inputs(hidden_states, positions, buffers);
+
+    copy_tensor(hidden_states, buffers.residual);
+    input_layernorm_.forward(hidden_states, buffers.norm_output, ctx);
+    self_attn_.forward(buffers.norm_output, positions, buffers.attention, ctx);
+    add_inplace(buffers.residual, buffers.attention.proj_output, hidden_states);
+
+    copy_tensor(hidden_states, buffers.residual);
+    post_attention_layernorm_.forward(hidden_states, buffers.norm_output, ctx);
+    mlp_.forward(buffers.norm_output, buffers.mlp, ctx);
+    add_inplace(buffers.residual, buffers.mlp.down, hidden_states);
+}
+
+void LlamaDecoderLayer::validate_forward_inputs(const Tensor& hidden_states,
+                                                const Tensor& positions,
+                                                const LlamaDecoderLayerBuffers& buffers) const
+{
+    if (layer_id_ < 0)
+    {
+        throw std::runtime_error("LlamaDecoderLayer::forward: weights must be loaded before forward.");
+    }
+
+    const int64_t rows = hidden_states.size(0);
+    validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaDecoderLayer::hidden_states");
+    validate_int_tensor_1d(positions, rows, "LlamaDecoderLayer::positions");
+    validate_float_tensor_2d(buffers.residual, rows, config_.hidden_size, "LlamaDecoderLayer::residual");
+    validate_float_tensor_2d(buffers.norm_output, rows, config_.hidden_size, "LlamaDecoderLayer::norm_output");
+    self_attn_.validate_forward_inputs(buffers.norm_output, positions, buffers.attention);
+    mlp_.validate_forward_inputs(buffers.norm_output, buffers.mlp);
+}
+
+void LlamaDecoderLayer::copy_tensor(const Tensor& src, Tensor& dst) const
+{
+    validate_cpu_tensor(src, "LlamaDecoderLayer::copy_tensor");
+    const size_t count = tensor_numel(src);
+    const float* src_ptr = static_cast<const float*>(tensor_data(src));
+    float* dst_ptr = static_cast<float*>(tensor_data(dst));
+    for (size_t i = 0; i < count; ++i)
+    {
+        dst_ptr[i] = src_ptr[i];
+    }
+}
+
+void LlamaDecoderLayer::add_inplace(const Tensor& residual, const Tensor& update, Tensor& output) const
+{
+    validate_cpu_tensor(residual, "LlamaDecoderLayer::add_inplace");
+    const size_t count = tensor_numel(residual);
+    const float* residual_ptr = static_cast<const float*>(tensor_data(residual));
+    const float* update_ptr = static_cast<const float*>(tensor_data(update));
+    float* output_ptr = static_cast<float*>(tensor_data(output));
+    for (size_t i = 0; i < count; ++i)
+    {
+        output_ptr[i] = residual_ptr[i] + update_ptr[i];
+    }
 }
 
 } // namespace tiny_llm

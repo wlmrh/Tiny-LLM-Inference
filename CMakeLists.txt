@@ -6,9 +6,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(TINYLLM_ENABLE_CUDA "Enable CUDA backend" OFF)
 
+include(FetchContent)
+find_program(TINYLLM_CARGO_EXECUTABLE cargo)
+if (NOT TINYLLM_CARGO_EXECUTABLE)
+    message(FATAL_ERROR "tokenizers-cpp requires Rust cargo. Please install Rust first: https://rustup.rs/")
+endif()
+FetchContent_Declare(
+    tokenizers_cpp
+    GIT_REPOSITORY https://github.com/mlc-ai/tokenizers-cpp.git
+    GIT_TAG main
+)
+FetchContent_MakeAvailable(tokenizers_cpp)
+
 find_package(Torch QUIET)
 if (NOT Torch_FOUND)
-    find_package(Python3 COMPONENTS Interpreter QUIET)
     if (Python3_Interpreter_FOUND)
         execute_process(
             COMMAND "${Python3_EXECUTABLE}" -c "import torch, sys; sys.stdout.write(torch.utils.cmake_prefix_path)"
@@ -91,10 +102,10 @@ target_include_directories(tiny_llm_core
 
 if (TINYLLM_ENABLE_CUDA)
     target_compile_definitions(tiny_llm_core PUBLIC TINYLLM_ENABLE_CUDA=1)
-    target_link_libraries(tiny_llm_core PUBLIC CUDA::cudart ${TORCH_LIBRARIES})
+    target_link_libraries(tiny_llm_core PUBLIC CUDA::cudart ${TORCH_LIBRARIES} tokenizers_cpp)
 else()
     target_compile_definitions(tiny_llm_core PUBLIC TINYLLM_ENABLE_CUDA=0)
-    target_link_libraries(tiny_llm_core PUBLIC ${TORCH_LIBRARIES})
+    target_link_libraries(tiny_llm_core PUBLIC ${TORCH_LIBRARIES} tokenizers_cpp)
 endif()
 
 add_library(tiny_llm_operators STATIC
@@ -115,7 +126,14 @@ if (TINYLLM_ENABLE_CUDA)
 endif()
 
 add_library(tiny_llm_models STATIC
+    src/models/hf_llama_config_loader.cpp
+    src/models/hf_safetensors_loader.cpp
     src/models/llama_layer.cpp
+    src/models/llama_model.cpp
+    src/models/llama_weight_map.cpp
+    src/models/mini_llama.cpp
+    src/models/modules/linear.cpp
+    src/models/modules/rmsnorm.cpp
     src/models/tiny_lm.cpp
 )
 

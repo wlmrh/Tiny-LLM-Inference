@@ -10,6 +10,7 @@
 namespace tiny_llm {
 
 class ExecutionContext;
+class HFSafeTensorLoader;
 class KVCache;
 class Model;
 struct EngineArgs;
@@ -30,6 +31,7 @@ public:
 private:
     void init_from_args(const EngineArgs& args);
     void validate_handles() const;
+    int32_t resolve_model_max_batch_size(const EngineArgs& args) const;
     std::vector<int32_t> run_forward_batch(const Tensor& input_tokens,
                                            const Tensor& position_ids,
                                            const Tensor& slot_mapping,
@@ -40,6 +42,7 @@ private:
                                            bool need_sampling) const;
 
     std::unique_ptr<Model> owned_model_;
+    std::unique_ptr<HFSafeTensorLoader> owned_hf_loader_;
     Model* model_ = nullptr;
     KVCache* kv_ = nullptr;
     int32_t kv_block_size_tokens_ = 16;

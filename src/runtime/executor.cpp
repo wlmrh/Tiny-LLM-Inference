@@ -2,6 +2,10 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
+#include "tiny_llm/models/hf_llama_config_loader.h"
+#include "tiny_llm/models/hf_safetensors_loader.h"
+#include "tiny_llm/models/llama_model.h"
+#include "tiny_llm/models/llama_weight_map.h"
 #include "tiny_llm/models/mini_llama.h"
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/models/tiny_lm.h"
@@ -12,6 +16,7 @@
 #include "tiny_llm/runtime/sampling.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -42,6 +47,8 @@ ModelExecutor::~ModelExecutor()
 
 void ModelExecutor::init_from_args(const EngineArgs& args)
 {
+    owned_hf_loader_.reset();
+
     if (args.kv_block_size_tokens <= 0)
     {
         throw std::runtime_error("ModelExecutor: kv_block_size_tokens must be positive.");
@@ -64,6 +71,29 @@ void ModelExecutor::init_from_args(const EngineArgs& args)
             case EngineModelType::kMiniLLaMA:
                 owned_model_ = std::make_unique<MiniLLaMA>(args.mini_llama_config);
                 break;
+            case EngineModelType::kHFLlamaSafeTensor:
+            {
+                if (args.hf_model_dir.empty())
+                {
+                    throw std::runtime_error(
+                        "ModelExecutor: hf_model_dir must be provided when model_type is kHFLlamaSafeTensor.");
+                }
+
+                const std::string weight_file = args.hf_weight_file.empty()
+                    ? std::string("model.safetensors")
+                    : args.hf_weight_file;
+                const std::filesystem::path weight_path =
+                    std::filesystem::path(args.hf_model_dir) / weight_file;
+
+                const LlamaConfig hf_config = HFLlamaConfigLoader::load_from_dir(args.hf_model_dir);
+                owned_hf_loader_ = std::make_unique<HFSafeTensorLoader>(
+                    HFSafeTensorLoader::from_file(weight_path.string()));
+                WeightMap weight_map = WeightMap::from_safetensors(*owned_hf_loader_);
+                auto llama_model = std::make_unique<LlamaModel>(hf_config, std::move(weight_map));
+                llama_model->allocate_buffers(resolve_model_max_batch_size(args));
+                owned_model_ = std::move(llama_model);
+                break;
+            }
             case EngineModelType::kPrebuilt:
             default:
                 throw std::runtime_error("ModelExecutor: model pointer is null and no constructible model_type is configured.");
@@ -73,6 +103,20 @@ void ModelExecutor::init_from_args(const EngineArgs& args)
     }
 
     initialize_global_execution_context(args, kv_);
+}
+
+int32_t ModelExecutor::resolve_model_max_batch_size(const EngineArgs& args) const
+{
+    int32_t max_batch_size = args.max_batch_size;
+    if (args.scheduler_config.max_prefill_tokens_per_step > max_batch_size)
+    {
+        max_batch_size = args.scheduler_config.max_prefill_tokens_per_step;
+    }
+    if (max_batch_size <= 0)
+    {
+        throw std::runtime_error("ModelExecutor: resolved model max_batch_size must be positive.");
+    }
+    return max_batch_size;
 }
 
 void ModelExecutor::validate_handles() const

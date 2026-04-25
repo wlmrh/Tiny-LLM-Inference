@@ -2,27 +2,12 @@
 
 #include <cstdint>
 
+#include "tiny_llm/models/llama_config.h"
 #include "tiny_llm/models/model.h"
 
 namespace tiny_llm {
 
 class ExecutionContext;
-
-/**
- * @brief Compact model configuration used by the MiniLLaMA skeleton.
- */
-struct MiniLLaMAConfig {
-    /// Number of transformer decoder layers.
-    int32_t num_layers = 4;
-    /// Hidden size of model states.
-    int32_t hidden = 512;
-    /// Number of attention heads.
-    int32_t num_heads = 8;
-    /// Per-head hidden dimension.
-    int32_t head_dim = 64;
-    /// Vocabulary size for output logits.
-    int32_t vocab = 32000;
-};
 
 /**
  * @brief Minimal model wrapper exposing a single-token forward API.
@@ -36,9 +21,15 @@ public:
      */
     const MiniLLaMAConfig& config() const { return cfg_; }
 
-    int32_t num_layers() const override { return cfg_.num_layers; }
+    int32_t num_layers() const override { return cfg_.num_hidden_layers; }
 
-    int32_t vocab_size() const override { return cfg_.vocab; }
+    int32_t vocab_size() const override { return cfg_.vocab_size; }
+
+    int32_t expected_bos_id() const override { return cfg_.bos_token_id; }
+
+    int32_t expected_eos_id() const override { return cfg_.eos_token_id; }
+
+    int32_t expected_unk_id() const override { return cfg_.unk_token_id; }
 
     /**
      * @brief Run one decoding step and write logits for next-token sampling.

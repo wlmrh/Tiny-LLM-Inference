@@ -5,8 +5,9 @@
 #include "tiny_llm/runtime/execution_context.h"
 
 #include <limits>
-#include <string>
+#include <cmath>
 #include <stdexcept>
+#include <string>
 
 namespace tiny_llm {
 namespace ops {
@@ -111,16 +112,37 @@ void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx,
     validate_rmsnorm_inputs(x, w, y, eps);
     const RmsNormShape shape = parse_xy_shape(x);
 
+    const float* x_ptr = static_cast<const float*>(tensor_data(x));
+    const float* w_ptr = static_cast<const float*>(tensor_data(w));
+    float* y_ptr = static_cast<float*>(tensor_data(y));
+
 #if TINYLLM_ENABLE_CUDA
     const cudaStream_t stream = resolve_execution_context(ctx).stream();
     cuda::launch_rmsnorm_f32(
-        static_cast<const float*>(tensor_data(x)),
-        static_cast<const float*>(tensor_data(w)),
-        static_cast<float*>(tensor_data(y)),
+        x_ptr,
+        w_ptr,
+        y_ptr,
         shape.B, shape.D, eps, stream);
-#else
-    throw std::runtime_error("rmsnorm CPU backend is not implemented. Rebuild with -DTINYLLM_ENABLE_CUDA=ON.");
+    return;
 #endif
+
+    for (int b = 0; b < shape.B; ++b)
+    {
+        const size_t row_offset = static_cast<size_t>(b) * static_cast<size_t>(shape.D);
+        float sum_sq = 0.0f;
+        for (int d = 0; d < shape.D; ++d)
+        {
+            const float value = x_ptr[row_offset + static_cast<size_t>(d)];
+            sum_sq += value * value;
+        }
+
+        const float inv_rms = 1.0f / std::sqrt(sum_sq / static_cast<float>(shape.D) + eps);
+        for (int d = 0; d < shape.D; ++d)
+        {
+            const size_t idx = row_offset + static_cast<size_t>(d);
+            y_ptr[idx] = x_ptr[idx] * inv_rms * w_ptr[static_cast<size_t>(d)];
+        }
+    }
 }
 
 } // namespace ops

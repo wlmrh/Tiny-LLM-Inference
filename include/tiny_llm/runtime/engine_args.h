@@ -20,6 +20,7 @@ enum class EngineModelType {
     kPrebuilt = 0,
     kTinyEmbeddingLM = 1,
     kMiniLLaMA = 2,
+    kHFLlamaSafeTensor = 3,
 };
 
 /**
@@ -36,6 +37,9 @@ struct EngineArgs {
     EngineModelType model_type = EngineModelType::kPrebuilt;
     std::string tiny_lm_checkpoint_path;
     MiniLLaMAConfig mini_llama_config = MiniLLaMAConfig{};
+    std::string hf_model_dir;
+    std::string hf_weight_file = "model.safetensors";
+    int32_t max_batch_size = 1;
 
     // ExecutionContext construction inputs (used when ctx == nullptr).
     cudaStream_t execution_stream = nullptr;
