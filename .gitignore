@@ -1,6 +1,7 @@
 build/
 build-mac/
 .vscode/
+.venv/
 .cache/
 .devcontainer/
 Dockerfile
