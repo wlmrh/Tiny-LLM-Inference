@@ -14,33 +14,48 @@
 #error "TINYLLM_SOURCE_DIR must be defined by CMake for test assets."
 #endif
 
-#ifndef TINYLLM_HF_TINY_LLAMA_DIR
-#error "TINYLLM_HF_TINY_LLAMA_DIR must be defined by CMake for HF tiny llama model path."
-#endif
-
-int main()
+int main(int argc, char** argv)
 {
     std::string hf_model_dir;
-    if (const char* env_hf_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR"))
-    {
+
+    if (argc > 1) {
+        hf_model_dir = argv[1];
+    } 
+    else if (const char* env_hf_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR")) {
         hf_model_dir = env_hf_dir;
-    }
-    if (hf_model_dir.empty())
-    {
-        hf_model_dir = TINYLLM_HF_TINY_LLAMA_DIR;
-    }
-    if (!std::filesystem::exists(hf_model_dir))
-    {
-        constexpr const char* kFallbackDir = "/Users/tangqi/weights";
-        hf_model_dir = kFallbackDir;
+    } 
+    else {
+        std::cerr << "====================================================\n";
+        std::cerr << "❌ 错误: 未指定模型路径!\n";
+        std::cerr << "用法: " << argv[0] << " <hf_model_dir_path>\n";
+        std::cerr << "或者设置环境变量: export TINYLLM_HF_TINY_LLAMA_DIR=...\n";
+        std::cerr << "====================================================\n";
+        return 1;
     }
 
-    assert(std::filesystem::exists(hf_model_dir));
-    assert(std::filesystem::exists(hf_model_dir + "/config.json"));
-    assert(std::filesystem::exists(hf_model_dir + "/model.safetensors"));
-    const bool has_tokenizer_json = std::filesystem::exists(hf_model_dir + "/tokenizer.json");
-    const bool has_tokenizer_model = std::filesystem::exists(hf_model_dir + "/tokenizer.model");
-    assert(has_tokenizer_json || has_tokenizer_model);
+    if (!std::filesystem::exists(hf_model_dir)) {
+        std::cerr << "❌ 错误: 模型文件夹不存在 -> " << hf_model_dir << "\n";
+        return 1;
+    }
+    
+    if (!std::filesystem::exists(hf_model_dir + "/config.json")) {
+        std::cerr << "❌ 错误: 找不到 config.json\n";
+        return 1;
+    }
+    if (!std::filesystem::exists(hf_model_dir + "/model.safetensors")) {
+        std::cerr << "❌ 错误: 找不到 model.safetensors\n";
+        return 1;
+    }
+    if (!std::filesystem::exists(hf_model_dir + "/tokenizer.json")) {
+        std::cerr << "❌ 错误: 找不到 tokenizer.json\n";
+        return 1;
+    }
+    if (!std::filesystem::exists(hf_model_dir + "/tokenizer.model")) {
+        std::cerr << "❌ 错误: 找不到 tokenizer.model\n";
+        return 1;
+    }
+
+    std::cout << "✅ 成功加载模型目录: " << hf_model_dir << "\n";
 
     const tiny_llm::LlamaConfig hf_config =
         tiny_llm::HFLlamaConfigLoader::load_from_dir(hf_model_dir);

@@ -1,9 +1,7 @@
 add_executable(test_tiny_lm_runtime test_tiny_lm_runtime.cpp)
 target_link_libraries(test_tiny_lm_runtime PRIVATE tiny_llm_models)
 target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-set(TINYLLM_HF_TINY_LLAMA_DIR "/Users/tangqi/weights" CACHE PATH
-    "Path to HuggingFace tiny random LLaMA model directory (contains config/tokenizer/model.safetensors)")
-target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_HF_TINY_LLAMA_DIR="${TINYLLM_HF_TINY_LLAMA_DIR}")
+
 add_test(NAME test_tiny_lm_runtime COMMAND test_tiny_lm_runtime)
 
 add_executable(test_llama_phase1 test_llama_phase1.cpp)
