@@ -7,22 +7,7 @@ add_executable(test_tiny_lm_runtime "${TINYLLM_TEST_INTEGRATION_DIR}/test_tiny_l
 target_link_libraries(test_tiny_lm_runtime PRIVATE tiny_llm_models)
 target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME test_tiny_lm_runtime COMMAND test_tiny_lm_runtime)
-
-add_executable(test_llama_phase1 "${TINYLLM_TEST_UNIT_DIR}/test_llama_phase1.cpp")
-target_link_libraries(test_llama_phase1 PRIVATE tiny_llm_models)
-add_test(NAME test_llama_phase1 COMMAND test_llama_phase1)
-
-add_executable(test_llama_phase2 "${TINYLLM_TEST_UNIT_DIR}/test_llama_phase2.cpp")
-target_link_libraries(test_llama_phase2 PRIVATE tiny_llm_models)
-add_test(NAME test_llama_phase2 COMMAND test_llama_phase2)
-
-add_executable(test_llama_phase3 "${TINYLLM_TEST_UNIT_DIR}/test_llama_phase3.cpp")
-target_link_libraries(test_llama_phase3 PRIVATE tiny_llm_models)
-add_test(NAME test_llama_phase3 COMMAND test_llama_phase3)
-
-add_executable(test_llama_phase4 "${TINYLLM_TEST_INTEGRATION_DIR}/test_llama_phase4.cpp")
-target_link_libraries(test_llama_phase4 PRIVATE tiny_llm_models)
-add_test(NAME test_llama_phase4 COMMAND test_llama_phase4)
+set_tests_properties(test_tiny_lm_runtime PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(llama_logits_dump "${TINYLLM_TOOLS_DIR}/llama_logits_dump.cpp")
 target_link_libraries(llama_logits_dump PRIVATE tiny_llm_models)

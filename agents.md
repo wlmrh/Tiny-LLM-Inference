@@ -14,11 +14,11 @@ Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with
 # Architecture (架构与目录)
 
 - Test/tool layout: automated CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostic executables out of `tests/` unless they are the actual test entry point.
-- Runtime scheduling: `include/tiny_llm/runtime/scheduler.h` and `src/runtime/scheduler.cpp`. `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, and preemption. `KVCacheManager` bridges scheduling decisions to KV block allocation.
-- Engine frontend/core: `include/tiny_llm/runtime/engine.h`, `src/runtime/engine.cpp`, `include/tiny_llm/runtime/engine_core.h`, and `src/runtime/engine_core.cpp`. `LLMEngine` converts user text to core requests; `EngineCore::step()` calls `Scheduler::schedule()`, `ModelExecutor::execute_model()`, then `Scheduler::update_from_output()`.
-- Model execution: `include/tiny_llm/runtime/executor.h` and `src/runtime/executor.cpp`. `ModelExecutor` flattens scheduled request tokens into `input_tokens`, `position_ids`, `slot_mapping`, `context_lens`, and `block_tables`, installs paged-attention metadata, runs `Model::forward_step()`, and samples the last scheduled row per request.
-- Attention: public API in `include/tiny_llm/operators/paged_attention.h`; implementation in `src/operators/paged_attention/paged_attention.cpp`; CUDA baseline kernel in `src/operators/paged_attention/paged_attention_kernels.cu`. LLaMA self-attention orchestration is in `include/tiny_llm/models/llama_decoder_layer.h` and `src/models/llama_layer.cpp`.
-- KV Cache memory pool: metadata service in `include/tiny_llm/runtime/kv_cache.h` and `src/runtime/kv_cache.cpp`; physical block allocator in `include/tiny_llm/core/allocator.h` and `src/core/allocator_common.cpp`, with CPU/CUDA backend files under `src/core/cpu/` and `src/core/cuda/`.
+- Runtime scheduling: `include/tiny_llm/runtime/scheduler.h` and `src/runtime/scheduler.cpp`. `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, preemption, and the runtime `KVCache` used by generation. `KVCacheManager` bridges scheduling decisions to KV block allocation and can return all per-layer block tables for scheduled requests.
+- Engine frontend/core: `include/tiny_llm/runtime/engine.h`, `src/runtime/engine.cpp`, `include/tiny_llm/runtime/engine_core.h`, and `src/runtime/engine_core.cpp`. `LLMEngine` converts user text to core requests; `EngineCore::step()` calls `Scheduler::schedule()`, `ModelExecutor::execute_model()`, then `Scheduler::update_from_output()`. `EngineCore` passes the scheduler-owned `KVCache*` into `ModelExecutor`; do not create a second executor-local KV cache for the same engine.
+- Model execution: `include/tiny_llm/runtime/executor.h` and `src/runtime/executor.cpp`. `ModelExecutor` flattens scheduled request tokens into `input_tokens`, `position_ids`, `slot_mapping`, `seq_indices`, `context_lens`, and rank-3 `block_tables`, installs paged-attention metadata, runs `Model::forward_step()`, and samples the last scheduled row per request.
+- Attention: public API in `include/tiny_llm/operators/paged_attention.h`; implementation in `src/operators/paged_attention/paged_attention.cpp`; CUDA baseline kernel in `src/operators/paged_attention/paged_attention_kernels.cu`. LLaMA self-attention orchestration is in `include/tiny_llm/models/llama_decoder_layer.h` and `src/models/llama_layer.cpp`. LLaMA has two CPU attention paths: with paged metadata and `ExecutionContext::kv()` it writes/reads persistent KV blocks for runtime prefill/decode; without KV metadata it falls back to in-batch causal attention for direct model tools such as `llama_tensor_dump`.
+- KV Cache memory pool: metadata service in `include/tiny_llm/runtime/kv_cache.h` and `src/runtime/kv_cache.cpp`; physical block allocator in `include/tiny_llm/core/allocator.h` and `src/core/allocator_common.cpp`, with CPU/CUDA backend files under `src/core/cpu/` and `src/core/cuda/`. CPU LLaMA KV data is float32 and stored per physical block as `[K block][V block]`, where each side is `block_size_tokens * kv_hidden_size` floats and `kv_hidden_size = num_key_value_heads * head_dim`.
 - Model weight loading: HuggingFace config loader in `include/tiny_llm/models/hf_llama_config_loader.h` and `src/models/hf_llama_config_loader.cpp`; safetensors loader in `include/tiny_llm/models/hf_safetensors_loader.h` and `src/models/hf_safetensors_loader.cpp`; name-to-weight registry in `include/tiny_llm/models/llama_weight_map.h` and `src/models/llama_weight_map.cpp`; LLaMA model wiring in `include/tiny_llm/models/llama_model.h` and `src/models/llama_model.cpp`.
 - C++/Rust wrapper layer: `src/runtime/tokenizer.cpp` conditionally includes `<tokenizers_cpp.h>`, defines a fallback C++ declaration for the external `tokenizers::Tokenizer` API, and wraps the handle inside `HFLlamaTokenizer::Impl`.
 - Public headers: current public API is under `include/tiny_llm/`. Some legacy-looking headers exist under `include/core/` and `include/models/`; prefer `include/tiny_llm/...` for new code.
@@ -30,6 +30,9 @@ Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with
 - Tensor ownership: `torch::empty` creates owning tensors for model buffers and temporary runtime inputs. `torch::from_blob`/`make_tensor_from_blob` creates non-owning views, so the backing memory must outlive the returned `Tensor`.
 - Memory management: owning polymorphic/resources are usually `std::unique_ptr` (`EngineCore`, `Scheduler`, `ModelExecutor`, owned models, HF loader, `KVCache`, tokenizer impl). Non-owning dependencies are raw pointers (`Model*`, `KVCache*`, `Tokenizer*`, `ExecutionContext*`, `StackAllocator*`) and are validated before use.
 - Allocator convention: `StackAllocator` is a monotonic per-step workspace; tensors from it are non-owning and valid only until reset/begin-step. `BlockAllocator` manages persistent fixed-size KV blocks; `KVCache::end_sequence()` must release them.
+- KV cache sizing: LLaMA runtime tools/tests must size `kv_block_size_bytes` from the HF config as `2 * block_size_tokens * (num_key_value_heads * head_dim) * sizeof(float)`. Tiny placeholder sizes such as 256 bytes are invalid for SmolLM2/Llama because runtime attention writes real K/V data into the blocks.
+- Paged attention metadata: `ops::set_paged_attention_runtime_metadata(...)` expects `slot_mapping[B]`, `seq_indices[B]`, `context_lens[num_seqs]`, and `block_tables[num_layers, num_seqs, max_blocks_per_seq]`. `seq_indices` maps each scheduled row back to its sequence row in `block_tables`; LLaMA attention uses `layer_id` plus this sequence index to find physical KV blocks.
+- Scheduler generation accounting: when prefill finishes, the model output sampled from the final prefill row is the first generated token and must be appended to the request. Decode steps then append one sampled token per scheduled row. Be careful not to drop the prefill sample or double-increment `num_computed`.
 - Error handling: the C++ code favors fail-fast `std::runtime_error` with contextual prefixes for invalid configuration, shape/dtype mismatch, missing files, invalid token IDs, allocator exhaustion, and tokenizer/FFI construction failures. Scheduler preemption cleanup is best-effort in a narrow path and catches exceptions to preserve forward progress.
 - FFI/tokenizer handling: `HFLlamaTokenizer` stores the external tokenizer handle in a move-only pImpl (`std::unique_ptr<Impl>`). `from_model_dir()` validates model directory, tokenizer file presence, handle construction, vocab size, and special token IDs, then throws `std::runtime_error` on failure.
 
@@ -71,6 +74,13 @@ cd build
 ctest --output-on-failure
 ```
 
+When using the local SmolLM2 model for runtime checks:
+
+```bash
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
+ctest --test-dir build --output-on-failure
+```
+
 Run the currently approved tiny runtime test binary directly:
 
 ```bash
@@ -98,6 +108,8 @@ The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMak
 - `tools/llama_logits_dump.cpp`: dump C++ logits for explicit token IDs into a binary file for script-based comparison. Normally use it through `scripts/compare_llama_logits_with_transformers.py`.
 - `tools/llama_tensor_dump.cpp`: dump C++ intermediate tensors such as embedding, per-layer norms, QKV, attention outputs, MLP activations, final norm, and logits. Normally use it through `scripts/compare_llama_tensors_with_transformers.py`.
 - `tools/llama_engine_generate.cpp`: run `LLMEngine` greedy generation for one or more prompts and emit JSON lines containing output text and generated token IDs. Normally use it through `scripts/compare_llama_generation_with_transformers.py`.
+
+Historical `test_llama_phase*` files were temporary bring-up checks for the LLaMA integration and should not be restored as regular tests. Use the focused runtime smoke test plus the Transformers comparison scripts for ongoing coverage.
 
 Compare the custom safetensors loader with PyTorch safetensors:
 
