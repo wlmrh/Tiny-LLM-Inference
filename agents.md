@@ -13,6 +13,7 @@ Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with
 
 # Architecture (架构与目录)
 
+- Test/tool layout: automated CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostic executables out of `tests/` unless they are the actual test entry point.
 - Runtime scheduling: `include/tiny_llm/runtime/scheduler.h` and `src/runtime/scheduler.cpp`. `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, and preemption. `KVCacheManager` bridges scheduling decisions to KV block allocation.
 - Engine frontend/core: `include/tiny_llm/runtime/engine.h`, `src/runtime/engine.cpp`, `include/tiny_llm/runtime/engine_core.h`, and `src/runtime/engine_core.cpp`. `LLMEngine` converts user text to core requests; `EngineCore::step()` calls `Scheduler::schedule()`, `ModelExecutor::execute_model()`, then `Scheduler::update_from_output()`.
 - Model execution: `include/tiny_llm/runtime/executor.h` and `src/runtime/executor.cpp`. `ModelExecutor` flattens scheduled request tokens into `input_tokens`, `position_ids`, `slot_mapping`, `context_lens`, and `block_tables`, installs paged-attention metadata, runs `Model::forward_step()`, and samples the last scheduled row per request.
@@ -76,11 +77,63 @@ Run the currently approved tiny runtime test binary directly:
 ./build/tests/test_tiny_lm_runtime
 ```
 
+Run the SmolLM2 runtime smoke test with the local model path:
+
+```bash
+./build/tests/test_tiny_lm_runtime ~/models/smollm2-135M
+```
+
 Run examples:
 
 ```bash
 ./build/tiny_lm_inference
 ./build/llama_inference
+```
+
+# Debug Tools & Alignment Scripts (调试工具)
+
+The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMakeLists.txt`; they are not themselves CTest test sources. The Python files in `scripts/` compare tool output against PyTorch/Transformers or inspect model files.
+
+- `tools/hf_safetensor_dump.cpp`: inspect selected safetensors weights and model metadata. Build with `cmake --build build -j`, then run `./build/tools/hf_safetensor_dump ~/models/smollm2-135M`.
+- `tools/llama_logits_dump.cpp`: dump C++ logits for explicit token IDs into a binary file for script-based comparison. Normally use it through `scripts/compare_llama_logits_with_transformers.py`.
+- `tools/llama_tensor_dump.cpp`: dump C++ intermediate tensors such as embedding, per-layer norms, QKV, attention outputs, MLP activations, final norm, and logits. Normally use it through `scripts/compare_llama_tensors_with_transformers.py`.
+- `tools/llama_engine_generate.cpp`: run `LLMEngine` greedy generation for one or more prompts and emit JSON lines containing output text and generated token IDs. Normally use it through `scripts/compare_llama_generation_with_transformers.py`.
+
+Compare the custom safetensors loader with PyTorch safetensors:
+
+```bash
+python3 scripts/compare_hf_safetensor_with_pytorch.py \
+  --dump-binary build/tools/hf_safetensor_dump \
+  --model-dir ~/models/smollm2-135M
+```
+
+Compare C++ logits with Transformers:
+
+```bash
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
+python3 scripts/compare_llama_logits_with_transformers.py \
+  --dump-binary build/tools/llama_logits_dump
+```
+
+Compare intermediate C++ tensors with Transformers:
+
+```bash
+python3 scripts/compare_llama_tensors_with_transformers.py \
+  --dump-binary build/tools/llama_tensor_dump \
+  --model-dir ~/models/smollm2-135M \
+  --tokens 1 22172 318
+```
+
+Compare full greedy generation between `LLMEngine` and Transformers:
+
+```bash
+python3 scripts/compare_llama_generation_with_transformers.py \
+  --engine-binary build/tools/llama_engine_generate \
+  --model-dir ~/models/smollm2-135M \
+  --max-new-tokens 8 \
+  --prompt hello \
+  --prompt 'tiny llm inference' \
+  --show-only
 ```
 
 # Gotchas & Landmines (避坑指南)
