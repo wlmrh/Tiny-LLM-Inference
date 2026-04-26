@@ -59,6 +59,8 @@ public:
      * @brief Returns currently free physical blocks in the shared pool.
      */
     size_t free_block_count() const;
+    size_t block_size_bytes() const;
+    void* block_ptr(int32_t block_id) const;
 
     /**
      * @brief Initializes metadata structures for a new request sequence.

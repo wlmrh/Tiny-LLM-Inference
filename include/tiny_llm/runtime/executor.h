@@ -35,6 +35,7 @@ private:
     std::vector<int32_t> run_forward_batch(const Tensor& input_tokens,
                                            const Tensor& position_ids,
                                            const Tensor& slot_mapping,
+                                           const Tensor& seq_indices,
                                            const Tensor& context_lens,
                                            const Tensor& block_tables,
                                            const std::vector<int32_t>& core_seq_ids,

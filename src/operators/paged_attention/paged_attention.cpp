@@ -18,14 +18,6 @@ namespace ops {
 
 namespace {
 
-struct PagedAttentionRuntimeMetadata {
-    const Tensor* slot_mapping = nullptr;
-    const Tensor* context_lens = nullptr;
-    const Tensor* block_tables = nullptr;
-    int32_t block_size_tokens = 0;
-    bool enabled = false;
-};
-
 thread_local PagedAttentionRuntimeMetadata g_runtime_metadata;
 
 void validate_runtime_metadata(const Tensor& q)
@@ -36,6 +28,7 @@ void validate_runtime_metadata(const Tensor& q)
     }
 
     if (g_runtime_metadata.slot_mapping == nullptr
+        || g_runtime_metadata.seq_indices == nullptr
         || g_runtime_metadata.context_lens == nullptr
         || g_runtime_metadata.block_tables == nullptr)
     {
@@ -43,10 +36,12 @@ void validate_runtime_metadata(const Tensor& q)
     }
 
     const Tensor& slot_mapping = *g_runtime_metadata.slot_mapping;
+    const Tensor& seq_indices = *g_runtime_metadata.seq_indices;
     const Tensor& context_lens = *g_runtime_metadata.context_lens;
     const Tensor& block_tables = *g_runtime_metadata.block_tables;
 
     if (tensor_dtype(slot_mapping) != DType::kInt32
+        || tensor_dtype(seq_indices) != DType::kInt32
         || tensor_dtype(context_lens) != DType::kInt32
         || tensor_dtype(block_tables) != DType::kInt32)
     {
@@ -65,6 +60,11 @@ void validate_runtime_metadata(const Tensor& q)
     {
         throw std::runtime_error("attention_paged: slot_mapping must be rank-1 and align with q batch dimension.");
     }
+    const std::vector<int64_t> seq_index_shape = tensor_shape(seq_indices);
+    if (seq_index_shape.size() != 1 || seq_index_shape[0] != num_total_tokens)
+    {
+        throw std::runtime_error("attention_paged: seq_indices must be rank-1 and align with q batch dimension.");
+    }
 
     const std::vector<int64_t> context_shape = tensor_shape(context_lens);
     if (context_shape.size() != 1)
@@ -79,13 +79,13 @@ void validate_runtime_metadata(const Tensor& q)
     }
 
     const std::vector<int64_t> block_shape = tensor_shape(block_tables);
-    if (block_shape.size() != 2 || block_shape[0] != num_seqs)
+    if (block_shape.size() != 3 || block_shape[1] != num_seqs)
     {
-        throw std::runtime_error("attention_paged: block_tables must be rank-2 [num_seqs, max_blocks_per_seq].");
+        throw std::runtime_error("attention_paged: block_tables must be rank-3 [num_layers, num_seqs, max_blocks_per_seq].");
     }
-    if (block_shape[1] <= 0)
+    if (block_shape[0] <= 0 || block_shape[2] <= 0)
     {
-        throw std::runtime_error("attention_paged: block_tables second dimension must be positive.");
+        throw std::runtime_error("attention_paged: block_tables dimensions must be positive.");
     }
 
     if (g_runtime_metadata.block_size_tokens <= 0)
@@ -94,12 +94,14 @@ void validate_runtime_metadata(const Tensor& q)
     }
 
     const int32_t* slot_ptr = slot_mapping.data_ptr<int32_t>();
+    const int32_t* seq_index_ptr = seq_indices.data_ptr<int32_t>();
     const int32_t* context_ptr = context_lens.data_ptr<int32_t>();
     const int32_t* block_ptr = block_tables.data_ptr<int32_t>();
 
-    const int64_t max_blocks_per_seq = block_shape[1];
+    const int64_t num_layers = block_shape[0];
+    const int64_t max_blocks_per_seq = block_shape[2];
     std::unordered_set<int32_t> known_block_ids;
-    known_block_ids.reserve(static_cast<size_t>(num_seqs * max_blocks_per_seq));
+    known_block_ids.reserve(static_cast<size_t>(num_layers * num_seqs * max_blocks_per_seq));
 
     for (int64_t seq = 0; seq < num_seqs; ++seq)
     {
@@ -135,6 +137,11 @@ void validate_runtime_metadata(const Tensor& q)
 
     for (int64_t token = 0; token < num_total_tokens; ++token)
     {
+        const int32_t seq_index = seq_index_ptr[token];
+        if (seq_index < 0 || seq_index >= num_seqs)
+        {
+            throw std::runtime_error("attention_paged: seq_indices values must reference valid sequences.");
+        }
         const int32_t slot = slot_ptr[token];
         if (slot < 0)
         {
@@ -186,11 +193,13 @@ bool can_run_cuda_attention(const float* q_ptr, const float* out_ptr)
 #endif
 
 void set_paged_attention_runtime_metadata(const Tensor& slot_mapping,
+                                          const Tensor& seq_indices,
                                           const Tensor& context_lens,
                                           const Tensor& block_tables,
                                           int32_t block_size_tokens)
 {
     g_runtime_metadata.slot_mapping = &slot_mapping;
+    g_runtime_metadata.seq_indices = &seq_indices;
     g_runtime_metadata.context_lens = &context_lens;
     g_runtime_metadata.block_tables = &block_tables;
     g_runtime_metadata.block_size_tokens = block_size_tokens;
@@ -200,10 +209,16 @@ void set_paged_attention_runtime_metadata(const Tensor& slot_mapping,
 void clear_paged_attention_runtime_metadata()
 {
     g_runtime_metadata.slot_mapping = nullptr;
+    g_runtime_metadata.seq_indices = nullptr;
     g_runtime_metadata.context_lens = nullptr;
     g_runtime_metadata.block_tables = nullptr;
     g_runtime_metadata.block_size_tokens = 0;
     g_runtime_metadata.enabled = false;
+}
+
+const PagedAttentionRuntimeMetadata& current_paged_attention_runtime_metadata()
+{
+    return g_runtime_metadata;
 }
 
 void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx)

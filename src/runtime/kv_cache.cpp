@@ -30,6 +30,20 @@ size_t KVCache::free_block_count() const {
     return blocks_->free_block_count();
 }
 
+size_t KVCache::block_size_bytes() const {
+    if (blocks_ == nullptr) {
+        return 0;
+    }
+    return blocks_->block_size_bytes();
+}
+
+void* KVCache::block_ptr(int32_t block_id) const {
+    if (blocks_ == nullptr) {
+        return nullptr;
+    }
+    return blocks_->get_block_ptr(block_id);
+}
+
 void KVCache::start_sequence(int32_t seq_id) {
     SeqState state;
     state.page_tables.resize(static_cast<size_t>(cfg_.num_layers));

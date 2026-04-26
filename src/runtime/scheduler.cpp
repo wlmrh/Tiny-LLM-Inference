@@ -269,6 +269,33 @@ void KVCacheManager::refresh_block_table(
     block_table.insert(block_table.end(), page_table.begin(), page_table.end());
 }
 
+void KVCacheManager::refresh_block_tables(
+    int32_t core_seq_id,
+    bool started,
+    std::vector<std::vector<int32_t>>& block_tables) const
+{
+    if (kv_ == nullptr)
+    {
+        throw std::runtime_error("KVCacheManager::refresh_block_tables: kv must be non-null.");
+    }
+
+    block_tables.clear();
+    if (!started || kv_->num_layers() <= 0)
+    {
+        return;
+    }
+
+    block_tables.resize(static_cast<size_t>(kv_->num_layers()));
+    for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
+    {
+        const std::vector<int32_t>& page_table = kv_->page_table(core_seq_id, layer_id);
+        block_tables[static_cast<size_t>(layer_id)].insert(
+            block_tables[static_cast<size_t>(layer_id)].end(),
+            page_table.begin(),
+            page_table.end());
+    }
+}
+
 bool KVCacheManager::allocate_slots(
     int32_t core_seq_id,
     bool started,
@@ -556,13 +583,17 @@ SchedulerOutput Scheduler::schedule()
                 continue;
             }
 
-            std::vector<int32_t> block_table;
-            kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+            std::vector<std::vector<int32_t>> block_tables;
+            kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
 
             RequestData req_data;
             req_data.req_id = request_id;
             req_data.num_computed_tokens = req->num_computed;
-            req_data.block_ids = std::move(block_table);
+            req_data.block_tables = std::move(block_tables);
+            if (!req_data.block_tables.empty())
+            {
+                req_data.block_ids = req_data.block_tables.front();
+            }
             req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
             for (int32_t i = 0; i < chunk; ++i)
             {
@@ -587,13 +618,17 @@ SchedulerOutput Scheduler::schedule()
             continue;
         }
 
-        std::vector<int32_t> block_table;
-        kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+        std::vector<std::vector<int32_t>> block_tables;
+        kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
 
         RequestData req_data;
         req_data.req_id = request_id;
         req_data.num_computed_tokens = req->num_computed;
-        req_data.block_ids = std::move(block_table);
+        req_data.block_tables = std::move(block_tables);
+        if (!req_data.block_tables.empty())
+        {
+            req_data.block_ids = req_data.block_tables.front();
+        }
         req_data.new_token_ids.push_back(req->_all_token_ids.back());
 
         scheduler_output.num_scheduled_tokens[request_id] = 1;
@@ -639,13 +674,17 @@ SchedulerOutput Scheduler::schedule()
                     break;
                 }
 
-                std::vector<int32_t> block_table;
-                kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+                std::vector<std::vector<int32_t>> block_tables;
+                kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
 
                 RequestData req_data;
                 req_data.req_id = request_id;
                 req_data.num_computed_tokens = req->num_computed;
-                req_data.block_ids = std::move(block_table);
+                req_data.block_tables = std::move(block_tables);
+                if (!req_data.block_tables.empty())
+                {
+                    req_data.block_ids = req_data.block_tables.front();
+                }
                 req_data.new_token_ids.push_back(req->_all_token_ids.back());
 
                 scheduler_output.num_scheduled_tokens[request_id] = 1;
@@ -660,13 +699,17 @@ SchedulerOutput Scheduler::schedule()
                 break;
             }
 
-            std::vector<int32_t> block_table;
-            kvcache_manager.refresh_block_table(core_seq_id, true, block_table);
+            std::vector<std::vector<int32_t>> block_tables;
+            kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
 
             RequestData req_data;
             req_data.req_id = request_id;
             req_data.num_computed_tokens = req->num_computed;
-            req_data.block_ids = std::move(block_table);
+            req_data.block_tables = std::move(block_tables);
+            if (!req_data.block_tables.empty())
+            {
+                req_data.block_ids = req_data.block_tables.front();
+            }
             req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
             for (int32_t i = 0; i < chunk; ++i)
             {
@@ -765,11 +808,15 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
         const int32_t prompt_tokens = prompt_token_count(*req);
         mark_running(*req);
 
-        if (req->num_computed < prompt_tokens)
+        const bool was_prefilling = req->num_computed < prompt_tokens;
+        if (was_prefilling)
         {
             const int32_t target_computed = std::min(prompt_tokens, req->num_computed + processed_tokens);
             req->num_computed = target_computed;
-            continue;
+            if (req->num_computed < prompt_tokens)
+            {
+                continue;
+            }
         }
 
         const auto index_it = model_runner_output.req_id_to_index.find(req_data.req_id);
@@ -791,7 +838,10 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
         }
 
         req->_all_token_ids.push_back(sampled_token_id);
-        req->num_computed += processed_tokens;
+        if (!was_prefilling)
+        {
+            req->num_computed += processed_tokens;
+        }
 
         EngineCoreOutput result;
         result.internal_id = req->request_id;

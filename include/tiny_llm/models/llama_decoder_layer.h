@@ -42,7 +42,7 @@ class LlamaSelfAttention {
 public:
     explicit LlamaSelfAttention(const LlamaConfig& config);
 
-    void load_weights(const WeightMap& weight_map, const std::string& prefix);
+    void load_weights(const WeightMap& weight_map, const std::string& prefix, int32_t layer_id);
     void forward(const Tensor& hidden_states,
                  const Tensor& positions,
                  LlamaAttentionBuffers& buffers,
@@ -58,9 +58,11 @@ private:
                            const Tensor& q,
                            const Tensor& k,
                            const Tensor& v,
-                           Tensor& out) const;
+                           Tensor& out,
+                           ExecutionContext& ctx) const;
 
     LlamaConfig config_;
+    int32_t layer_id_ = -1;
     std::array<modules::StackedWeightDesc, 3> qkv_descs_{};
     modules::Linear qkv_proj_;
     modules::Linear o_proj_;

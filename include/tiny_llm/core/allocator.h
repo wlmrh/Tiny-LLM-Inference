@@ -112,6 +112,11 @@ public:
      */
     size_t total_block_count() const;
 
+    /**
+     * @brief Returns fixed byte size of each physical block.
+     */
+    size_t block_size_bytes() const { return block_size_; }
+
 private:
     void* gpu_pool_ = nullptr;        ///< Base GPU pointer for the entire block pool.
     size_t num_blocks_ = 0;           ///< Total capacity in number of blocks.

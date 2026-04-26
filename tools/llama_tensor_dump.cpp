@@ -161,7 +161,8 @@ int main(int argc, char** argv)
                 buffers.layer.attention.q,
                 buffers.layer.attention.k,
                 buffers.layer.attention.v,
-                buffers.layer.attention.attn_output);
+                buffers.layer.attention.attn_output,
+                ctx);
             dump_tensor(output_dir, layer_name(layer_id, "attn_output"), buffers.layer.attention.attn_output);
             layer.self_attn_.o_proj_.forward(
                 buffers.layer.attention.attn_output,

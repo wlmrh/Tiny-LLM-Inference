@@ -1,6 +1,11 @@
 #include "tiny_llm/models/llama_decoder_layer.h"
 
+#include "tiny_llm/core/context.h"
+#include "tiny_llm/operators/paged_attention.h"
+#include "tiny_llm/runtime/kv_cache.h"
+
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -75,8 +80,13 @@ LlamaSelfAttention::LlamaSelfAttention(const LlamaConfig& config)
 {
 }
 
-void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::string& prefix)
+void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::string& prefix, int32_t layer_id)
 {
+    if (layer_id < 0)
+    {
+        throw std::runtime_error("LlamaSelfAttention::load_weights: layer_id must be non-negative.");
+    }
+    layer_id_ = layer_id;
     qkv_descs_[0] = {
         weight_map.get_tensor_as<float>(prefix + "self_attn.q_proj.weight"),
         config_.hidden_size,
@@ -116,7 +126,7 @@ void LlamaSelfAttention::forward(const Tensor& hidden_states,
     qkv_proj_.forward(hidden_states, buffers.qkv, ctx);
     split_qkv(buffers.qkv, buffers.q, buffers.k, buffers.v);
     apply_rope(positions, buffers.q, buffers.k);
-    compute_attention(positions, buffers.q, buffers.k, buffers.v, buffers.attn_output);
+    compute_attention(positions, buffers.q, buffers.k, buffers.v, buffers.attn_output, ctx);
     o_proj_.forward(buffers.attn_output, buffers.proj_output, ctx);
 }
 
@@ -237,7 +247,8 @@ void LlamaSelfAttention::compute_attention(const Tensor& positions,
                                            const Tensor& q,
                                            const Tensor& k,
                                            const Tensor& v,
-                                           Tensor& out) const
+                                           Tensor& out,
+                                           ExecutionContext& ctx) const
 {
     validate_cpu_tensor(positions, "LlamaSelfAttention::compute_attention");
     validate_cpu_tensor(q, "LlamaSelfAttention::compute_attention");
@@ -254,6 +265,180 @@ void LlamaSelfAttention::compute_attention(const Tensor& positions,
     const int32_t group_size = config_.num_attention_heads / config_.num_key_value_heads;
     const int64_t rows = q.size(0);
     const float scale = 1.0f / std::sqrt(static_cast<float>(config_.head_dim));
+
+    const ops::PagedAttentionRuntimeMetadata& metadata = ops::current_paged_attention_runtime_metadata();
+    KVCache* kv_cache = ctx.kv();
+    if (metadata.enabled && kv_cache != nullptr)
+    {
+        if (layer_id_ < 0)
+        {
+            throw std::runtime_error("LlamaSelfAttention::compute_attention: layer id is not set.");
+        }
+        if (kv_cache->block_size_tokens() != metadata.block_size_tokens)
+        {
+            throw std::runtime_error("LlamaSelfAttention::compute_attention: KV block size mismatch.");
+        }
+        if (metadata.seq_indices == nullptr || metadata.context_lens == nullptr || metadata.block_tables == nullptr)
+        {
+            throw std::runtime_error("LlamaSelfAttention::compute_attention: paged metadata is incomplete.");
+        }
+
+        const Tensor& seq_indices = *metadata.seq_indices;
+        const Tensor& context_lens = *metadata.context_lens;
+        const Tensor& block_tables = *metadata.block_tables;
+        const std::vector<int64_t> seq_shape = tensor_shape(seq_indices);
+        const std::vector<int64_t> context_shape = tensor_shape(context_lens);
+        const std::vector<int64_t> block_shape = tensor_shape(block_tables);
+        if (seq_shape.size() != 1 || seq_shape[0] != rows)
+        {
+            throw std::runtime_error("LlamaSelfAttention::compute_attention: seq_indices shape mismatch.");
+        }
+        if (context_shape.size() != 1 || block_shape.size() != 3
+            || block_shape[0] <= layer_id_ || block_shape[1] != context_shape[0])
+        {
+            throw std::runtime_error("LlamaSelfAttention::compute_attention: block table shape mismatch.");
+        }
+
+        const size_t kv_token_bytes =
+            static_cast<size_t>(kv_hidden_size(config_)) * sizeof(float);
+        const size_t required_block_bytes =
+            2 * static_cast<size_t>(metadata.block_size_tokens) * kv_token_bytes;
+        if (kv_cache->block_size_bytes() < required_block_bytes)
+        {
+            throw std::runtime_error("LlamaSelfAttention::compute_attention: KV block byte size is too small.");
+        }
+
+        const int32_t* seq_index_ptr = seq_indices.data_ptr<int32_t>();
+        const int32_t* context_ptr = context_lens.data_ptr<int32_t>();
+        const int32_t* block_ptr = block_tables.data_ptr<int32_t>();
+        const int64_t num_layers = block_shape[0];
+        const int64_t num_seqs = block_shape[1];
+        const int64_t max_blocks_per_seq = block_shape[2];
+
+        auto block_id_for = [&](int32_t seq_index, int32_t position) -> int32_t {
+            if (seq_index < 0 || seq_index >= num_seqs)
+            {
+                throw std::runtime_error("LlamaSelfAttention::compute_attention: seq index out of range.");
+            }
+            const int32_t logical_block = position / metadata.block_size_tokens;
+            if (logical_block < 0 || logical_block >= max_blocks_per_seq)
+            {
+                throw std::runtime_error("LlamaSelfAttention::compute_attention: logical block out of range.");
+            }
+            const int64_t index =
+                static_cast<int64_t>(layer_id_) * num_seqs * max_blocks_per_seq
+                + static_cast<int64_t>(seq_index) * max_blocks_per_seq
+                + logical_block;
+            (void)num_layers;
+            const int32_t block_id = block_ptr[index];
+            if (block_id < 0)
+            {
+                throw std::runtime_error("LlamaSelfAttention::compute_attention: missing physical KV block.");
+            }
+            return block_id;
+        };
+
+        auto k_block_ptr = [&](int32_t block_id) -> float* {
+            void* block = kv_cache->block_ptr(block_id);
+            if (block == nullptr)
+            {
+                throw std::runtime_error("LlamaSelfAttention::compute_attention: KV block pointer is null.");
+            }
+            return static_cast<float*>(block);
+        };
+
+        auto v_block_ptr = [&](int32_t block_id) -> float* {
+            return k_block_ptr(block_id)
+                + static_cast<size_t>(metadata.block_size_tokens) * static_cast<size_t>(kv_hidden_size(config_));
+        };
+
+        for (int64_t row = 0; row < rows; ++row)
+        {
+            const int32_t seq_index = seq_index_ptr[row];
+            const int32_t position = positions_ptr[row];
+            const int32_t block_id = block_id_for(seq_index, position);
+            const int32_t token_offset = position % metadata.block_size_tokens;
+            const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(kv_hidden_size(config_));
+            float* key_dst = k_block_ptr(block_id)
+                + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_hidden_size(config_));
+            float* value_dst = v_block_ptr(block_id)
+                + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_hidden_size(config_));
+            std::memcpy(key_dst, k_ptr + row_offset, kv_token_bytes);
+            std::memcpy(value_dst, v_ptr + row_offset, kv_token_bytes);
+        }
+
+        std::vector<float> scores;
+        for (int64_t row = 0; row < rows; ++row)
+        {
+            const int32_t seq_index = seq_index_ptr[row];
+            const int32_t target_position = positions_ptr[row];
+            if (target_position < 0 || target_position >= context_ptr[seq_index])
+            {
+                throw std::runtime_error("LlamaSelfAttention::compute_attention: target position exceeds context length.");
+            }
+
+            const int32_t context_len = target_position + 1;
+            scores.assign(static_cast<size_t>(context_len), -std::numeric_limits<float>::infinity());
+            const size_t q_row_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size);
+            for (int32_t q_head = 0; q_head < config_.num_attention_heads; ++q_head)
+            {
+                const int32_t kv_head = q_head / group_size;
+                float max_score = -std::numeric_limits<float>::infinity();
+                for (int32_t src_pos = 0; src_pos <= target_position; ++src_pos)
+                {
+                    const int32_t block_id = block_id_for(seq_index, src_pos);
+                    const int32_t token_offset = src_pos % metadata.block_size_tokens;
+                    const float* key_base = k_block_ptr(block_id)
+                        + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_hidden_size(config_));
+
+                    float score = 0.0f;
+                    for (int32_t dim = 0; dim < config_.head_dim; ++dim)
+                    {
+                        const size_t q_index =
+                            q_row_offset + static_cast<size_t>(q_head * config_.head_dim + dim);
+                        const size_t k_index =
+                            static_cast<size_t>(kv_head * config_.head_dim + dim);
+                        score += q_ptr[q_index] * key_base[k_index];
+                    }
+                    score *= scale;
+                    scores[static_cast<size_t>(src_pos)] = score;
+                    max_score = std::max(max_score, score);
+                }
+
+                float score_sum = 0.0f;
+                for (int32_t src_pos = 0; src_pos <= target_position; ++src_pos)
+                {
+                    const float exp_score = std::exp(scores[static_cast<size_t>(src_pos)] - max_score);
+                    scores[static_cast<size_t>(src_pos)] = exp_score;
+                    score_sum += exp_score;
+                }
+                if (score_sum <= 0.0f)
+                {
+                    throw std::runtime_error("LlamaSelfAttention::compute_attention: no paged causal source tokens.");
+                }
+
+                for (int32_t dim = 0; dim < config_.head_dim; ++dim)
+                {
+                    float value = 0.0f;
+                    for (int32_t src_pos = 0; src_pos <= target_position; ++src_pos)
+                    {
+                        const int32_t block_id = block_id_for(seq_index, src_pos);
+                        const int32_t token_offset = src_pos % metadata.block_size_tokens;
+                        const float* value_base = v_block_ptr(block_id)
+                            + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_hidden_size(config_));
+                        const size_t v_index =
+                            static_cast<size_t>(kv_head * config_.head_dim + dim);
+                        value += (scores[static_cast<size_t>(src_pos)] / score_sum) * value_base[v_index];
+                    }
+                    const size_t out_index =
+                        q_row_offset + static_cast<size_t>(q_head * config_.head_dim + dim);
+                    out_ptr[out_index] = value;
+                }
+            }
+        }
+        return;
+    }
+
     std::vector<float> scores(static_cast<size_t>(rows), -std::numeric_limits<float>::infinity());
 
     for (int64_t row = 0; row < rows; ++row)
@@ -416,7 +601,7 @@ void LlamaDecoderLayer::load_weights(const WeightMap& weight_map, int layer_id)
     layer_id_ = layer_id;
     const std::string prefix = "model.layers." + std::to_string(layer_id) + ".";
     input_layernorm_.bind_weights(weight_map.get_tensor_as<float>(prefix + "input_layernorm.weight"));
-    self_attn_.load_weights(weight_map, prefix);
+    self_attn_.load_weights(weight_map, prefix, layer_id);
     post_attention_layernorm_.bind_weights(weight_map.get_tensor_as<float>(prefix + "post_attention_layernorm.weight"));
     mlp_.load_weights(weight_map, prefix);
 }

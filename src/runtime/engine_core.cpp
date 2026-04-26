@@ -30,7 +30,7 @@ EngineCore::EngineCore(const EngineArgs& args)
     : scheduler_(std::make_unique<Scheduler>(args)),
       executor_(std::make_unique<ModelExecutor>(
           args,
-          nullptr))
+          scheduler_->kv_cache()))
 {
     (void)args.tokenizer;
 

@@ -37,6 +37,7 @@ struct RequestData {
     std::vector<int32_t> new_token_ids; // 本轮要计算的新 token 集合
     int32_t num_computed_tokens = 0; // 已经计算过 kvcache 的 token 长度
     std::vector<int32_t> block_ids; // 该请求的映射表，将逻辑上的 block id 映射到物理块编号
+    std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id
 };
 
 /**
@@ -109,12 +110,18 @@ public:
         int32_t core_seq_id,
         bool kv_started,
         std::vector<int32_t>& block_table) const;
+    void refresh_block_tables(
+        int32_t core_seq_id,
+        bool kv_started,
+        std::vector<std::vector<int32_t>>& block_tables) const;
 
     bool allocate_slots(
         int32_t core_seq_id,
         bool kv_started,
         int32_t num_computed_tokens,
         int32_t num_new_tokens) const;
+
+    KVCache* kv_cache() const { return kv_; }
 
 private:
     std::unique_ptr<KVCache> owned_kv_;
@@ -145,6 +152,7 @@ public:
 
     // 返回是否有未完成的 Request
     bool has_unfinished_requests();
+    KVCache* kv_cache() const { return kvcache_manager.kv_cache(); }
 
 private:
     void _preempt_request(Request request);

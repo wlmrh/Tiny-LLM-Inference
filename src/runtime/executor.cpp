@@ -141,8 +141,9 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
         torch::Tensor input_tokens; // [num_total_tokens]
         torch::Tensor position_ids; // [num_total_tokens]
         torch::Tensor slot_mapping; // [num_total_tokens]
+        torch::Tensor seq_indices; // [num_total_tokens]
         torch::Tensor context_lens; // [num_seqs]
-        torch::Tensor block_tables; // [num_seqs, max_blocks_per_seq]
+        torch::Tensor block_tables; // [num_layers, num_seqs, max_blocks_per_seq]
     };
 
     std::vector<uint64_t> req_ids;
@@ -165,8 +166,9 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             prepared.input_tokens = torch::empty({0}, int_options);
             prepared.position_ids = torch::empty({0}, int_options);
             prepared.slot_mapping = torch::empty({0}, int_options);
+            prepared.seq_indices = torch::empty({0}, int_options);
             prepared.context_lens = torch::empty({0}, int_options);
-            prepared.block_tables = torch::empty({0, 0}, int_options);
+            prepared.block_tables = torch::empty({0, 0, 0}, int_options);
             return prepared;
         }
 
@@ -176,6 +178,7 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             throw std::runtime_error("ModelExecutor::execute_model: kv block_size_tokens must be positive.");
         }
 
+        int64_t num_layers = 0;
         int64_t max_blocks_per_seq = 0; // 所有 Request 中，分配到的最多的 block 数量
         int64_t checked_total_tokens = 0; // 已经检查过合法的 token 数量
 
@@ -212,13 +215,28 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
                 throw std::runtime_error("ModelExecutor::execute_model: new_token_ids is shorter than scheduled token budget.");
             }
 
-            if (req_data.block_ids.empty())
+            if (req_data.block_tables.empty())
             {
-                throw std::runtime_error("ModelExecutor::execute_model: block_ids must be non-empty for paged-attention metadata.");
+                throw std::runtime_error("ModelExecutor::execute_model: block_tables must be non-empty for paged-attention metadata.");
+            }
+            if (num_layers == 0)
+            {
+                num_layers = static_cast<int64_t>(req_data.block_tables.size());
+            }
+            else if (num_layers != static_cast<int64_t>(req_data.block_tables.size()))
+            {
+                throw std::runtime_error("ModelExecutor::execute_model: all requests must have same number of KV layers.");
+            }
+            for (const std::vector<int32_t>& layer_blocks : req_data.block_tables)
+            {
+                if (layer_blocks.empty())
+                {
+                    throw std::runtime_error("ModelExecutor::execute_model: each layer block table must be non-empty.");
+                }
+                max_blocks_per_seq = std::max(max_blocks_per_seq, static_cast<int64_t>(layer_blocks.size()));
             }
 
             checked_total_tokens += scheduled_tokens;
-            max_blocks_per_seq = std::max(max_blocks_per_seq, static_cast<int64_t>(req_data.block_ids.size()));
         }
 
         if (checked_total_tokens != total_tokens)
@@ -229,12 +247,14 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
         prepared.input_tokens = torch::empty({total_tokens}, int_options);
         prepared.position_ids = torch::empty({total_tokens}, int_options);
         prepared.slot_mapping = torch::empty({total_tokens}, int_options);
+        prepared.seq_indices = torch::empty({total_tokens}, int_options);
         prepared.context_lens = torch::empty({request_count}, int_options);
-        prepared.block_tables = torch::full({request_count, max_blocks_per_seq}, -1, int_options);
+        prepared.block_tables = torch::full({num_layers, request_count, max_blocks_per_seq}, -1, int_options);
 
         int32_t* input_ptr = prepared.input_tokens.data_ptr<int32_t>(); ///< input_ptr[i]: 展平后的 token ids
         int32_t* pos_ptr = prepared.position_ids.data_ptr<int32_t>(); ///< pos_ptr[i]: input_ptr 中第 i 个 token 在其请求中的位置
         int32_t* slot_ptr = prepared.slot_mapping.data_ptr<int32_t>(); ///< slot_ptr[i]: input_ptr 中第 i 个 token 在显存池中的位置
+        int32_t* seq_index_ptr = prepared.seq_indices.data_ptr<int32_t>();
         int32_t* context_ptr = prepared.context_lens.data_ptr<int32_t>(); ///< context_ptr[i]: 第 i 个请求完整长度
         int32_t* block_table_ptr = prepared.block_tables.data_ptr<int32_t>(); ///< 
 
@@ -249,11 +269,17 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             req_ids.push_back(req_data.req_id);
 
             context_ptr[seq_index] = req_data.num_computed_tokens + scheduled_tokens;
-            // 遍历当前 req_data 拥有的每一个物理 block，为其分配一个逻辑块号并映射到其真正的物理块号
-            for (size_t col = 0; col < req_data.block_ids.size(); ++col)
+            // 遍历当前 req_data 每层拥有的物理 block，为逻辑块号映射真正的物理块号
+            for (size_t layer = 0; layer < req_data.block_tables.size(); ++layer)
             {
-                // 将当前 Sequence 在 scheduler_output 中的全局 seq 编号映射到物理块编号
-                block_table_ptr[seq_index * max_blocks_per_seq + static_cast<int64_t>(col)] = req_data.block_ids[col];
+                const std::vector<int32_t>& layer_blocks = req_data.block_tables[layer];
+                for (size_t col = 0; col < layer_blocks.size(); ++col)
+                {
+                    block_table_ptr[
+                        static_cast<int64_t>(layer) * request_count * max_blocks_per_seq
+                        + seq_index * max_blocks_per_seq
+                        + static_cast<int64_t>(col)] = layer_blocks[col];
+                }
             }
 
             // 遍历该 SchedulerOuput 中每个等待计算的 token
@@ -262,12 +288,12 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
                 const int32_t position = req_data.num_computed_tokens + i;
                 const int32_t logical_block_index = position / block_size_tokens;
                 if (logical_block_index < 0
-                    || logical_block_index >= static_cast<int32_t>(req_data.block_ids.size()))
+                    || logical_block_index >= static_cast<int32_t>(req_data.block_tables[0].size()))
                 {
                     throw std::runtime_error("ModelExecutor::execute_model: logical block index is out of range.");
                 }
 
-                const int32_t physical_block_id = req_data.block_ids[static_cast<size_t>(logical_block_index)];
+                const int32_t physical_block_id = req_data.block_tables[0][static_cast<size_t>(logical_block_index)];
                 if (physical_block_id < 0)
                 {
                     throw std::runtime_error("ModelExecutor::execute_model: physical block id must be non-negative.");
@@ -276,6 +302,7 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
                 input_ptr[flat_token_index] = req_data.new_token_ids[static_cast<size_t>(i)];
                 pos_ptr[flat_token_index] = position;
                 slot_ptr[flat_token_index] = physical_block_id * block_size_tokens + (position % block_size_tokens);
+                seq_index_ptr[flat_token_index] = static_cast<int32_t>(seq_index);
                 core_seq_ids.push_back(core_seq_id);
                 ++flat_token_index;
             }
@@ -319,6 +346,7 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             prepared_inputs.input_tokens,
             prepared_inputs.position_ids,
             prepared_inputs.slot_mapping,
+            prepared_inputs.seq_indices,
             prepared_inputs.context_lens,
             prepared_inputs.block_tables,
             core_seq_ids,
@@ -348,6 +376,7 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
 std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens,
                                                       const Tensor& position_ids,
                                                       const Tensor& slot_mapping,
+                                                      const Tensor& seq_indices,
                                                       const Tensor& context_lens,
                                                       const Tensor& block_tables,
                                                       const std::vector<int32_t>& core_seq_ids,
@@ -356,7 +385,7 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
 {
     validate_handles();
 
-    if (!input_tokens.defined() || !position_ids.defined() || !slot_mapping.defined()
+    if (!input_tokens.defined() || !position_ids.defined() || !slot_mapping.defined() || !seq_indices.defined()
         || !context_lens.defined() || !block_tables.defined())
     {
         throw std::runtime_error("ModelExecutor::run_forward_batch: all prepared tensors must be defined.");
@@ -365,6 +394,7 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
     if (tensor_dtype(input_tokens) != DType::kInt32
         || tensor_dtype(position_ids) != DType::kInt32
         || tensor_dtype(slot_mapping) != DType::kInt32
+        || tensor_dtype(seq_indices) != DType::kInt32
         || tensor_dtype(context_lens) != DType::kInt32
         || tensor_dtype(block_tables) != DType::kInt32)
     {
@@ -374,23 +404,24 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
     const std::vector<int64_t> input_shape = tensor_shape(input_tokens);
     const std::vector<int64_t> pos_shape = tensor_shape(position_ids);
     const std::vector<int64_t> slot_shape = tensor_shape(slot_mapping);
+    const std::vector<int64_t> seq_index_shape = tensor_shape(seq_indices);
     const std::vector<int64_t> context_shape = tensor_shape(context_lens);
     const std::vector<int64_t> block_shape = tensor_shape(block_tables);
 
-    if (input_shape.size() != 1 || pos_shape.size() != 1 || slot_shape.size() != 1)
+    if (input_shape.size() != 1 || pos_shape.size() != 1 || slot_shape.size() != 1 || seq_index_shape.size() != 1)
     {
-        throw std::runtime_error("ModelExecutor::run_forward_batch: input_tokens/position_ids/slot_mapping must be rank-1.");
+        throw std::runtime_error("ModelExecutor::run_forward_batch: input_tokens/position_ids/slot_mapping/seq_indices must be rank-1.");
     }
     if (context_shape.size() != 1)
     {
         throw std::runtime_error("ModelExecutor::run_forward_batch: context_lens must be rank-1.");
     }
-    if (block_shape.size() != 2 || block_shape[0] != context_shape[0])
+    if (block_shape.size() != 3 || block_shape[1] != context_shape[0])
     {
-        throw std::runtime_error("ModelExecutor::run_forward_batch: block_tables must be rank-2 [num_seqs, max_blocks_per_seq].");
+        throw std::runtime_error("ModelExecutor::run_forward_batch: block_tables must be rank-3 [num_layers, num_seqs, max_blocks_per_seq].");
     }
 
-    if (input_shape[0] != pos_shape[0] || input_shape[0] != slot_shape[0])
+    if (input_shape[0] != pos_shape[0] || input_shape[0] != slot_shape[0] || input_shape[0] != seq_index_shape[0])
     {
         throw std::runtime_error("ModelExecutor::run_forward_batch: token tensor lengths must match.");
     }
@@ -453,7 +484,7 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
     }
 
     // 将参数写到 context 中
-    ops::set_paged_attention_runtime_metadata(slot_mapping, context_lens, block_tables, block_size_tokens);
+    ops::set_paged_attention_runtime_metadata(slot_mapping, seq_indices, context_lens, block_tables, block_size_tokens);
     struct MetadataGuard {
         ~MetadataGuard()
         {
