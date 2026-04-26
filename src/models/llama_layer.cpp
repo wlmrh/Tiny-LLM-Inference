@@ -1,13 +1,19 @@
 #include "tiny_llm/models/llama_decoder_layer.h"
 
-#include "tiny_llm/operators/paged_attention.h"
-
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace tiny_llm {
 
 namespace {
+
+int32_t kv_hidden_size(const LlamaConfig& config)
+{
+    return config.num_key_value_heads * config.head_dim;
+}
 
 void validate_cpu_tensor(const Tensor& tensor, const char* name)
 {
@@ -64,7 +70,7 @@ void validate_int_tensor_1d(const Tensor& tensor, int64_t size, const char* name
 
 LlamaSelfAttention::LlamaSelfAttention(const LlamaConfig& config)
     : config_(config),
-      qkv_proj_(config.hidden_size, config.hidden_size * 3),
+      qkv_proj_(config.hidden_size, config.hidden_size + 2 * kv_hidden_size(config)),
       o_proj_(config.hidden_size, config.hidden_size)
 {
 }
@@ -80,16 +86,16 @@ void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::st
     };
     qkv_descs_[1] = {
         weight_map.get_tensor_as<float>(prefix + "self_attn.k_proj.weight"),
-        config_.hidden_size,
+        kv_hidden_size(config_),
         config_.hidden_size,
         config_.hidden_size,
         modules::WeightLayout::kOutIn,
     };
     qkv_descs_[2] = {
         weight_map.get_tensor_as<float>(prefix + "self_attn.v_proj.weight"),
+        kv_hidden_size(config_),
         config_.hidden_size,
-        config_.hidden_size,
-        config_.hidden_size * 2,
+        config_.hidden_size + kv_hidden_size(config_),
         modules::WeightLayout::kOutIn,
     };
     qkv_proj_.bind_stacked_weights(qkv_descs_.data(), static_cast<int32_t>(qkv_descs_.size()));
@@ -110,8 +116,7 @@ void LlamaSelfAttention::forward(const Tensor& hidden_states,
     qkv_proj_.forward(hidden_states, buffers.qkv, ctx);
     split_qkv(buffers.qkv, buffers.q, buffers.k, buffers.v);
     apply_rope(positions, buffers.q, buffers.k);
-    combine_qkv(buffers.q, buffers.k, buffers.v, buffers.attn_input);
-    ops::attention_paged(buffers.attn_input, buffers.attn_output, ctx);
+    compute_attention(positions, buffers.q, buffers.k, buffers.v, buffers.attn_output);
     o_proj_.forward(buffers.attn_output, buffers.proj_output, ctx);
 }
 
@@ -122,10 +127,14 @@ void LlamaSelfAttention::validate_forward_inputs(const Tensor& hidden_states,
     const int64_t rows = hidden_states.size(0);
     validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaSelfAttention::hidden_states");
     validate_int_tensor_1d(positions, rows, "LlamaSelfAttention::positions");
-    validate_float_tensor_2d(buffers.qkv, rows, config_.hidden_size * 3, "LlamaSelfAttention::qkv");
+    validate_float_tensor_2d(
+        buffers.qkv,
+        rows,
+        config_.hidden_size + 2 * kv_hidden_size(config_),
+        "LlamaSelfAttention::qkv");
     validate_float_tensor_2d(buffers.q, rows, config_.hidden_size, "LlamaSelfAttention::q");
-    validate_float_tensor_2d(buffers.k, rows, config_.hidden_size, "LlamaSelfAttention::k");
-    validate_float_tensor_2d(buffers.v, rows, config_.hidden_size, "LlamaSelfAttention::v");
+    validate_float_tensor_2d(buffers.k, rows, kv_hidden_size(config_), "LlamaSelfAttention::k");
+    validate_float_tensor_2d(buffers.v, rows, kv_hidden_size(config_), "LlamaSelfAttention::v");
     validate_float_tensor_2d(buffers.attn_input, rows, config_.hidden_size, "LlamaSelfAttention::attn_input");
     validate_float_tensor_2d(buffers.attn_output, rows, config_.hidden_size, "LlamaSelfAttention::attn_output");
     validate_float_tensor_2d(buffers.proj_output, rows, config_.hidden_size, "LlamaSelfAttention::proj_output");
@@ -142,15 +151,20 @@ void LlamaSelfAttention::split_qkv(const Tensor& qkv, Tensor& q, Tensor& k, Tens
 
     for (int64_t row = 0; row < rows; ++row)
     {
-        const size_t qkv_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size * 3);
+        const size_t qkv_offset =
+            static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size + 2 * kv_hidden_size(config_));
         const size_t out_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size);
+        const size_t kv_out_offset = static_cast<size_t>(row) * static_cast<size_t>(kv_hidden_size(config_));
         for (int32_t col = 0; col < config_.hidden_size; ++col)
         {
             q_ptr[out_offset + static_cast<size_t>(col)] = qkv_ptr[qkv_offset + static_cast<size_t>(col)];
-            k_ptr[out_offset + static_cast<size_t>(col)] =
+        }
+        for (int32_t col = 0; col < kv_hidden_size(config_); ++col)
+        {
+            k_ptr[kv_out_offset + static_cast<size_t>(col)] =
                 qkv_ptr[qkv_offset + static_cast<size_t>(config_.hidden_size + col)];
-            v_ptr[out_offset + static_cast<size_t>(col)] =
-                qkv_ptr[qkv_offset + static_cast<size_t>(config_.hidden_size * 2 + col)];
+            v_ptr[kv_out_offset + static_cast<size_t>(col)] =
+                qkv_ptr[qkv_offset + static_cast<size_t>(config_.hidden_size + kv_hidden_size(config_) + col)];
         }
     }
 }
@@ -173,11 +187,14 @@ void LlamaSelfAttention::apply_rope(const Tensor& positions, Tensor& q, Tensor& 
         for (int32_t head = 0; head < config_.num_attention_heads; ++head)
         {
             const int32_t head_offset = head * config_.head_dim;
-            for (int32_t dim = 0; dim + 1 < config_.head_dim; dim += 2)
+            const int32_t rotary_half = config_.head_dim / 2;
+            for (int32_t dim = 0; dim < rotary_half; ++dim)
             {
                 const int32_t idx0 = head_offset + dim;
-                const int32_t idx1 = idx0 + 1;
-                const float theta = position / std::pow(config_.rope_theta, static_cast<float>(dim) / static_cast<float>(config_.head_dim));
+                const int32_t idx1 = head_offset + rotary_half + dim;
+                const float theta = position / std::pow(
+                    config_.rope_theta,
+                    static_cast<float>(2 * dim) / static_cast<float>(config_.head_dim));
                 const float cos_theta = std::cos(theta);
                 const float sin_theta = std::sin(theta);
 
@@ -186,33 +203,129 @@ void LlamaSelfAttention::apply_rope(const Tensor& positions, Tensor& q, Tensor& 
                 const float qv0 = q_ptr[q0];
                 const float qv1 = q_ptr[q1];
                 q_ptr[q0] = qv0 * cos_theta - qv1 * sin_theta;
-                q_ptr[q1] = qv0 * sin_theta + qv1 * cos_theta;
+                q_ptr[q1] = qv1 * cos_theta + qv0 * sin_theta;
+            }
+        }
 
-                const size_t k0 = row_offset + static_cast<size_t>(idx0);
-                const size_t k1 = row_offset + static_cast<size_t>(idx1);
+        const size_t kv_row_offset = static_cast<size_t>(row) * static_cast<size_t>(kv_hidden_size(config_));
+        for (int32_t head = 0; head < config_.num_key_value_heads; ++head)
+        {
+            const int32_t head_offset = head * config_.head_dim;
+            const int32_t rotary_half = config_.head_dim / 2;
+            for (int32_t dim = 0; dim < rotary_half; ++dim)
+            {
+                const int32_t idx0 = head_offset + dim;
+                const int32_t idx1 = head_offset + rotary_half + dim;
+                const float theta = position / std::pow(
+                    config_.rope_theta,
+                    static_cast<float>(2 * dim) / static_cast<float>(config_.head_dim));
+                const float cos_theta = std::cos(theta);
+                const float sin_theta = std::sin(theta);
+
+                const size_t k0 = kv_row_offset + static_cast<size_t>(idx0);
+                const size_t k1 = kv_row_offset + static_cast<size_t>(idx1);
                 const float kv0 = k_ptr[k0];
                 const float kv1 = k_ptr[k1];
                 k_ptr[k0] = kv0 * cos_theta - kv1 * sin_theta;
-                k_ptr[k1] = kv0 * sin_theta + kv1 * cos_theta;
+                k_ptr[k1] = kv1 * cos_theta + kv0 * sin_theta;
             }
         }
     }
 }
 
-void LlamaSelfAttention::combine_qkv(const Tensor& q,
-                                     const Tensor& k,
-                                     const Tensor& v,
-                                     Tensor& combined) const
+void LlamaSelfAttention::compute_attention(const Tensor& positions,
+                                           const Tensor& q,
+                                           const Tensor& k,
+                                           const Tensor& v,
+                                           Tensor& out) const
 {
-    validate_cpu_tensor(q, "LlamaSelfAttention::combine_qkv");
-    const size_t count = tensor_numel(q);
+    validate_cpu_tensor(positions, "LlamaSelfAttention::compute_attention");
+    validate_cpu_tensor(q, "LlamaSelfAttention::compute_attention");
+    validate_cpu_tensor(k, "LlamaSelfAttention::compute_attention");
+    validate_cpu_tensor(v, "LlamaSelfAttention::compute_attention");
+    validate_cpu_tensor(out, "LlamaSelfAttention::compute_attention");
+
+    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
     const float* q_ptr = static_cast<const float*>(tensor_data(q));
     const float* k_ptr = static_cast<const float*>(tensor_data(k));
     const float* v_ptr = static_cast<const float*>(tensor_data(v));
-    float* out_ptr = static_cast<float*>(tensor_data(combined));
-    for (size_t i = 0; i < count; ++i)
+    float* out_ptr = static_cast<float*>(tensor_data(out));
+
+    const int32_t group_size = config_.num_attention_heads / config_.num_key_value_heads;
+    const int64_t rows = q.size(0);
+    const float scale = 1.0f / std::sqrt(static_cast<float>(config_.head_dim));
+    std::vector<float> scores(static_cast<size_t>(rows), -std::numeric_limits<float>::infinity());
+
+    for (int64_t row = 0; row < rows; ++row)
     {
-        out_ptr[i] = (q_ptr[i] + k_ptr[i] + v_ptr[i]) / 3.0f;
+        const size_t q_row_offset = static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size);
+        const int32_t target_position = positions_ptr[row];
+        for (int32_t q_head = 0; q_head < config_.num_attention_heads; ++q_head)
+        {
+            const int32_t kv_head = q_head / group_size;
+            float max_score = -std::numeric_limits<float>::infinity();
+
+            for (int64_t src = 0; src < rows; ++src)
+            {
+                if (src > row || positions_ptr[src] > target_position)
+                {
+                    scores[static_cast<size_t>(src)] = -std::numeric_limits<float>::infinity();
+                    continue;
+                }
+
+                const size_t k_row_offset =
+                    static_cast<size_t>(src) * static_cast<size_t>(kv_hidden_size(config_));
+                float score = 0.0f;
+                for (int32_t dim = 0; dim < config_.head_dim; ++dim)
+                {
+                    const size_t q_index =
+                        q_row_offset + static_cast<size_t>(q_head * config_.head_dim + dim);
+                    const size_t k_index =
+                        k_row_offset + static_cast<size_t>(kv_head * config_.head_dim + dim);
+                    score += q_ptr[q_index] * k_ptr[k_index];
+                }
+                score *= scale;
+                scores[static_cast<size_t>(src)] = score;
+                max_score = std::max(max_score, score);
+            }
+
+            float score_sum = 0.0f;
+            for (int64_t src = 0; src < rows; ++src)
+            {
+                if (scores[static_cast<size_t>(src)] == -std::numeric_limits<float>::infinity())
+                {
+                    continue;
+                }
+                const float exp_score = std::exp(scores[static_cast<size_t>(src)] - max_score);
+                scores[static_cast<size_t>(src)] = exp_score;
+                score_sum += exp_score;
+            }
+            if (score_sum <= 0.0f)
+            {
+                throw std::runtime_error("LlamaSelfAttention::compute_attention: no causal source tokens.");
+            }
+
+            for (int32_t dim = 0; dim < config_.head_dim; ++dim)
+            {
+                float value = 0.0f;
+                for (int64_t src = 0; src < rows; ++src)
+                {
+                    const float exp_score = scores[static_cast<size_t>(src)];
+                    if (exp_score == -std::numeric_limits<float>::infinity())
+                    {
+                        continue;
+                    }
+                    const size_t v_row_offset =
+                        static_cast<size_t>(src) * static_cast<size_t>(kv_hidden_size(config_));
+                    const size_t v_index =
+                        v_row_offset + static_cast<size_t>(kv_head * config_.head_dim + dim);
+                    value += (exp_score / score_sum) * v_ptr[v_index];
+                }
+                const size_t out_index =
+                    q_row_offset + static_cast<size_t>(q_head * config_.head_dim + dim);
+                out_ptr[out_index] = value;
+            }
+        }
     }
 }
 

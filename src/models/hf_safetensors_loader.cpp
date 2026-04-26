@@ -74,30 +74,29 @@ size_t checked_mul(size_t lhs, size_t rhs, const std::string& error_prefix)
     return lhs * rhs;
 }
 
-DType parse_dtype(const std::string& dtype_token)
+struct ParsedDType {
+    DType runtime_dtype = DType::kFloat32;
+    size_t storage_bytes = sizeof(float);
+};
+
+ParsedDType parse_dtype(const std::string& dtype_token)
 {
     if (dtype_token == "F32")
     {
-        return DType::kFloat32;
+        return ParsedDType{DType::kFloat32, sizeof(float)};
+    }
+    if (dtype_token == "F16" || dtype_token == "BF16")
+    {
+        return ParsedDType{DType::kFloat32, sizeof(uint16_t)};
     }
 
     throw std::runtime_error(
-        "HFSafeTensorLoader::from_file: unsupported dtype token: " + dtype_token + ". Only F32 is supported now.");
+        "HFSafeTensorLoader::from_file: unsupported dtype token: " + dtype_token + ".");
 }
 
-size_t dtype_nbytes(DType dtype)
+size_t dtype_nbytes(const ParsedDType& dtype)
 {
-    switch (dtype)
-    {
-        case DType::kFloat32:
-            return sizeof(float);
-        case DType::kFloat16:
-            return sizeof(uint16_t);
-        case DType::kInt32:
-            return sizeof(int32_t);
-    }
-
-    throw std::runtime_error("HFSafeTensorLoader::from_file: unsupported dtype.");
+    return dtype.storage_bytes;
 }
 
 std::vector<int64_t> parse_shape(const hf_json::Value& value)
@@ -143,7 +142,7 @@ std::pair<size_t, size_t> parse_offsets(const hf_json::Value& value)
     return {static_cast<size_t>(begin), static_cast<size_t>(end)};
 }
 
-size_t tensor_nbytes_from_shape(const std::vector<int64_t>& shape, DType dtype)
+size_t tensor_nbytes_from_shape(const std::vector<int64_t>& shape, const ParsedDType& dtype)
 {
     size_t element_count = 1;
     for (int64_t dim : shape)
@@ -220,7 +219,7 @@ HFSafeTensorLoader HFSafeTensorLoader::from_file(const std::string& path)
             "dtype",
             "HFSafeTensorLoader::from_file")
                                        .as_string("HFSafeTensorLoader::from_file: dtype must be string");
-        const DType dtype = parse_dtype(dtype_token);
+        const ParsedDType dtype = parse_dtype(dtype_token);
 
         const std::vector<int64_t> shape = parse_shape(
             hf_json::require_object_field(tensor_descriptor,
@@ -242,7 +241,8 @@ HFSafeTensorLoader HFSafeTensorLoader::from_file(const std::string& path)
 
         HFSafeTensorInfo info;
         info.shape = shape;
-        info.dtype = dtype;
+        info.dtype = dtype.runtime_dtype;
+        info.storage_dtype = dtype_token;
         info.byte_offset = offset_begin;
         info.byte_size = actual_bytes;
 
@@ -331,7 +331,21 @@ Tensor HFSafeTensorLoader::tensor(const std::string& key) const
     const size_t absolute_offset = data_base_offset_ + info.byte_offset;
     const uint8_t* data_ptr = raw_file_.data() + absolute_offset;
 
-    if (info.dtype == DType::kFloat32
+    if (info.storage_dtype == "BF16")
+    {
+        const auto source_options = torch::TensorOptions().dtype(torch::kBFloat16).device(c10::kCPU);
+        Tensor source = torch::from_blob(const_cast<uint8_t*>(data_ptr), info.shape, source_options);
+        return source.to(torch::kFloat32).contiguous();
+    }
+
+    if (info.storage_dtype == "F16")
+    {
+        const auto source_options = torch::TensorOptions().dtype(torch::kFloat16).device(c10::kCPU);
+        Tensor source = torch::from_blob(const_cast<uint8_t*>(data_ptr), info.shape, source_options);
+        return source.to(torch::kFloat32).contiguous();
+    }
+
+    if (info.storage_dtype == "F32"
         && (reinterpret_cast<uintptr_t>(data_ptr) % alignof(float)) != 0)
     {
         Tensor aligned_tensor = torch::empty(info.shape, options);

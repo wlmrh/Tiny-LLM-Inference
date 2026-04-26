@@ -13,6 +13,7 @@ namespace tiny_llm {
 struct HFSafeTensorInfo {
     std::vector<int64_t> shape;
     DType dtype = DType::kFloat32;
+    std::string storage_dtype = "F32";
     size_t byte_offset = 0;
     size_t byte_size = 0;
 };

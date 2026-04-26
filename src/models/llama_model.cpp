@@ -28,6 +28,11 @@ Tensor make_owned_tensor(const std::vector<int64_t>& shape, DType dtype)
     return torch::empty(shape, torch::TensorOptions().dtype(to_torch_scalar_type(dtype)).device(c10::kCPU));
 }
 
+int32_t kv_hidden_size(const LlamaConfig& config)
+{
+    return config.num_key_value_heads * config.head_dim;
+}
+
 } // namespace
 
 LlamaModel::LlamaModel(LlamaConfig config, WeightMap weight_map)
@@ -64,10 +69,11 @@ void LlamaModel::allocate_buffers(int max_batch_size)
     buffers_.norm_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
     buffers_.layer.residual = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
     buffers_.layer.norm_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.attention.qkv = make_owned_tensor({max_batch_size, config_.hidden_size * 3}, DType::kFloat32);
+    buffers_.layer.attention.qkv =
+        make_owned_tensor({max_batch_size, config_.hidden_size + 2 * kv_hidden_size(config_)}, DType::kFloat32);
     buffers_.layer.attention.q = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.attention.k = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.attention.v = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
+    buffers_.layer.attention.k = make_owned_tensor({max_batch_size, kv_hidden_size(config_)}, DType::kFloat32);
+    buffers_.layer.attention.v = make_owned_tensor({max_batch_size, kv_hidden_size(config_)}, DType::kFloat32);
     buffers_.layer.attention.attn_input = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
     buffers_.layer.attention.attn_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
     buffers_.layer.attention.proj_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
@@ -162,8 +168,11 @@ void LlamaModel::validate_weight_shapes()
 void LlamaModel::bind_top_level_weights()
 {
     final_norm_.bind_weights(weight_map_.get_tensor_as<float>("model.norm.weight"));
+    const std::string lm_head_key = weight_map_.contains("lm_head.weight")
+        ? std::string("lm_head.weight")
+        : std::string("model.embed_tokens.weight");
     lm_head_.bind_weight(
-        weight_map_.get_tensor_as<float>("lm_head.weight"),
+        weight_map_.get_tensor_as<float>(lm_head_key),
         config_.vocab_size,
         config_.hidden_size,
         modules::WeightLayout::kOutIn);
@@ -226,10 +235,11 @@ LlamaModelBuffers LlamaModel::make_batch_buffers(int batch_size) const
     out.norm_output = make_batch_view_2d(buffers_.norm_output, batch_size, config_.hidden_size);
     out.layer.residual = make_batch_view_2d(buffers_.layer.residual, batch_size, config_.hidden_size);
     out.layer.norm_output = make_batch_view_2d(buffers_.layer.norm_output, batch_size, config_.hidden_size);
-    out.layer.attention.qkv = make_batch_view_2d(buffers_.layer.attention.qkv, batch_size, config_.hidden_size * 3);
+    out.layer.attention.qkv =
+        make_batch_view_2d(buffers_.layer.attention.qkv, batch_size, config_.hidden_size + 2 * kv_hidden_size(config_));
     out.layer.attention.q = make_batch_view_2d(buffers_.layer.attention.q, batch_size, config_.hidden_size);
-    out.layer.attention.k = make_batch_view_2d(buffers_.layer.attention.k, batch_size, config_.hidden_size);
-    out.layer.attention.v = make_batch_view_2d(buffers_.layer.attention.v, batch_size, config_.hidden_size);
+    out.layer.attention.k = make_batch_view_2d(buffers_.layer.attention.k, batch_size, kv_hidden_size(config_));
+    out.layer.attention.v = make_batch_view_2d(buffers_.layer.attention.v, batch_size, kv_hidden_size(config_));
     out.layer.attention.attn_input = make_batch_view_2d(buffers_.layer.attention.attn_input, batch_size, config_.hidden_size);
     out.layer.attention.attn_output = make_batch_view_2d(buffers_.layer.attention.attn_output, batch_size, config_.hidden_size);
     out.layer.attention.proj_output = make_batch_view_2d(buffers_.layer.attention.proj_output, batch_size, config_.hidden_size);

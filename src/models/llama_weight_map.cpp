@@ -26,6 +26,11 @@ std::string shape_to_string(const std::vector<int64_t>& shape)
     return out;
 }
 
+int32_t kv_hidden_size(const LlamaConfig& config)
+{
+    return config.num_key_value_heads * config.head_dim;
+}
+
 Tensor load_checked_tensor(const HFSafeTensorLoader& loader,
                            const std::string& key,
                            const std::vector<int64_t>& expected_shape)
@@ -193,11 +198,11 @@ MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,
         layer.k_proj = load_checked_tensor(
             weight_map,
             prefix + "self_attn.k_proj.weight",
-            {config.hidden_size, config.hidden_size});
+            {kv_hidden_size(config), config.hidden_size});
         layer.v_proj = load_checked_tensor(
             weight_map,
             prefix + "self_attn.v_proj.weight",
-            {config.hidden_size, config.hidden_size});
+            {kv_hidden_size(config), config.hidden_size});
         layer.o_proj = load_checked_tensor(
             weight_map,
             prefix + "self_attn.o_proj.weight",
@@ -223,7 +228,10 @@ MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,
     }
 
     weights.norm = load_checked_tensor(weight_map, "model.norm.weight", {config.hidden_size});
-    weights.lm_head = load_checked_tensor(weight_map, "lm_head.weight", {config.vocab_size, config.hidden_size});
+    weights.lm_head = load_checked_tensor(
+        weight_map,
+        weight_map.contains("lm_head.weight") ? "lm_head.weight" : "model.embed_tokens.weight",
+        {config.vocab_size, config.hidden_size});
 
     return weights;
 }

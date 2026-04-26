@@ -54,7 +54,11 @@ public:
 private:
     void split_qkv(const Tensor& qkv, Tensor& q, Tensor& k, Tensor& v) const;
     void apply_rope(const Tensor& positions, Tensor& q, Tensor& k) const;
-    void combine_qkv(const Tensor& q, const Tensor& k, const Tensor& v, Tensor& combined) const;
+    void compute_attention(const Tensor& positions,
+                           const Tensor& q,
+                           const Tensor& k,
+                           const Tensor& v,
+                           Tensor& out) const;
 
     LlamaConfig config_;
     std::array<modules::StackedWeightDesc, 3> qkv_descs_{};
