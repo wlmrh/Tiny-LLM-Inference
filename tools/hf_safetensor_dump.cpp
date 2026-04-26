@@ -92,7 +92,7 @@ void print_tensor_digest(const tiny_llm::HFSafeTensorLoader& loader, const std::
 
 int main(int argc, char** argv)
 {
-    const std::string model_dir = (argc > 1) ? argv[1] : "/Users/tangqi/weights";
+    const std::string model_dir = (argc > 1) ? argv[1] : "/Users/tangqi/models/smollm2-135M";
     const std::string weight_file = (argc > 2) ? argv[2] : "model.safetensors";
 
     try
@@ -114,8 +114,8 @@ int main(int argc, char** argv)
             "model.layers.0.post_attention_layernorm.weight",
             "model.layers.0.mlp.gate_proj.weight",
             "model.norm.weight",
-            "lm_head.weight",
         };
+        keys.push_back(loader.has_tensor("lm_head.weight") ? "lm_head.weight" : "model.embed_tokens.weight");
 
         if (config.num_hidden_layers > 1)
         {

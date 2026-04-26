@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import math
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List
 
 import torch
@@ -70,7 +72,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Compare Tiny-LLM safetensor loader output with PyTorch")
     parser.add_argument(
         "--model-dir",
-        default="/Users/tangqi/weights",
+        default=os.environ.get("TINYLLM_HF_TINY_LLAMA_DIR", "~/models/smollm2-135M"),
         help="HuggingFace model directory that contains model.safetensors",
     )
     parser.add_argument(
@@ -86,6 +88,7 @@ def main() -> int:
     parser.add_argument("--atol", type=float, default=1e-6)
     parser.add_argument("--rtol", type=float, default=1e-6)
     args = parser.parse_args()
+    args.model_dir = str(Path(args.model_dir).expanduser())
 
     run = subprocess.run(
         [args.dump_binary, args.model_dir, args.weight_file],

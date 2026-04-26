@@ -14,6 +14,30 @@
 #error "TINYLLM_SOURCE_DIR must be defined by CMake for test assets."
 #endif
 
+std::filesystem::path expand_user_path(std::string path_str) {
+    if (path_str.empty()) return {};
+
+    // 检查是否以 ~ 开头
+    if (path_str[0] == '~') {
+        const char* home = std::getenv("HOME"); // Linux/macOS
+        if (!home) {
+            // 如果是在 Windows 环境下调试
+            const char* drive = std::getenv("HOMEDRIVE");
+            const char* home_path = std::getenv("HOMEPATH");
+            if (drive && home_path) {
+                return std::filesystem::path(std::string(drive) + std::string(home_path)) / path_str.substr(2);
+            }
+            return path_str; // 实在找不到，原样返回
+        }
+        
+        // 拼接路径：注意处理 ~/models 和 ~models 两种情况
+        if (path_str.size() == 1) return std::filesystem::path(home);
+        return std::filesystem::path(home) / path_str.substr(2); // 跳过 "~/"
+    }
+    
+    return std::filesystem::path(path_str);
+}
+
 int main(int argc, char** argv)
 {
     std::string hf_model_dir;
@@ -33,6 +57,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    hf_model_dir = expand_user_path(hf_model_dir);
+
     if (!std::filesystem::exists(hf_model_dir)) {
         std::cerr << "❌ 错误: 模型文件夹不存在 -> " << hf_model_dir << "\n";
         return 1;
@@ -50,8 +76,9 @@ int main(int argc, char** argv)
         std::cerr << "❌ 错误: 找不到 tokenizer.json\n";
         return 1;
     }
-    if (!std::filesystem::exists(hf_model_dir + "/tokenizer.model")) {
-        std::cerr << "❌ 错误: 找不到 tokenizer.model\n";
+    if (!std::filesystem::exists(hf_model_dir + "/tokenizer.json")
+        && !std::filesystem::exists(hf_model_dir + "/tokenizer.model")) {
+        std::cerr << "❌ 错误: 找不到 tokenizer.json 或 tokenizer.model\n";
         return 1;
     }
 
