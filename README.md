@@ -1,153 +1,286 @@
 # Tiny-LLM-Inference
 
-Tiny-LLM-Inference 是一个面向学习和工程验证的轻量级 LLM 推理项目，当前目标是维护一条可运行、可调试、可扩展的最小推理链路：
+Tiny-LLM-Inference is a compact C++17 inference engine inspired by vLLM. It is designed for learning, debugging, and validating the core mechanics of modern decoder-only LLM serving without hiding the interesting parts behind a large framework.
 
-- 请求接入
-- prefill / decode 调度
-- 模型前向
-- 采样与输出
+The current implementation focuses on a single-process runtime for small LLaMA-family models, with SmolLM2-135M as the main Hugging Face reference model.
 
-## 当前状态
+## Highlights
 
-项目当前实现聚焦 Stage 2（Minimal Runtime Chain）：
+- Frontend/core runtime split:
+  - `LLMEngine` owns text/tokenizer-facing request handling.
+  - `EngineCore` runs scheduling, model execution, and output updates over token IDs.
+- FCFS continuous batching with chunked prefill, one-token decode steps, and simplified tail preemption.
+- Hugging Face LLaMA/SmolLM2 loading from `config.json`, `model.safetensors`, and `tokenizer.json`.
+- Standard LLaMA building blocks:
+  - RoPE
+  - RMSNorm
+  - SwiGLU MLP
+  - grouped-query attention (GQA)
+  - tied or untied LM heads, depending on the model config
+- CPU float32 runtime KV cache with paged metadata and physical KV block storage.
+- Tensor alignment tools for comparing C++ intermediate tensors, logits, and greedy generation against PyTorch/Transformers.
+- Optional CUDA build path for allocator/operator baselines. The primary validated path today is CPU.
 
-- 运行时采用 Frontend + Core 分层：
-  - `LLMEngine` 负责文本输入输出编排
-  - `EngineCore` 负责调度与执行
-- 调度器采用 FCFS，支持 chunked prefill 和简化抢占。
-- 执行器按步构造扁平输入（不使用持久 InputBatch）：
-  - `input_tokens`
-  - `position_ids`
-  - `slot_mapping`
-  - `context_lens`
-  - `block_tables`
-- paged attention 目前是基线实现：
-  - 前向路径保留
-  - 对 metadata 一致性进行强校验
-  - CUDA kernel 仍为正确性优先的 baseline
-- 已支持两类 tokenizer：
-  - `WhitespaceTokenizer`（动态词表）
-  - `WordPieceTokenizer`（固定词表，来自 `vocab.txt`）
-- 已支持 `TinyEmbeddingLM` 文本 checkpoint (`tiny_lm_checkpoint_v1`) 加载。
-- 核心 Tensor 抽象已切换到 `torch::Tensor`（通过 libtorch）。
+## Repository Layout
 
-## 代码结构
+```text
+include/tiny_llm/        Public C++ headers
+src/                     Engine, runtime, operators, models, and backends
+examples/                Small runnable examples
+tools/                   Standalone C++ debugging utilities
+scripts/                 Python comparison and inspection scripts
+tests/                   CTest entry points
+docs/                    Design notes and implementation plans
+assets/tiny_lm/          Tiny toy model assets
+```
 
-- `include/tiny_llm/`
-  - 公共 API（core / operators / models / runtime）
-- `src/`
-  - 对应实现层
-- `assets/tiny_lm/`
-  - `vocab.txt`
-  - `tiny_lm_checkpoint.txt`
-- `examples/`
-  - `llama_inference.cpp`
-  - `tiny_lm_inference.cpp`
-- `tests/`
-  - 当前启用 `test_tiny_lm_runtime.cpp`
+Debug utilities intentionally live under `tools/`, not `tests/`. The `tests/` tree is reserved for automated test entry points.
 
-## 构建依赖
+## Dependencies
 
-必需：
+Required:
 
-- CMake >= 3.18
-- C++17 编译器
-- libtorch（C++ API）
+- CMake 3.18 or newer
+- A C++17 compiler
+- Python 3, recommended for PyTorch discovery and comparison scripts
+- PyTorch/libtorch
+- Rust `cargo`, required by `tokenizers-cpp`
 
-可选：
+Optional:
 
-- CUDA Toolkit（开启 `TINYLLM_ENABLE_CUDA=ON` 时）
-- cuBLAS（CUDA 构建时）
+- CUDA Toolkit and cuBLAS when building with `TINYLLM_ENABLE_CUDA=ON`
+- Python packages for reference comparisons:
+  - `torch`
+  - `transformers`
+  - `safetensors`
 
-说明：
+CMake first tries `find_package(Torch)`. If Torch is not found, it tries Python's `torch.utils.cmake_prefix_path`, then `$HOME/libtorch*`.
 
-- CMake 会优先 `find_package(Torch)`。
-- 若失败，会尝试：
-  - Python `torch.utils.cmake_prefix_path`
-  - `$HOME/libtorch` 与 `$HOME/libtorch*`
+## Build
 
-## 构建
-
-### CPU-only
+CPU build:
 
 ```bash
 cmake -S . -B build -DTINYLLM_ENABLE_CUDA=OFF
 cmake --build build -j
 ```
 
-### CUDA
+CUDA build:
 
 ```bash
 cmake -S . -B build -DTINYLLM_ENABLE_CUDA=ON
 cmake --build build -j
 ```
 
-### 手动指定 Torch 路径（可选）
+Manually point CMake at libtorch:
 
 ```bash
 cmake -S . -B build -DTINYLLM_ENABLE_CUDA=OFF -DCMAKE_PREFIX_PATH=/path/to/libtorch
 cmake --build build -j
 ```
 
-## 运行示例
+Use Python PyTorch as the libtorch provider:
 
-### TinyEmbeddingLM + WordPiece
+```bash
+cmake -S . -B build \
+  -DCMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+cmake --build build -j
+```
+
+## Model Setup
+
+The LLaMA-family debugging and validation flow expects a local Hugging Face model directory containing at least:
+
+```text
+config.json
+model.safetensors
+tokenizer.json
+```
+
+For the main validated setup, place SmolLM2-135M at:
+
+```bash
+~/models/smollm2-135M
+```
+
+or pass the model directory explicitly to the tools/scripts.
+
+## Run Examples
+
+Toy TinyEmbeddingLM example:
 
 ```bash
 ./build/tiny_lm_inference
 ```
 
-可传入自定义参数：
-
-```bash
-./build/tiny_lm_inference assets/tiny_lm/vocab.txt assets/tiny_lm/tiny_lm_checkpoint.txt "hello"
-```
-
-### MiniLLaMA + Whitespace
+MiniLLaMA example:
 
 ```bash
 ./build/llama_inference
 ```
 
-## 运行测试
+Run Hugging Face LLaMA/SmolLM2 greedy generation through the engine:
 
 ```bash
-cd build
-ctest --output-on-failure
+./build/tools/llama_engine_generate \
+  ~/models/smollm2-135M \
+  8 \
+  hello \
+  "tiny llm inference"
 ```
 
-当前默认启用测试：
+The tool prints one JSON object per prompt, including generated token IDs and decoded output text.
 
-- `test_tiny_lm_runtime`
+## Test
 
-## 关键运行时契约
+Run all registered CTest tests:
 
-- `SchedulerOutput` 统一使用：
-  - `scheduled_reqs`
-  - `num_scheduled_tokens`
-  - `total_num_scheduled_tokens`
-  - `finished_req_ids`
-  - `preempted_req_ids`
-- `ModelExecutor` 只对每个序列本步最后一个 token 行采样。
-- KV 资源分配由 Scheduler / KVCacheManager 负责，执行器不再调用 `ensure_capacity`。
+```bash
+ctest --test-dir build --output-on-failure
+```
 
-## 当前边界与限制
+Run the runtime smoke test with a local SmolLM2 model:
 
-- 单进程、单设备优先（不包含分布式执行）。
-- 调度策略以最小可用 FCFS 为主。
-- paged attention 计算内核为基线版本，优先契约正确性与可诊断性。
+```bash
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
+ctest --test-dir build --output-on-failure
+```
 
-## 常见问题
+The Transformers comparison tests return CTest skip code `77` when their model path or Python dependencies are unavailable.
 
-### Torch not found
+## Compare Against Transformers
 
-报错示例：`Torch not found. Set Torch_DIR/CMAKE_PREFIX_PATH to libtorch, or install Python torch.`
+The project includes tools and scripts for tensor alignment against PyTorch/Transformers. These are the preferred diagnostics when changing model loading, operators, attention, or scheduling.
 
-解决方式：
+Compare safetensors loading:
 
-- 设置 `CMAKE_PREFIX_PATH` 或 `Torch_DIR`
-- 或安装 Python `torch` 让 CMake 自动探测
+```bash
+python3 scripts/compare_hf_safetensor_with_pytorch.py \
+  --dump-binary build/tools/hf_safetensor_dump \
+  --model-dir ~/models/smollm2-135M
+```
 
-### macOS 上 libtorch 依赖 libomp 路径不一致
+Compare logits:
 
-如遇 `libtorch_cpu.dylib` 依赖 `libomp.dylib` 路径问题，可按本机实际路径修复 install name。
+```bash
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
+python3 scripts/compare_llama_logits_with_transformers.py \
+  --dump-binary build/tools/llama_logits_dump
+```
+
+Compare intermediate tensors:
+
+```bash
+python3 scripts/compare_llama_tensors_with_transformers.py \
+  --dump-binary build/tools/llama_tensor_dump \
+  --model-dir ~/models/smollm2-135M \
+  --tokens 1 22172 318
+```
+
+Compare full greedy generation:
+
+```bash
+python3 scripts/compare_llama_generation_with_transformers.py \
+  --engine-binary build/tools/llama_engine_generate \
+  --model-dir ~/models/smollm2-135M \
+  --max-new-tokens 8 \
+  --prompt hello \
+  --prompt "tiny llm inference"
+```
+
+Expected output should report `MATCH` for generated token IDs and decoded text.
+
+## Runtime Architecture
+
+At a high level, a generation step follows this path:
+
+```text
+LLMEngine
+  -> EngineCore::step()
+    -> Scheduler::schedule()
+    -> ModelExecutor::execute_model()
+    -> Model::forward_step()
+    -> Scheduler::update_from_output()
+```
+
+The scheduler owns request state and the runtime KV cache. `EngineCore` passes the same scheduler-owned `KVCache*` to `ModelExecutor`, so attention reads and writes the physical blocks allocated by scheduling decisions.
+
+Paged attention metadata uses:
+
+```text
+slot_mapping[B]
+seq_indices[B]
+context_lens[num_seqs]
+block_tables[num_layers, num_seqs, max_blocks_per_seq]
+```
+
+For CPU LLaMA runtime, each physical KV block stores float32 data as:
+
+```text
+[K block][V block]
+```
+
+where each side contains `block_size_tokens * (num_key_value_heads * head_dim)` floats.
+
+`llama_tensor_dump` and direct `LlamaModel` alignment tools can still run without runtime KV metadata. In that mode, LLaMA attention uses an in-batch causal fallback so full-sequence tensor alignment remains straightforward.
+
+## Current Scope and Limitations
+
+- The primary validated path is CPU float32 inference.
+- CUDA support is present as a baseline path, but the real LLaMA KV-cache runtime path is currently CPU-focused.
+- The engine is single-process and single-device.
+- Sampling is intentionally minimal; greedy generation is the main reference path.
+- The scheduler is intentionally small and FCFS-oriented.
+- The project is a learning and validation engine, not a production serving system.
+
+## Troubleshooting
+
+### Torch is not found
+
+If CMake reports:
+
+```text
+Torch not found. Set Torch_DIR/CMAKE_PREFIX_PATH to libtorch, or install Python torch.
+```
+
+Install Python PyTorch or pass `CMAKE_PREFIX_PATH`/`Torch_DIR` explicitly:
+
+```bash
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/libtorch
+```
+
+### Cargo is not found
+
+`tokenizers-cpp` requires Rust `cargo`.
+
+Install Rust from:
+
+```text
+https://rustup.rs/
+```
+
+### Transformers comparisons are skipped
+
+The comparison scripts skip with code `77` when one of these is missing:
+
+- `TINYLLM_HF_TINY_LLAMA_DIR` or `--model-dir`
+- `torch`
+- `transformers`
+- the compiled C++ tool binary
+
+Set the model path explicitly to make the checks run:
+
+```bash
+export TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M
+```
+
+### macOS libtorch/OpenMP issues
+
+Some libtorch distributions depend on `libomp.dylib`. If macOS cannot locate it at runtime, install OpenMP with your package manager and ensure the dynamic library search path or install name matches your local setup.
+
+## Development Notes
+
+- Prefer public headers under `include/tiny_llm/...` for new code.
+- Keep debug executables in `tools/` and Python diagnostics in `scripts/`.
+- Use tensor/logit/generation comparison scripts after changes to model loading, operators, attention, scheduler metadata, or KV-cache behavior.
+- Avoid restoring historical `test_llama_phase*` bring-up files as regular tests; ongoing LLaMA coverage should use focused smoke tests and Transformers alignment scripts.
