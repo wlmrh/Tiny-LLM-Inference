@@ -55,6 +55,17 @@ int32_t parse_int32(const char* text, const char* name)
     }
 }
 
+size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig& config, int32_t block_size_tokens)
+{
+    if (block_size_tokens <= 0 || config.head_dim <= 0 || config.num_key_value_heads <= 0)
+    {
+        throw std::runtime_error("invalid KV cache dimensions.");
+    }
+    const size_t kv_hidden_size =
+        static_cast<size_t>(config.num_key_value_heads) * static_cast<size_t>(config.head_dim);
+    return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size * sizeof(float);
+}
+
 std::string json_escape(const std::string& text)
 {
     std::ostringstream out;
@@ -151,7 +162,7 @@ int main(int argc, char** argv)
         tiny_llm::StackAllocator allocator(16 * 1024 * 1024);
         constexpr int32_t kBlockSizeTokens = 16;
         constexpr size_t kNumBlocks = 256;
-        constexpr size_t kBlockBytes = 256;
+        const size_t kBlockBytes = llama_kv_block_bytes(hf_config, kBlockSizeTokens);
         void* kv_pool = std::malloc(kNumBlocks * kBlockBytes);
         if (kv_pool == nullptr)
         {

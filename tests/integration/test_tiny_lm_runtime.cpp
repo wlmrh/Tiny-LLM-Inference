@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,17 @@ std::filesystem::path expand_user_path(std::string path_str) {
     return std::filesystem::path(path_str);
 }
 
+size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig& config, int32_t block_size_tokens)
+{
+    if (block_size_tokens <= 0 || config.head_dim <= 0 || config.num_key_value_heads <= 0)
+    {
+        throw std::runtime_error("invalid KV cache dimensions.");
+    }
+    const size_t kv_hidden_size =
+        static_cast<size_t>(config.num_key_value_heads) * static_cast<size_t>(config.head_dim);
+    return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size * sizeof(float);
+}
+
 int main(int argc, char** argv)
 {
     std::string hf_model_dir;
@@ -54,14 +66,14 @@ int main(int argc, char** argv)
         std::cerr << "用法: " << argv[0] << " <hf_model_dir_path>\n";
         std::cerr << "或者设置环境变量: export TINYLLM_HF_TINY_LLAMA_DIR=...\n";
         std::cerr << "====================================================\n";
-        return 1;
+        return 77;
     }
 
     hf_model_dir = expand_user_path(hf_model_dir);
 
     if (!std::filesystem::exists(hf_model_dir)) {
         std::cerr << "❌ 错误: 模型文件夹不存在 -> " << hf_model_dir << "\n";
-        return 1;
+        return 77;
     }
     
     if (!std::filesystem::exists(hf_model_dir + "/config.json")) {
@@ -101,7 +113,7 @@ int main(int argc, char** argv)
 
     constexpr int32_t kBlockSizeTokens = 16;
     constexpr size_t kNumBlocks = 64;
-    constexpr size_t kBlockBytes = 256;
+    const size_t kBlockBytes = llama_kv_block_bytes(hf_config, kBlockSizeTokens);
 
     void* kv_pool = std::malloc(kNumBlocks * kBlockBytes);
     assert(kv_pool != nullptr);
