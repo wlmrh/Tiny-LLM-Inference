@@ -20,11 +20,7 @@ size_t dtype_size(DType dtype) {
 }
 
 ParallelConfig default_allocator_parallel_config() {
-#if TINYLLM_ENABLE_CUDA
-    return ParallelConfig::cuda();
-#else
     return ParallelConfig::cpu();
-#endif
 }
 
 }
