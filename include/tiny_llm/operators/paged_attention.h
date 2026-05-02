@@ -25,6 +25,16 @@ void clear_paged_attention_runtime_metadata();
 const PagedAttentionRuntimeMetadata& current_paged_attention_runtime_metadata();
 
 void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx);
+void llama_attention(const Tensor& positions,
+                     const Tensor& q,
+                     const Tensor& k,
+                     const Tensor& v,
+                     Tensor& out,
+                     ExecutionContext& ctx,
+                     int32_t layer_id,
+                     int32_t num_attention_heads,
+                     int32_t num_key_value_heads,
+                     int32_t head_dim);
 }
 
 } // namespace tiny_llm
