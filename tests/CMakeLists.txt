@@ -131,6 +131,30 @@ if (Python3_Interpreter_FOUND)
             --engine-binary "$<TARGET_FILE:llama_engine_generate>"
     )
     set_tests_properties(test_llama_generation_transformers_compare PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_test(
+        NAME test_llama_generation_cpu_smoke
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${TINYLLM_SCRIPTS_DIR}/run_llama_generation_smoke.py"
+            --engine-binary "$<TARGET_FILE:llama_engine_generate>"
+            --device cpu
+            --check-known-ids
+    )
+    set_tests_properties(test_llama_generation_cpu_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
+    if (TINYLLM_ENABLE_CUDA)
+        add_test(
+            NAME test_llama_generation_cuda_smoke
+            COMMAND
+                "${Python3_EXECUTABLE}"
+                "${TINYLLM_SCRIPTS_DIR}/run_llama_generation_smoke.py"
+                --engine-binary "$<TARGET_FILE:llama_engine_generate>"
+                --device cuda:0
+                --check-known-ids
+        )
+        set_tests_properties(test_llama_generation_cuda_smoke PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 else()
     message(STATUS "Python3 interpreter not found; skipping Transformers comparison test registration.")
 endif()
