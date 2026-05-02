@@ -61,7 +61,15 @@ if (TORCH_CXX_FLAGS)
     string(APPEND CMAKE_CXX_FLAGS " ${TORCH_CXX_FLAGS}")
 endif()
 
-# -------- 第二步：编译 tokenizers_cpp (此时它会自动继承上方注入的旧版 ABI) --------
+# -------- 第二步：配置 CUDA 环境 --------
+# Keep this before FetchContent dependencies so CUDA configure failures are fast
+# and do not trigger unnecessary third-party fetch/build work.
+if (TINYLLM_ENABLE_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+endif()
+
+# -------- 第三步：编译 tokenizers_cpp (此时它会自动继承上方注入的旧版 ABI) --------
 include(FetchContent)
 find_program(TINYLLM_CARGO_EXECUTABLE cargo)
 if (NOT TINYLLM_CARGO_EXECUTABLE)
@@ -75,12 +83,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tokenizers_cpp)
 
-# -------- 第三步：配置 CUDA 环境 --------
-if (TINYLLM_ENABLE_CUDA)
-    enable_language(CUDA)
-    find_package(CUDAToolkit REQUIRED)
-endif()
-
 # ==============================================================================
 # 2. 核心引擎：构建单一全局静态库 (tiny_llm)
 # 将所有模块打包在一起，从物理层面彻底消灭交叉依赖和链接顺序问题！
@@ -91,6 +93,7 @@ add_library(tiny_llm STATIC
     src/core/allocator_common.cpp
     src/runtime/tokenizer.cpp
     src/runtime/request.cpp
+    src/runtime/parallel_config.cpp
     src/runtime/scheduler.cpp
     src/runtime/execution_context.cpp
     src/runtime/processors.cpp
@@ -102,6 +105,7 @@ add_library(tiny_llm STATIC
     # --- Operators 模块 ---
     src/operators/rmsnorm/rmsnorm.cpp
     src/operators/matmul/matmul.cpp
+    src/operators/llama_ops.cpp
     src/operators/paged_attention/paged_attention.cpp
     
     # --- Models 模块 ---

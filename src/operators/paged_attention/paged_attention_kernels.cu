@@ -1,4 +1,6 @@
 #if TINYLLM_ENABLE_CUDA
+#include "utils/cuda_utils.h"
+
 #include <cuda_runtime.h>
 
 namespace tiny_llm::ops::cuda {
@@ -31,6 +33,7 @@ void launch_attention_paged_f32(const float* q, float* out, int64_t numel, cudaS
         / static_cast<int64_t>(kThreadsPerBlock);
 
     copy_f32_kernel<<<static_cast<unsigned int>(blocks), kThreadsPerBlock, 0, stream>>>(q, out, numel);
+    CHECK_CUDA(cudaGetLastError());
 }
 
 } // namespace tiny_llm::ops::cuda

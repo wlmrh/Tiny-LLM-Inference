@@ -3,6 +3,84 @@ set(TINYLLM_TEST_INTEGRATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/integration")
 set(TINYLLM_TOOLS_DIR "${CMAKE_SOURCE_DIR}/tools")
 set(TINYLLM_SCRIPTS_DIR "${CMAKE_SOURCE_DIR}/scripts")
 
+add_executable(test_parallel_config
+    "${TINYLLM_TEST_UNIT_DIR}/test_parallel_config.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
+)
+target_include_directories(test_parallel_config PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_parallel_config PRIVATE c10)
+add_test(NAME test_parallel_config COMMAND test_parallel_config)
+
+add_executable(test_runtime_device_config
+    "${TINYLLM_TEST_UNIT_DIR}/test_runtime_device_config.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/execution_context.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/kv_cache.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/allocator_common.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/cpu/cpu_allocator.cpp"
+)
+target_include_directories(test_runtime_device_config PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_runtime_device_config PRIVATE c10 ${TORCH_LIBRARIES})
+add_test(NAME test_runtime_device_config COMMAND test_runtime_device_config)
+
+add_executable(test_weight_map
+    "${TINYLLM_TEST_UNIT_DIR}/test_weight_map.cpp"
+    "${CMAKE_SOURCE_DIR}/src/models/llama_weight_map.cpp"
+    "${CMAKE_SOURCE_DIR}/src/models/hf_safetensors_loader.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
+)
+target_include_directories(test_weight_map PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_weight_map PRIVATE c10 ${TORCH_LIBRARIES})
+add_test(NAME test_weight_map COMMAND test_weight_map)
+
+add_executable(test_linear_module
+    "${TINYLLM_TEST_UNIT_DIR}/test_linear_module.cpp"
+    "${CMAKE_SOURCE_DIR}/src/models/modules/linear.cpp"
+    "${CMAKE_SOURCE_DIR}/src/operators/matmul/matmul.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
+)
+target_include_directories(test_linear_module PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_linear_module PRIVATE c10 ${TORCH_LIBRARIES})
+add_test(NAME test_linear_module COMMAND test_linear_module)
+
+add_executable(test_llama_ops
+    "${TINYLLM_TEST_UNIT_DIR}/test_llama_ops.cpp"
+    "${CMAKE_SOURCE_DIR}/src/operators/llama_ops.cpp"
+)
+target_include_directories(test_llama_ops PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_llama_ops PRIVATE c10 ${TORCH_LIBRARIES})
+add_test(NAME test_llama_ops COMMAND test_llama_ops)
+
+add_executable(test_paged_attention
+    "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention.cpp"
+    "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/kv_cache.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/allocator_common.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/cpu/cpu_allocator.cpp"
+)
+target_include_directories(test_paged_attention PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_paged_attention PRIVATE c10 ${TORCH_LIBRARIES})
+add_test(NAME test_paged_attention COMMAND test_paged_attention)
+
 add_executable(test_tiny_lm_runtime "${TINYLLM_TEST_INTEGRATION_DIR}/test_tiny_lm_runtime.cpp")
 target_link_libraries(test_tiny_lm_runtime PRIVATE tiny_llm_models)
 target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

@@ -1,4 +1,6 @@
 #if TINYLLM_ENABLE_CUDA
+#include "utils/cuda_utils.h"
+
 #include <cuda_runtime.h>
 
 namespace tiny_llm::ops::cuda {
@@ -89,6 +91,7 @@ void launch_rmsnorm_f32(
   const dim3 block(kThreadsPerBlock);
   const dim3 grid(static_cast<unsigned int>(B));
   rmsnorm_f32_kernel<<<grid, block, 0, stream>>>(x, w, y, B, D, eps);
+  CHECK_CUDA(cudaGetLastError());
 }
 
 } // namespace tiny_llm::ops::cuda

@@ -1,4 +1,6 @@
 #if TINYLLM_ENABLE_CUDA
+#include "utils/cuda_utils.h"
+
 #include <cuda_runtime.h>
 
 namespace tiny_llm::ops::cuda {
@@ -48,6 +50,7 @@ void launch_gemm_f32(const float* a,
 		static_cast<unsigned int>((M + kBlockY - 1) / kBlockY));
 
 	gemm_f32_kernel<<<grid, block, 0, stream>>>(a, b, c, M, N, K);
+	CHECK_CUDA(cudaGetLastError());
 }
 
 } // namespace tiny_llm::ops::cuda
