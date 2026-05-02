@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "tiny_llm/core/tensor.h"
+#include "tiny_llm/runtime/parallel_config.h"
 
 namespace tiny_llm {
 
@@ -23,6 +24,7 @@ public:
      * @param pool_size Total capacity of the workspace in bytes.
      */
     explicit StackAllocator(size_t pool_size);
+    StackAllocator(size_t pool_size, ParallelConfig parallel_config);
     
     /** @brief Destructor. Frees the underlying contiguous buffer. */
     ~StackAllocator();
@@ -57,10 +59,17 @@ public:
      */
     Tensor make_tensor(std::vector<int64_t> shape, DType dtype);
 
+    /**
+     * @brief Runtime device backing this workspace.
+     */
+    const ParallelConfig& parallel_config() const { return parallel_config_; }
+    c10::Device device() const { return parallel_config_.torch_device(); }
+
 private:
     void* base_ptr_ = nullptr;     ///< Base CPU/GPU pointer of the workspace pool.
     size_t total_size_ = 0;        ///< Total capacity in bytes.
     size_t offset_ = 0;            ///< Current bump offset in bytes.
+    ParallelConfig parallel_config_{};
     #ifdef TINYLLM_ENABLE_DEBUG_STATS
         size_t peak_offset_ = 0;       ///< Maximum observed offset in bytes.
     #endif
@@ -83,6 +92,10 @@ public:
      * @param gpu_pool Pointer to the pre-allocated GPU memory pool.
      */
     BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool);
+    BlockAllocator(size_t num_blocks,
+                   size_t block_size_bytes,
+                   void* memory_pool,
+                   ParallelConfig parallel_config);
 
     /** * @brief Allocates a free physical block ID.
      * @return int32_t A valid block ID, or -1 if no blocks are available in the pool.
@@ -117,10 +130,17 @@ public:
      */
     size_t block_size_bytes() const { return block_size_; }
 
+    /**
+     * @brief Runtime device backing the physical block memory pool.
+     */
+    const ParallelConfig& parallel_config() const { return parallel_config_; }
+    c10::Device device() const { return parallel_config_.torch_device(); }
+
 private:
-    void* gpu_pool_ = nullptr;        ///< Base GPU pointer for the entire block pool.
+    void* memory_pool_ = nullptr;     ///< Base CPU/GPU pointer for the entire block pool.
     size_t num_blocks_ = 0;           ///< Total capacity in number of blocks.
     size_t block_size_ = 0;           ///< Fixed size of each block in bytes.
+    ParallelConfig parallel_config_{};
     std::vector<int32_t> free_list_;  ///< LIFO list of currently available block IDs.
 };
 

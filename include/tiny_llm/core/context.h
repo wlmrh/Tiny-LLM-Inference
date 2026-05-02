@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tiny_llm/runtime/parallel_config.h"
 #include "utils/cuda_compat.h"
 
 namespace tiny_llm {
@@ -37,8 +38,11 @@ public:
      * @param ws Optional per-step workspace allocator (non-owning).
      * @param kv Optional KV cache handle (non-owning).
      */
-    ExecutionContext(cudaStream_t stream, StackAllocator* ws, KVCache* kv)
-        : stream_(stream), ws_(ws), kv_(kv) {}
+    ExecutionContext(cudaStream_t stream,
+                     StackAllocator* ws,
+                     KVCache* kv,
+                     ParallelConfig parallel_config = ParallelConfig::cpu())
+        : stream_(stream), ws_(ws), kv_(kv), parallel_config_(parallel_config) {}
 
     /**
      * @brief Get bound CUDA stream.
@@ -54,6 +58,16 @@ public:
      * @brief Get KV cache handle.
      */
     KVCache* kv() const { return kv_; }
+
+    /**
+     * @brief Get runtime device and future parallelism configuration.
+     */
+    const ParallelConfig& parallel_config() const { return parallel_config_; }
+
+    /**
+     * @brief Get the torch device selected for runtime tensors.
+     */
+    c10::Device device() const { return parallel_config_.torch_device(); }
 
     /**
      * @brief Start a new step and recycle temporary workspace allocations.
@@ -72,6 +86,8 @@ private:
     StackAllocator* ws_{nullptr};
     /// Non-owning KV cache pointer.
     KVCache* kv_{nullptr};
+    /// Runtime device and v1 single-device parallel configuration.
+    ParallelConfig parallel_config_{};
 };
 
 } // namespace tiny_llm

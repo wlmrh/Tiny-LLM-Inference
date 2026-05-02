@@ -28,6 +28,7 @@ void initialize_global_execution_context(const EngineArgs& args, KVCache* kv)
 {
     g_owned_execution_context.reset();
     g_owned_workspace.reset();
+    args.parallel_config.validate();
 
     if (args.ctx != nullptr)
     {
@@ -36,16 +37,24 @@ void initialize_global_execution_context(const EngineArgs& args, KVCache* kv)
     }
 
     StackAllocator* workspace = args.workspace;
+    if (workspace != nullptr && workspace->parallel_config() != args.parallel_config)
+    {
+        throw std::runtime_error(
+            "initialize_global_execution_context: workspace device does not match EngineArgs parallel_config.");
+    }
     if (workspace == nullptr && args.workspace_pool_size > 0)
     {
-        g_owned_workspace = std::make_unique<StackAllocator>(args.workspace_pool_size);
+        g_owned_workspace = std::make_unique<StackAllocator>(
+            args.workspace_pool_size,
+            args.parallel_config);
         workspace = g_owned_workspace.get();
     }
 
     g_owned_execution_context = std::make_unique<ExecutionContext>(
         args.execution_stream,
         workspace,
-        kv);
+        kv,
+        args.parallel_config);
     g_execution_context = g_owned_execution_context.get();
 }
 

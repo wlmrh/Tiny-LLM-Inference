@@ -19,6 +19,14 @@ size_t dtype_size(DType dtype) {
     return 0;
 }
 
+ParallelConfig default_allocator_parallel_config() {
+#if TINYLLM_ENABLE_CUDA
+    return ParallelConfig::cuda();
+#else
+    return ParallelConfig::cpu();
+#endif
+}
+
 }
 
 Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
@@ -34,8 +42,19 @@ Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
     return make_tensor_from_blob(ptr, shape, dtype);
 }
 
-BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool)
-    : gpu_pool_(gpu_pool), num_blocks_(num_blocks), block_size_(block_size_bytes) {
+BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* memory_pool)
+    : BlockAllocator(num_blocks, block_size_bytes, memory_pool, default_allocator_parallel_config()) {
+}
+
+BlockAllocator::BlockAllocator(size_t num_blocks,
+                               size_t block_size_bytes,
+                               void* memory_pool,
+                               ParallelConfig parallel_config)
+    : memory_pool_(memory_pool),
+      num_blocks_(num_blocks),
+      block_size_(block_size_bytes),
+      parallel_config_(parallel_config) {
+    parallel_config_.validate();
     free_list_.reserve(num_blocks_);
     for (int32_t i = static_cast<int32_t>(num_blocks_) - 1; i >= 0; --i) {
         free_list_.push_back(i);
@@ -62,7 +81,7 @@ void* BlockAllocator::get_block_ptr(int32_t block_id) const {
     if (block_id < 0 || block_id >= static_cast<int32_t>(num_blocks_)) {
         return nullptr;
     }
-    return static_cast<char*>(gpu_pool_) + (static_cast<size_t>(block_id) * block_size_);
+    return static_cast<char*>(memory_pool_) + (static_cast<size_t>(block_id) * block_size_);
 }
 
 size_t BlockAllocator::free_block_count() const {

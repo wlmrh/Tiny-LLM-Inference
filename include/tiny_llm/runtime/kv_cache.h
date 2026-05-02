@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 #include <unordered_map>
+#include "tiny_llm/runtime/parallel_config.h"
 #include "utils/cuda_compat.h"
 
 namespace tiny_llm {
@@ -42,6 +43,11 @@ public:
             size_t num_blocks,
             size_t block_size_bytes,
             void* gpu_pool);
+    KVCache(Config cfg,
+            size_t num_blocks,
+            size_t block_size_bytes,
+            void* memory_pool,
+            ParallelConfig parallel_config);
 
     ~KVCache();
 
@@ -61,6 +67,12 @@ public:
     size_t free_block_count() const;
     size_t block_size_bytes() const;
     void* block_ptr(int32_t block_id) const;
+
+    /**
+     * @brief Runtime device backing the physical KV block pool.
+     */
+    const ParallelConfig& parallel_config() const { return parallel_config_; }
+    c10::Device device() const { return parallel_config_.torch_device(); }
 
     /**
      * @brief Initializes metadata structures for a new request sequence.
@@ -105,6 +117,7 @@ private:
     Config cfg_;                        ///< Cache configuration.
     std::unique_ptr<BlockAllocator> owned_blocks_; ///< Optional owned allocator when built from raw pool args.
     BlockAllocator* blocks_ = nullptr;  ///< Non-owning pointer to the physical block pool.
+    ParallelConfig parallel_config_{};
     std::unordered_map<int32_t, SeqState> seqs_; ///< Map of active sequence IDs to their states.
 };
 

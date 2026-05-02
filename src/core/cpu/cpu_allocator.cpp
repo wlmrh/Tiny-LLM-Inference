@@ -1,10 +1,20 @@
 #include "tiny_llm/core/allocator.h"
 
 #include <cstdlib>
+#include <stdexcept>
 
 namespace tiny_llm {
 
-StackAllocator::StackAllocator(size_t pool_size) : total_size_(pool_size) {
+StackAllocator::StackAllocator(size_t pool_size)
+    : StackAllocator(pool_size, ParallelConfig::cpu()) {
+}
+
+StackAllocator::StackAllocator(size_t pool_size, ParallelConfig parallel_config)
+    : total_size_(pool_size), parallel_config_(parallel_config) {
+    parallel_config_.validate();
+    if (!parallel_config_.is_cpu()) {
+        throw std::runtime_error("StackAllocator: CPU build only supports CPU workspace memory.");
+    }
     base_ptr_ = std::malloc(pool_size);
 }
 

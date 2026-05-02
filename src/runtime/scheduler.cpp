@@ -55,6 +55,10 @@ void push_to_running_if_absent(std::deque<uint64_t>& running, uint64_t request_i
 KVCacheManager::KVCacheManager(KVCache* kv)
     : kv_(kv)
 {
+    if (kv_ != nullptr)
+    {
+        kv_->parallel_config().validate();
+    }
 }
 
 KVCacheManager::KVCacheManager(int32_t kv_num_layers,
@@ -75,6 +79,10 @@ KVCacheManager::~KVCacheManager() = default;
 
 void KVCacheManager::bind(KVCache* kv)
 {
+    if (kv != nullptr)
+    {
+        kv->parallel_config().validate();
+    }
     owned_kv_.reset();
     kv_ = kv;
 }
@@ -84,6 +92,22 @@ void KVCacheManager::init_owned(int32_t kv_num_layers,
                                 size_t kv_num_blocks,
                                 size_t kv_block_size_bytes,
                                 void* kv_memory_pool)
+{
+    init_owned(
+        kv_num_layers,
+        kv_block_size_tokens,
+        kv_num_blocks,
+        kv_block_size_bytes,
+        kv_memory_pool,
+        ParallelConfig::cpu());
+}
+
+void KVCacheManager::init_owned(int32_t kv_num_layers,
+                                int32_t kv_block_size_tokens,
+                                size_t kv_num_blocks,
+                                size_t kv_block_size_bytes,
+                                void* kv_memory_pool,
+                                ParallelConfig parallel_config)
 {
     if (kv_num_layers <= 0)
     {
@@ -105,6 +129,7 @@ void KVCacheManager::init_owned(int32_t kv_num_layers,
     {
         throw std::runtime_error("KVCacheManager: kv_memory_pool must be non-null.");
     }
+    parallel_config.validate();
 
     KVCache::Config kv_cfg;
     kv_cfg.num_layers = kv_num_layers;
@@ -114,7 +139,8 @@ void KVCacheManager::init_owned(int32_t kv_num_layers,
         kv_cfg,
         kv_num_blocks,
         kv_block_size_bytes,
-        kv_memory_pool);
+        kv_memory_pool,
+        parallel_config);
     kv_ = owned_kv_.get();
 }
 
@@ -376,8 +402,13 @@ Scheduler::Scheduler(SchedulerConfig config)
 Scheduler::Scheduler(const EngineArgs& args)
     : Scheduler(args.scheduler_config)
 {
+    args.parallel_config.validate();
     if (args.kv != nullptr)
     {
+        if (args.kv->parallel_config() != args.parallel_config)
+        {
+            throw std::runtime_error("Scheduler: KV cache device does not match EngineArgs parallel_config.");
+        }
         kvcache_manager.bind(args.kv);
         return;
     }
@@ -387,7 +418,8 @@ Scheduler::Scheduler(const EngineArgs& args)
         args.kv_block_size_tokens,
         args.kv_num_blocks,
         args.kv_block_size_bytes,
-        args.kv_memory_pool);
+        args.kv_memory_pool,
+        args.parallel_config);
 }
 
 Scheduler::Scheduler(KVCache* kv, SchedulerConfig config)

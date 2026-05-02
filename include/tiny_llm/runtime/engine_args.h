@@ -5,6 +5,7 @@
 #include <string>
 
 #include "tiny_llm/models/mini_llama.h"
+#include "tiny_llm/runtime/parallel_config.h"
 #include "tiny_llm/runtime/scheduler.h"
 #include "utils/cuda_compat.h"
 
@@ -32,6 +33,7 @@ struct EngineArgs {
     ExecutionContext* ctx = nullptr;
     KVCache* kv = nullptr;
     Tokenizer* tokenizer = nullptr;
+    ParallelConfig parallel_config = ParallelConfig::cpu();
 
     // Model construction inputs (used when model == nullptr).
     EngineModelType model_type = EngineModelType::kPrebuilt;

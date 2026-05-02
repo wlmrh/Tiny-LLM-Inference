@@ -12,6 +12,7 @@
 
 #include "tiny_llm/runtime/request.h"
 #include "tiny_llm/runtime/processors.h"
+#include "tiny_llm/runtime/parallel_config.h"
 
 namespace tiny_llm {
 
@@ -87,6 +88,12 @@ public:
                     size_t kv_num_blocks,
                     size_t kv_block_size_bytes,
                     void* kv_memory_pool);
+    void init_owned(int32_t kv_num_layers,
+                    int32_t kv_block_size_tokens,
+                    size_t kv_num_blocks,
+                    size_t kv_block_size_bytes,
+                    void* kv_memory_pool,
+                    ParallelConfig parallel_config);
 
     size_t free_block_count() const;
     int32_t num_layers() const;
