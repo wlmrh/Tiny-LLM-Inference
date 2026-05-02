@@ -20,6 +20,23 @@ Tensor make_2d_f32_tensor_view(void* data, int64_t rows, int64_t cols)
     return torch::from_blob(data, shape, options);
 }
 
+bool needs_torch_matmul_path(const Tensor& input, const Tensor& output, const Tensor& weight)
+{
+    return input.device().is_cuda() || output.device().is_cuda() || weight.device().is_cuda();
+}
+
+void run_out_in_matmul(const Tensor& input,
+                       const Tensor& weight_out_in,
+                       Tensor& output)
+{
+    if (input.device() != weight_out_in.device() || input.device() != output.device())
+    {
+        throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
+    }
+    const Tensor projected = torch::matmul(input, weight_out_in.transpose(0, 1));
+    output.copy_(projected);
+}
+
 float compute_linear_sum(const float* input_ptr,
                          const float* weight_ptr,
                          int32_t in_features,
@@ -110,6 +127,16 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
             return;
         }
 
+        Tensor weight = make_2d_f32_tensor_view(
+            single_weight_.data,
+            static_cast<int64_t>(single_weight_.out_features),
+            static_cast<int64_t>(single_weight_.in_features));
+        if (needs_torch_matmul_path(input, output, weight))
+        {
+            run_out_in_matmul(input, weight, output);
+            return;
+        }
+
         const float* input_ptr = static_cast<const float*>(tensor_data(input));
         float* output_ptr = static_cast<float*>(tensor_data(output));
         for (int64_t row = 0; row < rows; ++row)
@@ -135,6 +162,34 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
     for (int32_t i = 0; i < stacked_weight_count_; ++i)
     {
         const StackedWeightDesc& desc = stacked_weights_[i];
+        Tensor weight = desc.layout == WeightLayout::kInOut
+            ? make_2d_f32_tensor_view(
+                desc.data,
+                static_cast<int64_t>(desc.in_features),
+                static_cast<int64_t>(desc.out_features))
+            : make_2d_f32_tensor_view(
+                desc.data,
+                static_cast<int64_t>(desc.out_features),
+                static_cast<int64_t>(desc.in_features));
+
+        if (needs_torch_matmul_path(input, output, weight))
+        {
+            Tensor output_slice = output.narrow(1, desc.output_offset, desc.out_features);
+            if (desc.layout == WeightLayout::kInOut)
+            {
+                if (input.device() != weight.device() || input.device() != output.device())
+                {
+                    throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
+                }
+                output_slice.copy_(torch::matmul(input, weight));
+            }
+            else
+            {
+                run_out_in_matmul(input, weight, output_slice);
+            }
+            continue;
+        }
+
         const float* weight_ptr = desc.data;
         const float* input_ptr = static_cast<const float*>(tensor_data(input));
         float* output_ptr = static_cast<float*>(tensor_data(output));
