@@ -17,9 +17,9 @@ The current implementation focuses on a single-process runtime for small LLaMA-f
   - SwiGLU MLP
   - grouped-query attention (GQA)
   - tied or untied LM heads, depending on the model config
-- CPU float32 runtime KV cache with paged metadata and physical KV block storage.
+- CPU and CUDA runtime KV cache with paged metadata and physical KV block storage.
 - Tensor alignment tools for comparing C++ intermediate tensors, logits, and greedy generation against PyTorch/Transformers.
-- Optional CUDA build path for allocator/operator baselines. The primary validated path today is CPU.
+- Optional CUDA build path with single-GPU SmolLM2 generation smoke coverage. The current CUDA paged-attention path is a correctness bridge, not the final optimized kernel.
 
 ## Repository Layout
 
@@ -70,6 +70,16 @@ CUDA build:
 ```bash
 cmake -S . -B build -DTINYLLM_ENABLE_CUDA=ON
 cmake --build build -j
+```
+
+CUDA build with Python PyTorch/libtorch and an explicit CUDA toolkit:
+
+```bash
+cmake -S . -B build-cuda \
+  -DTINYLLM_ENABLE_CUDA=ON \
+  -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
+  -DCMAKE_PREFIX_PATH="$(python3 -c 'import torch; print(torch.utils.cmake_prefix_path)')"
+cmake --build build-cuda -j
 ```
 
 Manually point CMake at libtorch:
@@ -131,6 +141,17 @@ Run Hugging Face LLaMA/SmolLM2 greedy generation through the engine:
 
 The tool prints one JSON object per prompt, including generated token IDs and decoded output text.
 
+Run the same tool on CUDA:
+
+```bash
+./build-cuda/tools/llama_engine_generate \
+  --device cuda:0 \
+  ~/models/smollm2-135M \
+  8 \
+  hello \
+  "tiny llm inference"
+```
+
 ## Test
 
 Run all registered CTest tests:
@@ -147,6 +168,16 @@ ctest --test-dir build --output-on-failure
 ```
 
 The Transformers comparison tests return CTest skip code `77` when their model path or Python dependencies are unavailable.
+
+CUDA CTest with SmolLM2 generation smoke:
+
+```bash
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
+LD_LIBRARY_PATH=/path/to/torch/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+ctest --test-dir build-cuda --output-on-failure
+```
+
+When `TINYLLM_ENABLE_CUDA=ON`, CTest registers `test_llama_generation_cuda_smoke`, which runs `llama_engine_generate --device cuda:0` and checks deterministic SmolLM2 token IDs for `hello` and `tiny llm inference`.
 
 ## Compare Against Transformers
 
@@ -224,11 +255,21 @@ where each side contains `block_size_tokens * (num_key_value_heads * head_dim)` 
 
 `llama_tensor_dump` and direct `LlamaModel` alignment tools can still run without runtime KV metadata. In that mode, LLaMA attention uses an in-batch causal fallback so full-sequence tensor alignment remains straightforward.
 
+On CUDA, `llama_attention` currently uses a torch-based paged-attention bridge:
+
+- runtime tensors, model weights, workspace, and KV blocks are placed according to `EngineArgs::parallel_config`
+- metadata tensors may live on CUDA, but validation/control metadata is copied to CPU before indexing
+- KV block storage is wrapped with `torch::from_blob(... device=kv_cache.device())`
+- current-step K/V are written into paged KV blocks, then gathered by `block_tables`, `seq_indices`, and positions
+- attention math uses libtorch tensor ops (`matmul`, `softmax`, `matmul`) for correctness
+
+This path is intentionally a correctness bridge for single-GPU execution. It should be replaced by a dedicated paged-attention CUDA kernel before any performance claim.
+
 ## Current Scope and Limitations
 
-- The primary validated path is CPU float32 inference.
-- CUDA support is present as a baseline path, but the real LLaMA KV-cache runtime path is currently CPU-focused.
-- The engine is single-process and single-device.
+- CPU float32 inference and single-GPU CUDA SmolLM2 greedy generation are validated.
+- CUDA paged attention is currently torch-based and correctness-oriented, not fused or optimized.
+- The engine is single-process and single-device; multi-GPU/tensor parallel/pipeline parallel are not implemented.
 - Sampling is intentionally minimal; greedy generation is the main reference path.
 - The scheduler is intentionally small and FCFS-oriented.
 - The project is a learning and validation engine, not a production serving system.

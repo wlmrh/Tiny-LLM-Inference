@@ -6,3 +6,4 @@ build-mac/
 .devcontainer/
 Dockerfile
 .DS_Store
+build-cuda/
