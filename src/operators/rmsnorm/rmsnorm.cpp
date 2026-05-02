@@ -105,11 +105,25 @@ void validate_rmsnorm_inputs(const Tensor& x, const Tensor& w, const Tensor& y, 
     }
 }
 
+bool any_cuda_tensor(const Tensor& x, const Tensor& w, const Tensor& y)
+{
+    return x.device().is_cuda() || w.device().is_cuda() || y.device().is_cuda();
+}
+
+void validate_same_device(const Tensor& x, const Tensor& w, const Tensor& y)
+{
+    if (x.device() != w.device() || x.device() != y.device())
+    {
+        throw std::runtime_error("rmsnorm: x, w, and y must be on the same device.");
+    }
+}
+
 } // namespace
 
 void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx, float eps)
 {
     validate_rmsnorm_inputs(x, w, y, eps);
+    validate_same_device(x, w, y);
     const RmsNormShape shape = parse_xy_shape(x);
 
     const float* x_ptr = static_cast<const float*>(tensor_data(x));
@@ -117,13 +131,21 @@ void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx,
     float* y_ptr = static_cast<float*>(tensor_data(y));
 
 #if TINYLLM_ENABLE_CUDA
-    const cudaStream_t stream = resolve_execution_context(ctx).stream();
-    cuda::launch_rmsnorm_f32(
-        x_ptr,
-        w_ptr,
-        y_ptr,
-        shape.B, shape.D, eps, stream);
-    return;
+    if (x.device().is_cuda())
+    {
+        const cudaStream_t stream = resolve_execution_context(ctx).stream();
+        cuda::launch_rmsnorm_f32(
+            x_ptr,
+            w_ptr,
+            y_ptr,
+            shape.B, shape.D, eps, stream);
+        return;
+    }
+#else
+    if (any_cuda_tensor(x, w, y))
+    {
+        throw std::runtime_error("rmsnorm: CUDA tensors require a CUDA build.");
+    }
 #endif
 
     for (int b = 0; b < shape.B; ++b)
