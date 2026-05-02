@@ -71,6 +71,7 @@ endif()
 
 # -------- 第三步：编译 tokenizers_cpp (此时它会自动继承上方注入的旧版 ABI) --------
 include(FetchContent)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 find_program(TINYLLM_CARGO_EXECUTABLE cargo)
 if (NOT TINYLLM_CARGO_EXECUTABLE)
     message(FATAL_ERROR "tokenizers-cpp requires Rust cargo. Please install Rust first: https://rustup.rs/")
