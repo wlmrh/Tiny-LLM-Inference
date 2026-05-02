@@ -6,6 +6,7 @@
 
 #include "tiny_llm/core/tensor.h"
 #include "tiny_llm/models/llama_config.h"
+#include "tiny_llm/runtime/parallel_config.h"
 
 namespace tiny_llm {
 
@@ -20,6 +21,8 @@ class HFSafeTensorLoader;
 class WeightMap {
 public:
     static WeightMap from_safetensors(const HFSafeTensorLoader& loader);
+    static WeightMap from_safetensors(const HFSafeTensorLoader& loader,
+                                      const ParallelConfig& parallel_config);
 
     void add_tensor(const std::string& name, const Tensor& tensor);
     void add_tensor(const std::string& name,
@@ -64,6 +67,9 @@ struct MiniLLaMAWeights {
 
 MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
                                     const LlamaConfig& config);
+MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
+                                    const LlamaConfig& config,
+                                    const ParallelConfig& parallel_config);
 
 MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,
                                     const LlamaConfig& config);

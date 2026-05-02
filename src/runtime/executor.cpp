@@ -15,7 +15,12 @@
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/sampling.h"
 
+#if TINYLLM_ENABLE_CUDA
+#include "utils/cuda_utils.h"
+#endif
+
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -23,6 +28,82 @@
 #include <vector>
 
 namespace tiny_llm {
+
+namespace {
+
+int64_t checked_numel(const std::vector<int64_t>& shape, const char* caller)
+{
+    int64_t numel = 1;
+    for (int64_t dim : shape)
+    {
+        if (dim < 0)
+        {
+            throw std::runtime_error(std::string(caller) + ": tensor shape dimensions must be non-negative.");
+        }
+        if (dim == 0)
+        {
+            return 0;
+        }
+        if (numel > std::numeric_limits<int64_t>::max() / dim)
+        {
+            throw std::runtime_error(std::string(caller) + ": tensor shape is too large.");
+        }
+        numel *= dim;
+    }
+    return numel;
+}
+
+Tensor make_int32_tensor_from_host(const std::vector<int32_t>& values,
+                                   const std::vector<int64_t>& shape,
+                                   const c10::Device& device,
+                                   const char* caller)
+{
+    const int64_t expected_numel = checked_numel(shape, caller);
+    if (expected_numel != static_cast<int64_t>(values.size()))
+    {
+        throw std::runtime_error(std::string(caller) + ": host value count does not match tensor shape.");
+    }
+
+    Tensor cpu_tensor = torch::empty(
+        shape,
+        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kInt32)).device(c10::kCPU));
+    if (!values.empty())
+    {
+        std::memcpy(cpu_tensor.data_ptr<int32_t>(), values.data(), values.size() * sizeof(int32_t));
+    }
+    if (device.is_cpu())
+    {
+        return cpu_tensor;
+    }
+    return cpu_tensor.to(device, /*non_blocking=*/false, /*copy=*/true).contiguous();
+}
+
+Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
+{
+    if (tensor.device().is_cpu())
+    {
+        return tensor.contiguous();
+    }
+    return tensor.to(c10::kCPU, /*non_blocking=*/false, /*copy=*/true).contiguous();
+}
+
+void synchronize_tensor_if_cuda(const Tensor& tensor, ExecutionContext& ctx, const char* caller)
+{
+    if (!tensor.defined() || tensor.device().is_cpu())
+    {
+        return;
+    }
+
+#if TINYLLM_ENABLE_CUDA
+    (void)caller;
+    CHECK_CUDA(cudaStreamSynchronize(ctx.stream()));
+#else
+    (void)ctx;
+    throw std::runtime_error(std::string(caller) + ": CUDA tensor was produced in a CPU-only build.");
+#endif
+}
+
+} // namespace
 
 ModelExecutor::ModelExecutor(Model* model, ExecutionContext* ctx, KVCache* kv)
     : model_(model), kv_(kv)
@@ -48,6 +129,7 @@ ModelExecutor::~ModelExecutor()
 void ModelExecutor::init_from_args(const EngineArgs& args)
 {
     owned_hf_loader_.reset();
+    args.parallel_config.validate();
 
     if (args.kv_block_size_tokens <= 0)
     {
@@ -88,9 +170,11 @@ void ModelExecutor::init_from_args(const EngineArgs& args)
                 const LlamaConfig hf_config = HFLlamaConfigLoader::load_from_dir(args.hf_model_dir);
                 owned_hf_loader_ = std::make_unique<HFSafeTensorLoader>(
                     HFSafeTensorLoader::from_file(weight_path.string()));
-                WeightMap weight_map = WeightMap::from_safetensors(*owned_hf_loader_);
+                WeightMap weight_map = WeightMap::from_safetensors(
+                    *owned_hf_loader_,
+                    args.parallel_config);
                 auto llama_model = std::make_unique<LlamaModel>(hf_config, std::move(weight_map));
-                llama_model->allocate_buffers(resolve_model_max_batch_size(args));
+                llama_model->allocate_buffers(resolve_model_max_batch_size(args), args.parallel_config);
                 owned_model_ = std::move(llama_model);
                 break;
             }
@@ -136,6 +220,8 @@ int32_t ModelExecutor::vocab_size() const
 ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_output)
 {
     validate_handles();
+    ExecutionContext& ctx = require_global_execution_context("ModelExecutor::execute_model");
+    const c10::Device runtime_device = ctx.device();
 
     struct PreparedInputs {
         torch::Tensor input_tokens; // [num_total_tokens]
@@ -152,9 +238,6 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
 
     auto prepare_input_tensors = [&](const SchedulerOutput& output) -> PreparedInputs {
         PreparedInputs prepared;
-        const auto int_options = torch::TensorOptions()
-            .dtype(to_torch_scalar_type(DType::kInt32))
-            .device(c10::kCPU);
 
         // 调度的总 Sequence 数量
         const int64_t request_count = static_cast<int64_t>(output.scheduled_reqs.size());
@@ -163,12 +246,12 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
 
         if (request_count == 0 || total_tokens == 0)
         {
-            prepared.input_tokens = torch::empty({0}, int_options);
-            prepared.position_ids = torch::empty({0}, int_options);
-            prepared.slot_mapping = torch::empty({0}, int_options);
-            prepared.seq_indices = torch::empty({0}, int_options);
-            prepared.context_lens = torch::empty({0}, int_options);
-            prepared.block_tables = torch::empty({0, 0, 0}, int_options);
+            prepared.input_tokens = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelExecutor::execute_model");
+            prepared.position_ids = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelExecutor::execute_model");
+            prepared.slot_mapping = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelExecutor::execute_model");
+            prepared.seq_indices = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelExecutor::execute_model");
+            prepared.context_lens = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelExecutor::execute_model");
+            prepared.block_tables = make_int32_tensor_from_host({}, {0, 0, 0}, runtime_device, "ModelExecutor::execute_model");
             return prepared;
         }
 
@@ -244,19 +327,21 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             throw std::runtime_error("ModelExecutor::execute_model: total_num_scheduled_tokens mismatches per-request token budget sum.");
         }
 
-        prepared.input_tokens = torch::empty({total_tokens}, int_options);
-        prepared.position_ids = torch::empty({total_tokens}, int_options);
-        prepared.slot_mapping = torch::empty({total_tokens}, int_options);
-        prepared.seq_indices = torch::empty({total_tokens}, int_options);
-        prepared.context_lens = torch::empty({request_count}, int_options);
-        prepared.block_tables = torch::full({num_layers, request_count, max_blocks_per_seq}, -1, int_options);
+        std::vector<int32_t> input_values(static_cast<size_t>(total_tokens), 0);
+        std::vector<int32_t> position_values(static_cast<size_t>(total_tokens), 0);
+        std::vector<int32_t> slot_values(static_cast<size_t>(total_tokens), 0);
+        std::vector<int32_t> seq_index_values(static_cast<size_t>(total_tokens), 0);
+        std::vector<int32_t> context_values(static_cast<size_t>(request_count), 0);
+        std::vector<int32_t> block_table_values(
+            static_cast<size_t>(num_layers * request_count * max_blocks_per_seq),
+            -1);
 
-        int32_t* input_ptr = prepared.input_tokens.data_ptr<int32_t>(); ///< input_ptr[i]: 展平后的 token ids
-        int32_t* pos_ptr = prepared.position_ids.data_ptr<int32_t>(); ///< pos_ptr[i]: input_ptr 中第 i 个 token 在其请求中的位置
-        int32_t* slot_ptr = prepared.slot_mapping.data_ptr<int32_t>(); ///< slot_ptr[i]: input_ptr 中第 i 个 token 在显存池中的位置
-        int32_t* seq_index_ptr = prepared.seq_indices.data_ptr<int32_t>();
-        int32_t* context_ptr = prepared.context_lens.data_ptr<int32_t>(); ///< context_ptr[i]: 第 i 个请求完整长度
-        int32_t* block_table_ptr = prepared.block_tables.data_ptr<int32_t>(); ///< 
+        int32_t* input_ptr = input_values.data(); ///< input_ptr[i]: 展平后的 token ids
+        int32_t* pos_ptr = position_values.data(); ///< pos_ptr[i]: input_ptr 中第 i 个 token 在其请求中的位置
+        int32_t* slot_ptr = slot_values.data(); ///< slot_ptr[i]: input_ptr 中第 i 个 token 在显存池中的位置
+        int32_t* seq_index_ptr = seq_index_values.data();
+        int32_t* context_ptr = context_values.data(); ///< context_ptr[i]: 第 i 个请求完整长度
+        int32_t* block_table_ptr = block_table_values.data();
 
         int64_t flat_token_index = 0;
         int64_t seq_index = 0; // 计数器，表示当前 ResquestData 是 SchedulerOutput 中的第几个请求
@@ -315,6 +400,37 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
         {
             throw std::runtime_error("ModelExecutor::execute_model: flattened token count mismatches total_num_scheduled_tokens.");
         }
+
+        prepared.input_tokens = make_int32_tensor_from_host(
+            input_values,
+            {total_tokens},
+            runtime_device,
+            "ModelExecutor::execute_model");
+        prepared.position_ids = make_int32_tensor_from_host(
+            position_values,
+            {total_tokens},
+            runtime_device,
+            "ModelExecutor::execute_model");
+        prepared.slot_mapping = make_int32_tensor_from_host(
+            slot_values,
+            {total_tokens},
+            runtime_device,
+            "ModelExecutor::execute_model");
+        prepared.seq_indices = make_int32_tensor_from_host(
+            seq_index_values,
+            {total_tokens},
+            runtime_device,
+            "ModelExecutor::execute_model");
+        prepared.context_lens = make_int32_tensor_from_host(
+            context_values,
+            {request_count},
+            runtime_device,
+            "ModelExecutor::execute_model");
+        prepared.block_tables = make_int32_tensor_from_host(
+            block_table_values,
+            {num_layers, request_count, max_blocks_per_seq},
+            runtime_device,
+            "ModelExecutor::execute_model");
 
         return prepared;
     };
@@ -447,9 +563,12 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
     const int32_t B = static_cast<int32_t>(B64);
     const int32_t V = model_->vocab_size();
     ExecutionContext& ctx = require_global_execution_context("ModelExecutor::run_forward_batch");
+    const c10::Device runtime_device = ctx.device();
 
-    const int32_t* input_ptr = input_tokens.data_ptr<int32_t>();
-    const int32_t* position_ptr = position_ids.data_ptr<int32_t>();
+    const Tensor input_tokens_for_validation = tensor_to_cpu_contiguous(input_tokens);
+    const Tensor position_ids_for_validation = tensor_to_cpu_contiguous(position_ids);
+    const int32_t* input_ptr = input_tokens_for_validation.data_ptr<int32_t>();
+    const int32_t* position_ptr = position_ids_for_validation.data_ptr<int32_t>();
 
     // 遍历展平后的每一个 token
     for (int32_t row = 0; row < B; ++row)
@@ -475,7 +594,7 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
 
     Tensor logits_tensor = torch::zeros(
         {B, V},
-        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(c10::kCPU));
+        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(runtime_device));
 
     const int32_t block_size_tokens = kv_block_size_tokens_; // 每个 block 中存储的 token 上限
     if (block_size_tokens <= 0)
@@ -504,7 +623,8 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
         return {};
     }
 
-    const float* logits_ptr = logits_tensor.data_ptr<float>();
+    synchronize_tensor_if_cuda(logits_tensor, ctx, "ModelExecutor::run_forward_batch");
+
     std::vector<int32_t> sampled_tokens(static_cast<size_t>(B), -1);
     for (int32_t end_offset : req_end_offsets)
     {
@@ -514,7 +634,16 @@ std::vector<int32_t> ModelExecutor::run_forward_batch(const Tensor& input_tokens
         }
 
         const int32_t target_row = end_offset - 1;
-        const float* target_logits = logits_ptr + static_cast<size_t>(target_row) * static_cast<size_t>(V);
+        Tensor target_logits_tensor = logits_tensor[target_row];
+        if (!target_logits_tensor.device().is_cpu())
+        {
+            target_logits_tensor = tensor_to_cpu_contiguous(target_logits_tensor);
+        }
+        else
+        {
+            target_logits_tensor = target_logits_tensor.contiguous();
+        }
+        const float* target_logits = target_logits_tensor.data_ptr<float>();
         const int32_t sampled = sample_argmax(target_logits, V);
         if (sampled < 0 || sampled >= V)
         {

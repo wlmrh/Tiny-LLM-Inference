@@ -88,10 +88,27 @@ Tensor load_checked_tensor(const WeightMap& weight_map,
 
 WeightMap WeightMap::from_safetensors(const HFSafeTensorLoader& loader)
 {
+    return WeightMap::from_safetensors(loader, ParallelConfig::cpu());
+}
+
+WeightMap WeightMap::from_safetensors(const HFSafeTensorLoader& loader,
+                                      const ParallelConfig& parallel_config)
+{
     WeightMap weight_map;
+    parallel_config.validate();
+    const c10::Device target_device = parallel_config.torch_device();
     for (const std::string& key : loader.keys())
     {
-        weight_map.add_tensor(key, loader.tensor(key));
+        Tensor tensor = loader.tensor(key);
+        if (tensor.device() != target_device)
+        {
+            tensor = tensor.to(target_device, /*non_blocking=*/false, /*copy=*/true).contiguous();
+        }
+        else if (!tensor.is_contiguous())
+        {
+            tensor = tensor.contiguous();
+        }
+        weight_map.add_tensor(key, tensor);
     }
     return weight_map;
 }
@@ -164,6 +181,13 @@ MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
                                     const LlamaConfig& config)
 {
     return load_llama_weights(WeightMap::from_safetensors(loader), config);
+}
+
+MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
+                                    const LlamaConfig& config,
+                                    const ParallelConfig& parallel_config)
+{
+    return load_llama_weights(WeightMap::from_safetensors(loader, parallel_config), config);
 }
 
 MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,

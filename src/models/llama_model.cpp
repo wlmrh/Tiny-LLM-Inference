@@ -1,6 +1,7 @@
 #include "tiny_llm/models/llama_model.h"
 
 #include "tiny_llm/core/context.h"
+#include "tiny_llm/operators/llama_ops.h"
 
 #include <limits>
 #include <stdexcept>
@@ -23,9 +24,11 @@ int checked_positive_dim(int64_t dim, const char* name)
     return static_cast<int>(dim);
 }
 
-Tensor make_owned_tensor(const std::vector<int64_t>& shape, DType dtype)
+Tensor make_owned_tensor(const std::vector<int64_t>& shape,
+                         DType dtype,
+                         const c10::Device& device)
 {
-    return torch::empty(shape, torch::TensorOptions().dtype(to_torch_scalar_type(dtype)).device(c10::kCPU));
+    return torch::empty(shape, torch::TensorOptions().dtype(to_torch_scalar_type(dtype)).device(device));
 }
 
 int32_t kv_hidden_size(const LlamaConfig& config)
@@ -53,34 +56,43 @@ LlamaModel::LlamaModel(LlamaConfig config, WeightMap weight_map)
 
 void LlamaModel::allocate_buffers(int max_batch_size)
 {
+    allocate_buffers(max_batch_size, ParallelConfig::cpu());
+}
+
+void LlamaModel::allocate_buffers(int max_batch_size, const ParallelConfig& parallel_config)
+{
     if (max_batch_size <= 0)
     {
         throw std::runtime_error("LlamaModel::allocate_buffers: max_batch_size must be positive.");
     }
-    if (max_batch_size <= allocated_max_batch_size_)
+    parallel_config.validate();
+    const bool same_device = buffer_parallel_config_ == parallel_config;
+    if (same_device && max_batch_size <= allocated_max_batch_size_)
     {
         return;
     }
 
     allocated_max_batch_size_ = max_batch_size;
+    buffer_parallel_config_ = parallel_config;
+    const c10::Device device = parallel_config.torch_device();
 
-    buffers_.hidden_states = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.residual = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.norm_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.residual = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.norm_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
+    buffers_.hidden_states = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.residual = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.norm_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.residual = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.norm_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
     buffers_.layer.attention.qkv =
-        make_owned_tensor({max_batch_size, config_.hidden_size + 2 * kv_hidden_size(config_)}, DType::kFloat32);
-    buffers_.layer.attention.q = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.attention.k = make_owned_tensor({max_batch_size, kv_hidden_size(config_)}, DType::kFloat32);
-    buffers_.layer.attention.v = make_owned_tensor({max_batch_size, kv_hidden_size(config_)}, DType::kFloat32);
-    buffers_.layer.attention.attn_input = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.attention.attn_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.attention.proj_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
-    buffers_.layer.mlp.gate = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32);
-    buffers_.layer.mlp.up = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32);
-    buffers_.layer.mlp.activated = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32);
-    buffers_.layer.mlp.down = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32);
+        make_owned_tensor({max_batch_size, config_.hidden_size + 2 * kv_hidden_size(config_)}, DType::kFloat32, device);
+    buffers_.layer.attention.q = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.attention.k = make_owned_tensor({max_batch_size, kv_hidden_size(config_)}, DType::kFloat32, device);
+    buffers_.layer.attention.v = make_owned_tensor({max_batch_size, kv_hidden_size(config_)}, DType::kFloat32, device);
+    buffers_.layer.attention.attn_input = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.attention.attn_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.attention.proj_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.mlp.gate = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32, device);
+    buffers_.layer.mlp.up = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32, device);
+    buffers_.layer.mlp.activated = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32, device);
+    buffers_.layer.mlp.down = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
 }
 
 void LlamaModel::forward_step(const Tensor& input_ids,
@@ -188,43 +200,13 @@ void LlamaModel::lookup_embedding(const Tensor& ids, Tensor& out) const
     {
         throw std::runtime_error("LlamaModel::lookup_embedding: ids/out shape mismatch.");
     }
-    if (embed_tokens_.device().is_cuda() || out.device().is_cuda())
-    {
-        throw std::runtime_error("LlamaModel::lookup_embedding: CUDA path is not implemented.");
-    }
-
-    const int32_t* ids_ptr = static_cast<const int32_t*>(tensor_data(ids));
-    const float* embed_ptr = static_cast<const float*>(tensor_data(embed_tokens_));
-    float* out_ptr = static_cast<float*>(tensor_data(out));
-
-    const int64_t stride0 = embed_tokens_.stride(0);
-    const int64_t stride1 = embed_tokens_.stride(1);
-    const int64_t rows = ids.size(0);
-    for (int64_t row = 0; row < rows; ++row)
-    {
-        const int32_t token_id = ids_ptr[row];
-        if (token_id < 0 || token_id >= config_.vocab_size)
-        {
-            throw std::runtime_error("LlamaModel::lookup_embedding: token id is out of range.");
-        }
-
-        float* out_row = out_ptr + static_cast<size_t>(row) * static_cast<size_t>(config_.hidden_size);
-        for (int32_t col = 0; col < config_.hidden_size; ++col)
-        {
-            if (embedding_layout_ == EmbeddingLayout::kVocabHidden)
-            {
-                out_row[static_cast<size_t>(col)] = embed_ptr[
-                    static_cast<size_t>(token_id) * static_cast<size_t>(stride0)
-                    + static_cast<size_t>(col) * static_cast<size_t>(stride1)];
-            }
-            else
-            {
-                out_row[static_cast<size_t>(col)] = embed_ptr[
-                    static_cast<size_t>(col) * static_cast<size_t>(stride0)
-                    + static_cast<size_t>(token_id) * static_cast<size_t>(stride1)];
-            }
-        }
-    }
+    ops::embedding_lookup(
+        ids,
+        embed_tokens_,
+        out,
+        config_.vocab_size,
+        config_.hidden_size,
+        embedding_layout_ == EmbeddingLayout::kVocabHidden);
 }
 
 LlamaModelBuffers LlamaModel::make_batch_buffers(int batch_size) const

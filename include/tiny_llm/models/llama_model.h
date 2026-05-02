@@ -10,6 +10,7 @@
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/models/modules/linear.h"
 #include "tiny_llm/models/modules/rmsnorm.h"
+#include "tiny_llm/runtime/parallel_config.h"
 
 namespace tiny_llm {
 
@@ -27,6 +28,7 @@ public:
     LlamaModel(LlamaConfig config, WeightMap weight_map);
 
     void allocate_buffers(int max_batch_size);
+    void allocate_buffers(int max_batch_size, const ParallelConfig& parallel_config);
 
     int32_t num_layers() const override { return config_.num_hidden_layers; }
     int32_t vocab_size() const override { return config_.vocab_size; }
@@ -62,6 +64,7 @@ private:
     modules::Linear lm_head_;
     EmbeddingLayout embedding_layout_ = EmbeddingLayout::kVocabHidden;
     int32_t allocated_max_batch_size_ = 0;
+    ParallelConfig buffer_parallel_config_{};
     LlamaModelBuffers buffers_;
 };
 
