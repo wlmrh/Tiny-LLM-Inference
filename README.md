@@ -300,6 +300,10 @@ Install Rust from:
 https://rustup.rs/
 ```
 
+### tokenizers-cpp configure tries to access GitHub repeatedly
+
+`tokenizers-cpp` is fetched through CMake `FetchContent`. After the dependency has been populated once, the project keeps `FETCHCONTENT_UPDATES_DISCONNECTED` enabled so repeated configures do not depend on GitHub availability. If a build tree was created before this setting existed, rerun CMake after updating the repository, or create a fresh build directory.
+
 ### Transformers comparisons are skipped
 
 The comparison scripts skip with code `77` when one of these is missing:
