@@ -103,7 +103,7 @@ void KVCache::ensure_capacity(int32_t seq_id, int32_t layer_id, int32_t token_po
     if (layer_id < 0 || layer_id >= cfg_.num_layers) {
         throw std::runtime_error("KVCache: layer id out of range.");
     }
-
+    // get all the blocks allocated for layer_idth layer of the seq
     std::vector<int32_t>& table = it->second.page_tables[static_cast<size_t>(layer_id)];
     const int32_t required_blocks = (token_pos / cfg_.block_size_tokens) + 1;
 

@@ -239,9 +239,9 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
     auto prepare_input_tensors = [&](const SchedulerOutput& output) -> PreparedInputs {
         PreparedInputs prepared;
 
-        // 调度的总 Sequence 数量
+        // the number of the sequences that are scheduled
         const int64_t request_count = static_cast<int64_t>(output.scheduled_reqs.size());
-        // 需要计算的总 token 数量
+        // the number of tokens that needs to be computed
         const int64_t total_tokens = static_cast<int64_t>(std::max(0, output.total_num_scheduled_tokens));
 
         if (request_count == 0 || total_tokens == 0)
@@ -255,15 +255,15 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             return prepared;
         }
 
-        const int32_t block_size_tokens = kv_block_size_tokens_; // 每个 block 中的 token 数量
+        const int32_t block_size_tokens = kv_block_size_tokens_; // the number of tokens stored in each block
         if (block_size_tokens <= 0)
         {
             throw std::runtime_error("ModelExecutor::execute_model: kv block_size_tokens must be positive.");
         }
 
-        int64_t num_layers = 0;
-        int64_t max_blocks_per_seq = 0; // 所有 Request 中，分配到的最多的 block 数量
-        int64_t checked_total_tokens = 0; // 已经检查过合法的 token 数量
+        int64_t num_layers = 0; // num of layers in the model
+        int64_t max_blocks_per_seq = 0; // maximum block the scheduled sequences own 
+        int64_t checked_total_tokens = 0; // the amount of token that have been checked for legality
 
         req_ids.reserve(static_cast<size_t>(request_count));
         req_end_offsets.reserve(static_cast<size_t>(request_count));
@@ -276,8 +276,8 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             {
                 throw std::runtime_error("ModelExecutor::execute_model: missing token budget for scheduled request.");
             }
-
-            const int32_t scheduled_tokens = count_it->second; // req_data 请求需要计算的 token 数量
+            // tokens that current request scheduled
+            const int32_t scheduled_tokens = count_it->second;
             if (scheduled_tokens <= 0)
             {
                 throw std::runtime_error("ModelExecutor::execute_model: scheduled token budget must be positive.");
@@ -327,24 +327,32 @@ ModelRunnerOutput ModelExecutor::execute_model(const SchedulerOutput& scheduler_
             throw std::runtime_error("ModelExecutor::execute_model: total_num_scheduled_tokens mismatches per-request token budget sum.");
         }
 
+        // Host-side staging buffers for the batched forward pass. The scheduler output is
+        // flattened here and then converted into device tensors.
         std::vector<int32_t> input_values(static_cast<size_t>(total_tokens), 0);
+        // Logical position of each flattened token within its original sequence.
         std::vector<int32_t> position_values(static_cast<size_t>(total_tokens), 0);
+        // Physical KV slot for each flattened token, derived from the request page table.
         std::vector<int32_t> slot_values(static_cast<size_t>(total_tokens), 0);
+        // Batch-local sequence index for each flattened token.
         std::vector<int32_t> seq_index_values(static_cast<size_t>(total_tokens), 0);
+        // Final context length for each scheduled sequence after appending this step.
         std::vector<int32_t> context_values(static_cast<size_t>(request_count), 0);
+        // Dense host-side page table buffer with shape
+        // [num_layers, request_count, max_blocks_per_seq]. Unused entries remain -1.
         std::vector<int32_t> block_table_values(
             static_cast<size_t>(num_layers * request_count * max_blocks_per_seq),
             -1);
 
-        int32_t* input_ptr = input_values.data(); ///< input_ptr[i]: 展平后的 token ids
-        int32_t* pos_ptr = position_values.data(); ///< pos_ptr[i]: input_ptr 中第 i 个 token 在其请求中的位置
-        int32_t* slot_ptr = slot_values.data(); ///< slot_ptr[i]: input_ptr 中第 i 个 token 在显存池中的位置
-        int32_t* seq_index_ptr = seq_index_values.data();
-        int32_t* context_ptr = context_values.data(); ///< context_ptr[i]: 第 i 个请求完整长度
-        int32_t* block_table_ptr = block_table_values.data();
+        int32_t* input_ptr = input_values.data(); // Flattened token ids in execution order.
+        int32_t* pos_ptr = position_values.data(); // Logical positions aligned with input_ptr.
+        int32_t* slot_ptr = slot_values.data(); // KV slots aligned with input_ptr.
+        int32_t* seq_index_ptr = seq_index_values.data(); // Sequence indices aligned with input_ptr.
+        int32_t* context_ptr = context_values.data(); // Computed tokens
+        int32_t* block_table_ptr = block_table_values.data(); // Flattened [layer, seq, logical_block] page table.
 
-        int64_t flat_token_index = 0;
-        int64_t seq_index = 0; // 计数器，表示当前 ResquestData 是 SchedulerOutput 中的第几个请求
+        int64_t flat_token_index = 0; // Write cursor for token-major buffers.
+        int64_t seq_index = 0; // Row index of the current request in this batch.
 
         for (const RequestData& req_data : output.scheduled_reqs)
         {

@@ -46,7 +46,9 @@ private:
 
 `schedule()` 方法调度逻辑如下：
 
-遍历 running 中的任务，在 `max_num_scheduled_tokens` 限制下选取任务，并尽量完成（通过分析 Request 中的属性，如果当前为 Prefill，那么可以调度该 Request 所有未 Prefill 的 token；如果为 Decode，那么可以调度一个 Token），对于选取的每一个 token，使用 `kv_cache_manager` 的 `allocate_slots` 方法，根据其调度的 token 数量为其分配内存块。如果内存块不够，那么从 running 队列的末端调用 `_preempt_request` 放弃已执行的 task，直到足够分配。
+首先进行 token 选取。在该步中，遍历 `running` 队列中的任务，在 `max_num_scheduled_tokens` 限制下选取任务，并尽量完成（对于每一个 Request，如果当前为 Prefill 阶段，那么尝试调度该 Request 所有未完成 Prefill 的 token；如果为 Decode，那么尝试调度一个 Token）。
+
+然后进行内存分配。对于选取的每一个 token，尝试使用 `kv_cache_manager` 的 `allocate_slots` 方法，为新调度的任务分配内存块。如果内存块不够，那么从 running 队列的末端调用 `_preempt_request` 放弃已执行的 task，直到足够分配。
 
 如果在调度 running 队列过程中已经出现 `_preempt_request`，那么跳过 waiting 队列调度；否则按照类似策略为 waiting 队列中的 request 调度并分配必要显存。
 

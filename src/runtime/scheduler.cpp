@@ -313,7 +313,7 @@ void KVCacheManager::refresh_block_tables(
 
     block_tables.resize(static_cast<size_t>(kv_->num_layers()));
     for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
-    {
+    {   // collect all the blocks allocated for each layer of the current model for the current model 
         const std::vector<int32_t>& page_table = kv_->page_table(core_seq_id, layer_id);
         block_tables[static_cast<size_t>(layer_id)].insert(
             block_tables[static_cast<size_t>(layer_id)].end(),
@@ -343,7 +343,7 @@ bool KVCacheManager::allocate_slots(
     {
         return true;
     }
-
+    // blocks that need to be allocated to satisfy the current request
     const int32_t required_blocks = (target_position / kv_->block_size_tokens()) + 1;
     size_t needed_blocks = 0;
     for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
@@ -376,7 +376,7 @@ bool KVCacheManager::allocate_slots(
     {
         if (!started)
         {
-            kv_->start_sequence(core_seq_id);
+            kv_->start_sequence(core_seq_id); // register the new seq to the kvcache
         }
 
         for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
@@ -527,7 +527,7 @@ SchedulerOutput Scheduler::schedule()
     SchedulerOutput scheduler_output;
     int64_t remaining_token_budget = std::max<int64_t>(1, max_num_scheduled_tokens);
     bool preempted_during_running = false;
-
+    // try to allocate `num_new_tokens` for req, whose current state is is_running.
     auto try_allocate_with_tail_preempt = [&](Request& req, int32_t num_new_tokens, bool is_running) -> bool {
         if (num_new_tokens <= 0)
         {
@@ -543,8 +543,8 @@ SchedulerOutput Scheduler::schedule()
                 req.status = RequestStatus::RUNNING;
                 return true;
             }
-            
-            // 从队尾找到第一个合法的 Request，将其 preempt
+            // No enough Space for a the current request
+            // Find a legal Request from the back of the queue and preempt it
             Request* victim = nullptr;
             for (auto it = running.rbegin(); it != running.rend(); ++it)
             {
@@ -677,7 +677,7 @@ SchedulerOutput Scheduler::schedule()
             {
                 break;
             }
-
+            // If this request has been scheduled before, skip it.
             if (scheduler_output.num_scheduled_tokens.find(request_id) != scheduler_output.num_scheduled_tokens.end())
             {
                 continue;
@@ -724,7 +724,7 @@ SchedulerOutput Scheduler::schedule()
                 remaining_token_budget -= 1;
                 continue;
             }
-
+            // 本轮对该请求调度的 token 数量
             const int32_t chunk = std::min(remaining_prefill, static_cast<int32_t>(remaining_token_budget));
             if (!try_allocate_with_tail_preempt(*req, chunk, false))
             {
