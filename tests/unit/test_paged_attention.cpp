@@ -5,7 +5,10 @@
 #include "tiny_llm/runtime/parallel_config.h"
 
 #include <cmath>
+#include <algorithm>
+#include <functional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -40,6 +43,23 @@ void check_output(const tiny_llm::Tensor& out)
     {
         expect_near(ptr[i], expected[i], "attention output mismatch.");
     }
+}
+
+void expect_throws_with(const std::string& expected, const std::function<void()>& fn)
+{
+    try
+    {
+        fn();
+    }
+    catch (const std::runtime_error& err)
+    {
+        if (std::string(err.what()).find(expected) == std::string::npos)
+        {
+            throw;
+        }
+        return;
+    }
+    throw std::runtime_error("expected runtime_error was not thrown.");
 }
 
 } // namespace
@@ -99,17 +119,19 @@ int main()
         kBlockSizeTokens);
 
     tiny_llm::Tensor paged_out = torch::empty({2, 2}, torch::TensorOptions().dtype(torch::kFloat32));
-    tiny_llm::ops::llama_attention(
-        positions,
-        q,
-        k,
-        v,
-        paged_out,
-        paged_ctx,
-        0,
-        1,
-        1,
-        2);
+    tiny_llm::ops::LlamaAttentionParams params;
+    params.positions = &positions;
+    params.q = &q;
+    params.k = &k;
+    params.v = &v;
+    params.out = &paged_out;
+    params.ctx = &paged_ctx;
+    params.metadata = &tiny_llm::ops::current_paged_attention_runtime_metadata();
+    params.layer_id = 0;
+    params.num_attention_heads = 1;
+    params.num_key_value_heads = 1;
+    params.head_dim = 2;
+    tiny_llm::ops::llama_attention_forward(params);
     tiny_llm::ops::clear_paged_attention_runtime_metadata();
     check_output(paged_out);
 
@@ -118,6 +140,49 @@ int main()
     expect_near(kv_ptr[3], 1.0f, "cached key token 1 dim 1 mismatch.");
     expect_near(kv_ptr[4], 10.0f, "cached value token 0 dim 0 mismatch.");
     expect_near(kv_ptr[7], 40.0f, "cached value token 1 dim 1 mismatch.");
+
+    std::fill(kv_pool.begin(), kv_pool.end(), 0.0f);
+    tiny_llm::Tensor compat_out = torch::empty({2, 2}, torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::ops::set_paged_attention_runtime_metadata(
+        slot_mapping,
+        seq_indices,
+        context_lens,
+        block_tables,
+        kBlockSizeTokens);
+    tiny_llm::ops::llama_attention(
+        positions,
+        q,
+        k,
+        v,
+        compat_out,
+        paged_ctx,
+        0,
+        1,
+        1,
+        2);
+    tiny_llm::ops::clear_paged_attention_runtime_metadata();
+    check_output(compat_out);
+
+    tiny_llm::Tensor bad_seq_indices = torch::tensor({0}, torch::TensorOptions().dtype(torch::kInt32));
+    tiny_llm::ops::PagedAttentionRuntimeMetadata bad_metadata;
+    bad_metadata.slot_mapping = &slot_mapping;
+    bad_metadata.seq_indices = &bad_seq_indices;
+    bad_metadata.context_lens = &context_lens;
+    bad_metadata.block_tables = &block_tables;
+    bad_metadata.block_size_tokens = kBlockSizeTokens;
+    bad_metadata.enabled = true;
+    params.metadata = &bad_metadata;
+    expect_throws_with("seq_indices shape mismatch", [&]() {
+        tiny_llm::ops::llama_attention_forward(params);
+    });
+
+    tiny_llm::ops::PagedAttentionRuntimeMetadata bad_block_size_metadata = bad_metadata;
+    bad_block_size_metadata.seq_indices = &seq_indices;
+    bad_block_size_metadata.block_size_tokens = kBlockSizeTokens + 1;
+    params.metadata = &bad_block_size_metadata;
+    expect_throws_with("KV block size mismatch", [&]() {
+        tiny_llm::ops::llama_attention_forward(params);
+    });
 
     return 0;
 }
