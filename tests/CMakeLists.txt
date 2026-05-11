@@ -102,6 +102,15 @@ target_include_directories(test_paged_attention PRIVATE
 target_link_libraries(test_paged_attention PRIVATE c10 ${TORCH_LIBRARIES})
 add_test(NAME test_paged_attention COMMAND test_paged_attention)
 
+if (TINYLLM_ENABLE_CUDA)
+    add_executable(test_paged_attention_cuda
+        "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention_cuda.cpp"
+    )
+    target_link_libraries(test_paged_attention_cuda PRIVATE tiny_llm_operators)
+    add_test(NAME test_paged_attention_cuda COMMAND test_paged_attention_cuda)
+    set_tests_properties(test_paged_attention_cuda PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 add_executable(test_model_runner_prepared_inputs
     "${TINYLLM_TEST_UNIT_DIR}/test_model_runner_prepared_inputs.cpp"
 )
