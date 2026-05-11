@@ -88,6 +88,8 @@ add_test(NAME test_llama_ops COMMAND test_llama_ops)
 add_executable(test_paged_attention
     "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention.cpp"
     "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention.cpp"
+    "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention_cpu.cpp"
+    "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention_torch.cpp"
     "${CMAKE_SOURCE_DIR}/src/runtime/kv_cache.cpp"
     "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
     "${CMAKE_SOURCE_DIR}/src/core/allocator_common.cpp"

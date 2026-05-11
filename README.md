@@ -12,6 +12,7 @@ The current implementation focuses on a single-process runtime for small LLaMA-f
 - FCFS continuous batching with chunked prefill, one-token decode steps, and simplified tail preemption.
 - Hugging Face LLaMA/SmolLM2 loading from `config.json`, `model.safetensors`, and `tokenizer.json`.
 - Standard LLaMA building blocks:
+  - token embedding and LM-head projection
   - RoPE
   - RMSNorm
   - SwiGLU MLP
@@ -229,12 +230,39 @@ At a high level, a generation step follows this path:
 LLMEngine
   -> EngineCore::step()
     -> Scheduler::schedule()
-    -> ModelExecutor::execute_model()
-    -> Model::forward_step()
+    -> ModelRunner::run()
+    -> Model::forward(PreparedInputs, RuntimeContext)
     -> Scheduler::update_from_output()
 ```
 
-The scheduler owns request state and the runtime KV cache. `EngineCore` passes the same scheduler-owned `KVCache*` to `ModelExecutor`, so attention reads and writes the physical blocks allocated by scheduling decisions.
+The scheduler owns request state and the runtime KV cache. `EngineCore` passes the same scheduler-owned `KVCache*` to `ModelRunner`, so attention reads and writes the physical blocks allocated by scheduling decisions.
+
+`ModelRunner` is the boundary between scheduling and tensor compute. It converts `SchedulerOutput` into `PreparedInputs`:
+
+```text
+input_ids[num_tokens]
+positions[num_tokens]
+slot_mapping[num_tokens]
+seq_indices[num_tokens]
+context_lens[num_seqs]
+block_tables[num_layers, num_seqs, max_blocks_per_seq]
+sample_row_offsets[num_seqs]
+```
+
+The model layer only consumes `PreparedInputs` and `RuntimeContext`; it does not own request lifecycle, queue state, block allocation policy, or sampling decisions. Greedy sampling currently happens in the runner through the sampled rows.
+
+The LLaMA model layer is split into:
+
+```text
+LlamaForCausalLM
+  -> LlamaModel
+    -> Embedding
+    -> LlamaDecoderLayer...
+    -> final RMSNorm
+  -> LM head projection
+```
+
+Reusable model blocks live under `include/tiny_llm/models/modules/`, including `Embedding`, `Linear`, `RMSNorm`, and `RotaryEmbedding`.
 
 Paged attention metadata uses:
 
@@ -253,7 +281,7 @@ For CPU LLaMA runtime, each physical KV block stores float32 data as:
 
 where each side contains `block_size_tokens * (num_key_value_heads * head_dim)` floats.
 
-`llama_tensor_dump` and direct `LlamaModel` alignment tools can still run without runtime KV metadata. In that mode, LLaMA attention uses an in-batch causal fallback so full-sequence tensor alignment remains straightforward.
+`llama_tensor_dump` and direct `LlamaForCausalLM` alignment tools can still run without runtime KV metadata. In that mode, LLaMA attention uses an in-batch causal fallback so full-sequence tensor alignment remains straightforward.
 
 On CUDA, `llama_attention` currently uses a torch-based paged-attention bridge:
 
