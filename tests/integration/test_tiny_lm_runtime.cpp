@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#if TINYLLM_ENABLE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include "tiny_llm/core/allocator.h"
 #include "tiny_llm/models/hf_llama_config_loader.h"
 #include "tiny_llm/runtime/engine.h"
@@ -109,17 +113,35 @@ int main(int argc, char** argv)
     assert(!roundtrip.empty());
     assert(roundtrip.find("hello") != std::string::npos);
 
-    tiny_llm::StackAllocator allocator(4 * 1024 * 1024);
+#if TINYLLM_ENABLE_CUDA
+    const tiny_llm::ParallelConfig runtime_parallel_config = tiny_llm::ParallelConfig::cuda(0);
+#else
+    const tiny_llm::ParallelConfig runtime_parallel_config = tiny_llm::ParallelConfig::cpu();
+#endif
+
+    tiny_llm::StackAllocator allocator(4 * 1024 * 1024, runtime_parallel_config);
 
     constexpr int32_t kBlockSizeTokens = 16;
     constexpr size_t kNumBlocks = 64;
     const size_t kBlockBytes = llama_kv_block_bytes(hf_config, kBlockSizeTokens);
 
-    void* kv_pool = std::malloc(kNumBlocks * kBlockBytes);
+    void* kv_pool = nullptr;
+#if TINYLLM_ENABLE_CUDA
+    if (runtime_parallel_config.is_cuda()) {
+        cudaError_t status = cudaSetDevice(runtime_parallel_config.device_id());
+        assert(status == cudaSuccess);
+        status = cudaMalloc(&kv_pool, kNumBlocks * kBlockBytes);
+        assert(status == cudaSuccess);
+    } else
+#endif
+    {
+        kv_pool = std::malloc(kNumBlocks * kBlockBytes);
+    }
     assert(kv_pool != nullptr);
 
     tiny_llm::EngineArgs engine_args;
     engine_args.tokenizer = &tokenizer;
+    engine_args.parallel_config = runtime_parallel_config;
     engine_args.model_type = tiny_llm::EngineModelType::kHFLlamaSafeTensor;
     engine_args.hf_model_dir = hf_model_dir;
     engine_args.hf_weight_file = "model.safetensors";
@@ -179,6 +201,14 @@ int main(int argc, char** argv)
     std::cout << "[test_tiny_lm_runtime] prompt: " << prompt_2 << "\n";
     std::cout << "[test_tiny_lm_runtime] output: " << out_2 << "\n";
 
-    std::free(kv_pool);
+#if TINYLLM_ENABLE_CUDA
+    if (runtime_parallel_config.is_cuda()) {
+        cudaError_t status = cudaFree(kv_pool);
+        assert(status == cudaSuccess);
+    } else
+#endif
+    {
+        std::free(kv_pool);
+    }
     return 0;
 }
