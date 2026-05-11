@@ -5,6 +5,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <string>
 
 namespace tiny_llm {
 namespace modules {
@@ -18,6 +19,27 @@ Tensor make_2d_f32_tensor_view(void* data, int64_t rows, int64_t cols)
         .device(infer_blob_device(data));
     const std::array<int64_t, 2> shape{rows, cols};
     return torch::from_blob(data, shape, options);
+}
+
+Tensor make_weight_tensor(const StackedWeightDesc& desc)
+{
+    if (desc.weight.defined())
+    {
+        return desc.weight;
+    }
+
+    if (desc.layout == WeightLayout::kInOut)
+    {
+        return make_2d_f32_tensor_view(
+            desc.data,
+            static_cast<int64_t>(desc.in_features),
+            static_cast<int64_t>(desc.out_features));
+    }
+
+    return make_2d_f32_tensor_view(
+        desc.data,
+        static_cast<int64_t>(desc.out_features),
+        static_cast<int64_t>(desc.in_features));
 }
 
 bool needs_torch_matmul_path(const Tensor& input, const Tensor& output, const Tensor& weight)
@@ -78,6 +100,44 @@ Linear::Linear(int32_t in_features, int32_t out_features_total)
     }
 }
 
+void Linear::bind_weight(const Tensor& weight, WeightLayout layout)
+{
+    if (!weight.defined())
+    {
+        throw std::runtime_error("modules::Linear::bind_weight: weight tensor must be defined.");
+    }
+    if (tensor_dtype(weight) != DType::kFloat32)
+    {
+        throw std::runtime_error("modules::Linear::bind_weight: weight tensor must be float32.");
+    }
+    if (weight.dim() != 2)
+    {
+        throw std::runtime_error("modules::Linear::bind_weight: weight tensor must be rank-2.");
+    }
+
+    const int64_t expected_rows = layout == WeightLayout::kInOut ? in_features_ : out_features_total_;
+    const int64_t expected_cols = layout == WeightLayout::kInOut ? out_features_total_ : in_features_;
+    if (weight.size(0) != expected_rows || weight.size(1) != expected_cols)
+    {
+        throw std::runtime_error("modules::Linear::bind_weight: weight tensor shape mismatches module configuration.");
+    }
+    if (tensor_data(weight) == nullptr)
+    {
+        throw std::runtime_error("modules::Linear::bind_weight: weight tensor data pointer must be non-null.");
+    }
+
+    single_weight_ = StackedWeightDesc{
+        static_cast<float*>(tensor_data(weight)),
+        out_features_total_,
+        in_features_,
+        0,
+        layout,
+        register_parameter("weight", weight, /*requires_grad=*/false),
+    };
+    stacked_weights_.clear();
+    use_stacked_weights_ = false;
+}
+
 void Linear::bind_weight(float* weight,
                          int32_t out_features,
                          int32_t in_features,
@@ -96,18 +156,59 @@ void Linear::bind_weight(float* weight,
         throw std::runtime_error("modules::Linear::bind_weight: out_features mismatches module configuration.");
     }
 
-    single_weight_ = StackedWeightDesc{weight, out_features, in_features, 0, layout};
-    stacked_weights_ = nullptr;
-    stacked_weight_count_ = 0;
+    Tensor weight_tensor = layout == WeightLayout::kInOut
+        ? make_2d_f32_tensor_view(weight, in_features, out_features)
+        : make_2d_f32_tensor_view(weight, out_features, in_features);
+    single_weight_ = StackedWeightDesc{
+        weight,
+        out_features,
+        in_features,
+        0,
+        layout,
+        register_parameter("weight", weight_tensor, /*requires_grad=*/false),
+    };
+    stacked_weights_.clear();
     use_stacked_weights_ = false;
 }
 
 void Linear::bind_stacked_weights(const StackedWeightDesc* descs, int32_t count)
 {
     validate_descs(descs, count);
-    stacked_weights_ = descs;
-    stacked_weight_count_ = count;
+    stacked_weights_.clear();
+    stacked_weights_.reserve(static_cast<size_t>(count));
+    for (int32_t i = 0; i < count; ++i)
+    {
+        StackedWeightDesc desc = descs[i];
+        if (!desc.weight.defined())
+        {
+            desc.weight = make_weight_tensor(desc);
+        }
+        desc.weight = register_parameter(
+            "weight_" + std::to_string(i),
+            desc.weight,
+            /*requires_grad=*/false);
+        desc.data = static_cast<float*>(tensor_data(desc.weight));
+        stacked_weights_.push_back(std::move(desc));
+    }
     use_stacked_weights_ = true;
+}
+
+Tensor Linear::forward(const Tensor& input, ExecutionContext& ctx) const
+{
+    if (!input.defined())
+    {
+        throw std::runtime_error("modules::Linear::forward: input must be defined.");
+    }
+    if (input.dim() != 2)
+    {
+        throw std::runtime_error("modules::Linear::forward: input must be rank-2.");
+    }
+
+    Tensor output = torch::empty(
+        {input.size(0), out_features_total_},
+        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(input.device()));
+    forward(input, output, ctx);
+    return output;
 }
 
 void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx) const
@@ -119,18 +220,12 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
     {
         if (single_weight_.layout == WeightLayout::kInOut)
         {
-            Tensor weight = make_2d_f32_tensor_view(
-                single_weight_.data,
-                static_cast<int64_t>(single_weight_.in_features),
-                static_cast<int64_t>(single_weight_.out_features));
+            Tensor weight = make_weight_tensor(single_weight_);
             ops::gemm(input, weight, output, ctx);
             return;
         }
 
-        Tensor weight = make_2d_f32_tensor_view(
-            single_weight_.data,
-            static_cast<int64_t>(single_weight_.out_features),
-            static_cast<int64_t>(single_weight_.in_features));
+        Tensor weight = make_weight_tensor(single_weight_);
         if (needs_torch_matmul_path(input, output, weight))
         {
             run_out_in_matmul(input, weight, output);
@@ -138,6 +233,7 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
         }
 
         const float* input_ptr = static_cast<const float*>(tensor_data(input));
+        const float* weight_ptr = static_cast<const float*>(tensor_data(weight));
         float* output_ptr = static_cast<float*>(tensor_data(output));
         for (int64_t row = 0; row < rows; ++row)
         {
@@ -149,7 +245,7 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
             {
                 output_row_ptr[static_cast<size_t>(out_col)] = compute_linear_sum(
                     input_row_ptr,
-                    single_weight_.data,
+                    weight_ptr,
                     in_features_,
                     out_features_total_,
                     out_col,
@@ -159,18 +255,9 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
         return;
     }
 
-    for (int32_t i = 0; i < stacked_weight_count_; ++i)
+    for (const StackedWeightDesc& desc : stacked_weights_)
     {
-        const StackedWeightDesc& desc = stacked_weights_[i];
-        Tensor weight = desc.layout == WeightLayout::kInOut
-            ? make_2d_f32_tensor_view(
-                desc.data,
-                static_cast<int64_t>(desc.in_features),
-                static_cast<int64_t>(desc.out_features))
-            : make_2d_f32_tensor_view(
-                desc.data,
-                static_cast<int64_t>(desc.out_features),
-                static_cast<int64_t>(desc.in_features));
+        Tensor weight = make_weight_tensor(desc);
 
         if (needs_torch_matmul_path(input, output, weight))
         {
@@ -190,7 +277,7 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
             continue;
         }
 
-        const float* weight_ptr = desc.data;
+        const float* weight_ptr = static_cast<const float*>(tensor_data(weight));
         const float* input_ptr = static_cast<const float*>(tensor_data(input));
         float* output_ptr = static_cast<float*>(tensor_data(output));
 
@@ -243,7 +330,7 @@ void Linear::validate_forward_inputs(const Tensor& input, const Tensor& output) 
     {
         throw std::runtime_error("modules::Linear::forward: no weight is bound.");
     }
-    if (use_stacked_weights_ && (stacked_weights_ == nullptr || stacked_weight_count_ <= 0))
+    if (use_stacked_weights_ && stacked_weights_.empty())
     {
         throw std::runtime_error("modules::Linear::forward: stacked weights are not bound.");
     }
@@ -264,9 +351,34 @@ void Linear::validate_descs(const StackedWeightDesc* descs, int32_t count) const
     for (int32_t i = 0; i < count; ++i)
     {
         const StackedWeightDesc& desc = descs[i];
-        if (desc.data == nullptr)
+        if (desc.weight.defined())
         {
-            throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.data must be non-null.");
+            if (tensor_dtype(desc.weight) != DType::kFloat32)
+            {
+                throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.weight must be float32.");
+            }
+            if (desc.weight.dim() != 2)
+            {
+                throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.weight must be rank-2.");
+            }
+            const int64_t expected_rows = desc.layout == WeightLayout::kInOut
+                ? desc.in_features
+                : desc.out_features;
+            const int64_t expected_cols = desc.layout == WeightLayout::kInOut
+                ? desc.out_features
+                : desc.in_features;
+            if (desc.weight.size(0) != expected_rows || desc.weight.size(1) != expected_cols)
+            {
+                throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.weight shape mismatch.");
+            }
+            if (tensor_data(desc.weight) == nullptr)
+            {
+                throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.weight data pointer must be non-null.");
+            }
+        }
+        else if (desc.data == nullptr)
+        {
+            throw std::runtime_error("modules::Linear::bind_stacked_weights: desc weight must be bound.");
         }
         if (desc.in_features != in_features_)
         {

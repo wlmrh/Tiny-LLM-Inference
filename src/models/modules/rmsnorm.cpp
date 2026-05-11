@@ -21,30 +21,63 @@ RMSNorm::RMSNorm(int32_t hidden_size, float eps)
     }
 }
 
+void RMSNorm::bind_weights(const Tensor& weight)
+{
+    if (!weight.defined())
+    {
+        throw std::runtime_error("modules::RMSNorm::bind_weights: weight tensor must be defined.");
+    }
+    if (tensor_dtype(weight) != DType::kFloat32)
+    {
+        throw std::runtime_error("modules::RMSNorm::bind_weights: weight tensor must be float32.");
+    }
+    if (weight.dim() != 1 || weight.size(0) != hidden_size_)
+    {
+        throw std::runtime_error("modules::RMSNorm::bind_weights: weight tensor shape must be [hidden_size].");
+    }
+    if (tensor_data(weight) == nullptr)
+    {
+        throw std::runtime_error("modules::RMSNorm::bind_weights: weight tensor data pointer must be non-null.");
+    }
+
+    weight_ = register_parameter("weight", weight, /*requires_grad=*/false);
+}
+
 void RMSNorm::bind_weights(float* weight)
 {
     if (weight == nullptr)
     {
         throw std::runtime_error("modules::RMSNorm::bind_weights: weight pointer must be non-null.");
     }
-    weight_ = weight;
+
+    const auto options = torch::TensorOptions()
+        .dtype(to_torch_scalar_type(DType::kFloat32))
+        .device(infer_blob_device(weight));
+    bind_weights(torch::from_blob(weight, {hidden_size_}, options));
+}
+
+Tensor RMSNorm::forward(const Tensor& input, ExecutionContext& ctx) const
+{
+    if (!input.defined())
+    {
+        throw std::runtime_error("modules::RMSNorm::forward: input must be defined.");
+    }
+
+    Tensor output = torch::empty_like(input);
+    forward(input, output, ctx);
+    return output;
 }
 
 void RMSNorm::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx) const
 {
     validate_forward_inputs(input, output);
 
-    const auto options = torch::TensorOptions()
-        .dtype(to_torch_scalar_type(DType::kFloat32))
-        .device(infer_blob_device(weight_));
-    const Tensor weight = torch::from_blob(weight_, {hidden_size_}, options);
-
-    ops::rmsnorm(input, weight, output, ctx, eps_);
+    ops::rmsnorm(input, weight_, output, ctx, eps_);
 }
 
 void RMSNorm::validate_forward_inputs(const Tensor& input, const Tensor& output) const
 {
-    if (weight_ == nullptr)
+    if (!weight_.defined())
     {
         throw std::runtime_error("modules::RMSNorm::forward: weights are not bound.");
     }

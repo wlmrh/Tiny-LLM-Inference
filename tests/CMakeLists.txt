@@ -55,6 +55,25 @@ target_include_directories(test_linear_module PRIVATE
 target_link_libraries(test_linear_module PRIVATE c10 ${TORCH_LIBRARIES})
 add_test(NAME test_linear_module COMMAND test_linear_module)
 
+add_executable(test_rmsnorm_module
+    "${TINYLLM_TEST_UNIT_DIR}/test_rmsnorm_module.cpp"
+    "${CMAKE_SOURCE_DIR}/src/models/modules/rmsnorm.cpp"
+    "${CMAKE_SOURCE_DIR}/src/operators/rmsnorm/rmsnorm.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
+)
+target_include_directories(test_rmsnorm_module PRIVATE
+    "${CMAKE_SOURCE_DIR}/include"
+    ${TORCH_INCLUDE_DIRS}
+)
+target_link_libraries(test_rmsnorm_module PRIVATE c10 ${TORCH_LIBRARIES})
+add_test(NAME test_rmsnorm_module COMMAND test_rmsnorm_module)
+
+add_executable(test_model_blocks
+    "${TINYLLM_TEST_UNIT_DIR}/test_model_blocks.cpp"
+)
+target_link_libraries(test_model_blocks PRIVATE tiny_llm_models)
+add_test(NAME test_model_blocks COMMAND test_model_blocks)
+
 add_executable(test_llama_ops
     "${TINYLLM_TEST_UNIT_DIR}/test_llama_ops.cpp"
     "${CMAKE_SOURCE_DIR}/src/operators/llama_ops.cpp"

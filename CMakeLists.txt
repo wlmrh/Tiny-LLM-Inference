@@ -116,8 +116,10 @@ add_library(tiny_llm STATIC
     src/models/llama_model.cpp
     src/models/llama_weight_map.cpp
     src/models/mini_llama.cpp
+    src/models/modules/embedding.cpp
     src/models/modules/linear.cpp
     src/models/modules/rmsnorm.cpp
+    src/models/modules/rotary_embedding.cpp
     src/models/tiny_lm.cpp
 )
 

@@ -34,11 +34,7 @@ int main()
         torch::TensorOptions().dtype(torch::kFloat32));
 
     tiny_llm::modules::Linear linear(3, 2);
-    linear.bind_weight(
-        weight_out_in.data_ptr<float>(),
-        2,
-        3,
-        tiny_llm::modules::WeightLayout::kOutIn);
+    linear.bind_weight(weight_out_in, tiny_llm::modules::WeightLayout::kOutIn);
     linear.forward(input, output, ctx);
 
     const float* output_ptr = output.data_ptr<float>();
@@ -46,6 +42,11 @@ int main()
     expect_near(output_ptr[1], 5.0f, "single kOutIn row 0 col 1 mismatch.");
     expect_near(output_ptr[2], 10.0f, "single kOutIn row 1 col 0 mismatch.");
     expect_near(output_ptr[3], 11.0f, "single kOutIn row 1 col 1 mismatch.");
+
+    tiny_llm::Tensor returned_output = linear.forward(input, ctx);
+    const float* returned_ptr = returned_output.data_ptr<float>();
+    expect_near(returned_ptr[0], 4.0f, "returned single kOutIn row 0 col 0 mismatch.");
+    expect_near(returned_ptr[3], 11.0f, "returned single kOutIn row 1 col 1 mismatch.");
 
     tiny_llm::Tensor stacked_output = torch::empty(
         {2, 3},
@@ -58,8 +59,8 @@ int main()
          {0.0f, 0.0f, 1.0f}},
         torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::modules::StackedWeightDesc descs[2] = {
-        {w0.data_ptr<float>(), 1, 3, 0, tiny_llm::modules::WeightLayout::kOutIn},
-        {w1.data_ptr<float>(), 2, 3, 1, tiny_llm::modules::WeightLayout::kOutIn},
+        {nullptr, 1, 3, 0, tiny_llm::modules::WeightLayout::kOutIn, w0},
+        {nullptr, 2, 3, 1, tiny_llm::modules::WeightLayout::kOutIn, w1},
     };
 
     tiny_llm::modules::Linear stacked_linear(3, 3);

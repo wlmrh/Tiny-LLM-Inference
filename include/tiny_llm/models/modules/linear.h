@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "tiny_llm/core/tensor.h"
 
@@ -21,17 +22,21 @@ struct StackedWeightDesc {
     int32_t in_features = 0;
     int32_t output_offset = 0;
     WeightLayout layout = WeightLayout::kInOut;
+    Tensor weight;
 };
 
-class Linear {
+class Linear : public torch::nn::Module {
 public:
     Linear(int32_t in_features, int32_t out_features_total);
 
+    void bind_weight(const Tensor& weight,
+                     WeightLayout layout = WeightLayout::kInOut);
     void bind_weight(float* weight,
                      int32_t out_features,
                      int32_t in_features,
                      WeightLayout layout = WeightLayout::kInOut);
     void bind_stacked_weights(const StackedWeightDesc* descs, int32_t count);
+    Tensor forward(const Tensor& input, ExecutionContext& ctx) const;
     void forward(const Tensor& input, Tensor& output, ExecutionContext& ctx) const;
 
     int32_t in_features() const { return in_features_; }
@@ -42,8 +47,7 @@ private:
     void validate_descs(const StackedWeightDesc* descs, int32_t count) const;
 
     StackedWeightDesc single_weight_{};
-    const StackedWeightDesc* stacked_weights_ = nullptr;
-    int32_t stacked_weight_count_ = 0;
+    std::vector<StackedWeightDesc> stacked_weights_;
     bool use_stacked_weights_ = false;
     int32_t in_features_ = 0;
     int32_t out_features_total_ = 0;
