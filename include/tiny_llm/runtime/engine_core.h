@@ -6,7 +6,7 @@
 #include <unordered_map>
 
 #include "tiny_llm/runtime/engine_args.h"
-#include "tiny_llm/runtime/executor.h"
+#include "tiny_llm/runtime/model_runner.h"
 #include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/scheduler.h"
 
@@ -38,7 +38,7 @@ public:
 
 private:
     std::unique_ptr<Scheduler> scheduler_;
-    std::unique_ptr<ModelExecutor> executor_;
+    std::unique_ptr<ModelRunner> runner_;
 };
 
 } // namespace tiny_llm

@@ -91,7 +91,7 @@ int main(int argc, char** argv)
             tiny_llm::HFSafeTensorLoader::from_file(weight_path.string());
         const tiny_llm::WeightMap weight_map = tiny_llm::WeightMap::from_safetensors(loader);
 
-        tiny_llm::LlamaModel model(config, weight_map);
+        tiny_llm::LlamaForCausalLM model(config, weight_map);
         model.allocate_buffers(static_cast<int32_t>(input_ids_data.size()));
 
         torch::Tensor input_ids = torch::from_blob(
@@ -102,12 +102,12 @@ int main(int argc, char** argv)
             const_cast<int32_t*>(positions_data.data()),
             {static_cast<int64_t>(positions_data.size())},
             torch::TensorOptions().dtype(torch::kInt32)).clone();
-        torch::Tensor logits = torch::zeros(
-            {static_cast<int64_t>(input_ids_data.size()), config.vocab_size},
-            torch::TensorOptions().dtype(torch::kFloat32));
-
         tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
-        model.forward_step(input_ids, positions, logits, ctx);
+        tiny_llm::PreparedInputs prepared;
+        prepared.input_ids = input_ids;
+        prepared.positions = positions;
+        tiny_llm::RuntimeContext runtime_ctx(ctx, tiny_llm::ops::PagedAttentionRuntimeMetadata{});
+        torch::Tensor logits = model.forward(prepared, runtime_ctx);
         logits = logits.contiguous();
 
         std::ofstream out(output_path, std::ios::binary);

@@ -594,6 +594,17 @@ const PagedAttentionRuntimeMetadata& current_paged_attention_runtime_metadata()
     return g_runtime_metadata;
 }
 
+PagedAttentionRuntimeMetadataGuard::PagedAttentionRuntimeMetadataGuard(const PagedAttentionRuntimeMetadata& metadata)
+    : previous_(g_runtime_metadata)
+{
+    g_runtime_metadata = metadata;
+}
+
+PagedAttentionRuntimeMetadataGuard::~PagedAttentionRuntimeMetadataGuard()
+{
+    g_runtime_metadata = previous_;
+}
+
 void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx)
 {
     if (tensor_dtype(q) != DType::kFloat32 || tensor_dtype(out) != DType::kFloat32)

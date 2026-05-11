@@ -24,6 +24,18 @@ void set_paged_attention_runtime_metadata(const Tensor& slot_mapping,
 void clear_paged_attention_runtime_metadata();
 const PagedAttentionRuntimeMetadata& current_paged_attention_runtime_metadata();
 
+class PagedAttentionRuntimeMetadataGuard {
+public:
+    explicit PagedAttentionRuntimeMetadataGuard(const PagedAttentionRuntimeMetadata& metadata);
+    ~PagedAttentionRuntimeMetadataGuard();
+
+    PagedAttentionRuntimeMetadataGuard(const PagedAttentionRuntimeMetadataGuard&) = delete;
+    PagedAttentionRuntimeMetadataGuard& operator=(const PagedAttentionRuntimeMetadataGuard&) = delete;
+
+private:
+    PagedAttentionRuntimeMetadata previous_{};
+};
+
 void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx);
 void llama_attention(const Tensor& positions,
                      const Tensor& q,

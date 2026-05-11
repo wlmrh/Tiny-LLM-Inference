@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -112,9 +113,10 @@ int main(int argc, char** argv)
             tiny_llm::HFSafeTensorLoader::from_file(weight_path.string());
         const tiny_llm::WeightMap weight_map = tiny_llm::WeightMap::from_safetensors(loader);
 
-        tiny_llm::LlamaModel model(config, weight_map);
+        tiny_llm::LlamaForCausalLM causal_model(config, weight_map);
         const int32_t num_tokens = static_cast<int32_t>(input_ids_data.size());
-        model.allocate_buffers(num_tokens);
+        causal_model.allocate_buffers(num_tokens);
+        tiny_llm::LlamaModel& model = *causal_model.model_;
 
         torch::Tensor input_ids = torch::from_blob(
             input_ids_data.data(),
@@ -129,67 +131,69 @@ int main(int argc, char** argv)
             torch::TensorOptions().dtype(torch::kFloat32));
 
         tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
+        tiny_llm::RuntimeContext runtime_ctx(ctx, tiny_llm::ops::PagedAttentionRuntimeMetadata{});
         tiny_llm::LlamaModelBuffers buffers = model.make_batch_buffers(num_tokens);
 
-        model.lookup_embedding(input_ids, buffers.hidden_states);
+        model.embed_tokens_->forward(input_ids, buffers.hidden_states);
         dump_tensor(output_dir, "00_embed", buffers.hidden_states);
 
         for (int32_t layer_id = 0; layer_id < config.num_hidden_layers; ++layer_id)
         {
-            const tiny_llm::LlamaDecoderLayer& layer = model.layers_[static_cast<size_t>(layer_id)];
+            const std::shared_ptr<tiny_llm::LlamaDecoderLayer>& layer =
+                model.layers_[static_cast<size_t>(layer_id)];
 
-            layer.copy_tensor(buffers.hidden_states, buffers.layer.residual);
-            layer.input_layernorm_.forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
+            layer->copy_tensor(buffers.hidden_states, buffers.layer.residual);
+            layer->input_layernorm_->forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "input_norm"), buffers.layer.norm_output);
 
-            layer.self_attn_.qkv_proj_.forward(
+            layer->self_attn_->qkv_proj_->forward(
                 buffers.layer.norm_output,
                 buffers.layer.attention.qkv,
                 ctx);
-            layer.self_attn_.split_qkv(
+            layer->self_attn_->split_qkv(
                 buffers.layer.attention.qkv,
                 buffers.layer.attention.q,
                 buffers.layer.attention.k,
                 buffers.layer.attention.v);
             dump_tensor(output_dir, layer_name(layer_id, "qkv"), buffers.layer.attention.qkv);
-            layer.self_attn_.apply_rope(positions, buffers.layer.attention.q, buffers.layer.attention.k);
+            layer->self_attn_->apply_rope(positions, buffers.layer.attention.q, buffers.layer.attention.k);
             dump_tensor(output_dir, layer_name(layer_id, "q_rope"), buffers.layer.attention.q);
             dump_tensor(output_dir, layer_name(layer_id, "k_rope"), buffers.layer.attention.k);
             dump_tensor(output_dir, layer_name(layer_id, "v"), buffers.layer.attention.v);
-            layer.self_attn_.compute_attention(
+            layer->self_attn_->compute_attention(
                 positions,
                 buffers.layer.attention.q,
                 buffers.layer.attention.k,
                 buffers.layer.attention.v,
                 buffers.layer.attention.attn_output,
-                ctx);
+                runtime_ctx);
             dump_tensor(output_dir, layer_name(layer_id, "attn_output"), buffers.layer.attention.attn_output);
-            layer.self_attn_.o_proj_.forward(
+            layer->self_attn_->o_proj_->forward(
                 buffers.layer.attention.attn_output,
                 buffers.layer.attention.proj_output,
                 ctx);
             dump_tensor(output_dir, layer_name(layer_id, "attn_proj"), buffers.layer.attention.proj_output);
-            layer.add_inplace(buffers.layer.residual, buffers.layer.attention.proj_output, buffers.hidden_states);
+            layer->add_inplace(buffers.layer.residual, buffers.layer.attention.proj_output, buffers.hidden_states);
             dump_tensor(output_dir, layer_name(layer_id, "post_attn_residual"), buffers.hidden_states);
 
-            layer.copy_tensor(buffers.hidden_states, buffers.layer.residual);
-            layer.post_attention_layernorm_.forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
+            layer->copy_tensor(buffers.hidden_states, buffers.layer.residual);
+            layer->post_attention_layernorm_->forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "post_attn_norm"), buffers.layer.norm_output);
-            layer.mlp_.gate_proj_.forward(buffers.layer.norm_output, buffers.layer.mlp.gate, ctx);
-            layer.mlp_.up_proj_.forward(buffers.layer.norm_output, buffers.layer.mlp.up, ctx);
-            layer.mlp_.apply_activation(buffers.layer.mlp.gate, buffers.layer.mlp.up, buffers.layer.mlp.activated);
-            layer.mlp_.down_proj_.forward(buffers.layer.mlp.activated, buffers.layer.mlp.down, ctx);
+            layer->mlp_->gate_proj_->forward(buffers.layer.norm_output, buffers.layer.mlp.gate, ctx);
+            layer->mlp_->up_proj_->forward(buffers.layer.norm_output, buffers.layer.mlp.up, ctx);
+            layer->mlp_->apply_activation(buffers.layer.mlp.gate, buffers.layer.mlp.up, buffers.layer.mlp.activated);
+            layer->mlp_->down_proj_->forward(buffers.layer.mlp.activated, buffers.layer.mlp.down, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "mlp_gate"), buffers.layer.mlp.gate);
             dump_tensor(output_dir, layer_name(layer_id, "mlp_up"), buffers.layer.mlp.up);
             dump_tensor(output_dir, layer_name(layer_id, "mlp_activated"), buffers.layer.mlp.activated);
             dump_tensor(output_dir, layer_name(layer_id, "mlp_down"), buffers.layer.mlp.down);
-            layer.add_inplace(buffers.layer.residual, buffers.layer.mlp.down, buffers.hidden_states);
+            layer->add_inplace(buffers.layer.residual, buffers.layer.mlp.down, buffers.hidden_states);
             dump_tensor(output_dir, layer_name(layer_id, "output"), buffers.hidden_states);
         }
 
-        model.final_norm_.forward(buffers.hidden_states, buffers.norm_output, ctx);
+        model.final_norm_->forward(buffers.hidden_states, buffers.norm_output, ctx);
         dump_tensor(output_dir, "final_norm", buffers.norm_output);
-        model.lm_head_.forward(buffers.norm_output, logits, ctx);
+        causal_model.lm_head_->forward(buffers.norm_output, logits, ctx);
         dump_tensor(output_dir, "logits", logits);
     }
     catch (const std::exception& ex)

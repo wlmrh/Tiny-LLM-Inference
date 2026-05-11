@@ -1,9 +1,7 @@
 #include "tiny_llm/models/llama_model.h"
 
-#include "tiny_llm/core/context.h"
-#include "tiny_llm/operators/llama_ops.h"
-
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -38,20 +36,28 @@ int32_t kv_hidden_size(const LlamaConfig& config)
 
 } // namespace
 
-LlamaModel::LlamaModel(LlamaConfig config, WeightMap weight_map)
-    : config_(std::move(config)),
-      weight_map_(std::move(weight_map)),
-      final_norm_(config_.hidden_size, config_.rms_norm_eps),
-      lm_head_(config_.hidden_size, config_.vocab_size)
+LlamaModel::LlamaModel(LlamaConfig config, const WeightMap& weight_map)
+    : config_(std::move(config))
 {
-    validate_weight_shapes();
+    validate_weight_shapes(weight_map);
+    embed_tokens_ = register_module(
+        "embed_tokens",
+        std::make_shared<modules::Embedding>(config_.vocab_size, config_.hidden_size));
+    embed_tokens_->bind_weight(weight_map.get_tensor_view("model.embed_tokens.weight"));
+    final_norm_ = register_module(
+        "final_norm",
+        std::make_shared<modules::RMSNorm>(config_.hidden_size, config_.rms_norm_eps));
+    final_norm_->bind_weights(weight_map.get_tensor_view("model.norm.weight"));
+
     layers_.reserve(static_cast<size_t>(config_.num_hidden_layers));
     for (int32_t layer_id = 0; layer_id < config_.num_hidden_layers; ++layer_id)
     {
-        layers_.emplace_back(config_);
-        layers_.back().load_weights(weight_map_, layer_id);
+        auto layer = register_module(
+            "layer_" + std::to_string(layer_id),
+            std::make_shared<LlamaDecoderLayer>(config_));
+        layer->load_weights(weight_map, layer_id);
+        layers_.push_back(std::move(layer));
     }
-    bind_top_level_weights();
 }
 
 void LlamaModel::allocate_buffers(int max_batch_size)
@@ -95,118 +101,66 @@ void LlamaModel::allocate_buffers(int max_batch_size, const ParallelConfig& para
     buffers_.layer.mlp.down = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
 }
 
-void LlamaModel::forward_step(const Tensor& input_ids,
-                              const Tensor& positions,
-                              Tensor& logits,
-                              ExecutionContext& ctx)
+Tensor LlamaModel::forward_hidden(const PreparedInputs& inputs, RuntimeContext& ctx)
 {
-    validate_forward_inputs(input_ids, positions, logits);
+    validate_forward_inputs(inputs.input_ids, inputs.positions);
 
-    const int batch_size = checked_positive_dim(input_ids.size(0), "batch_size");
+    const int batch_size = checked_positive_dim(inputs.input_ids.size(0), "batch_size");
     if (allocated_max_batch_size_ <= 0)
     {
-        throw std::runtime_error("LlamaModel::forward_step: buffers are not allocated.");
+        throw std::runtime_error("LlamaModel::forward_hidden: buffers are not allocated.");
     }
     if (batch_size > allocated_max_batch_size_)
     {
-        throw std::runtime_error("LlamaModel::forward_step: batch size exceeds allocated buffers.");
+        throw std::runtime_error("LlamaModel::forward_hidden: batch size exceeds allocated buffers.");
     }
 
     LlamaModelBuffers batch_buffers = make_batch_buffers(batch_size);
-    lookup_embedding(input_ids, batch_buffers.hidden_states);
+    embed_tokens_->forward(inputs.input_ids, batch_buffers.hidden_states);
 
-    for (const LlamaDecoderLayer& layer : layers_)
+    for (const std::shared_ptr<LlamaDecoderLayer>& layer : layers_)
     {
-        layer.forward(batch_buffers.hidden_states, positions, batch_buffers.layer, ctx);
+        layer->forward(batch_buffers.hidden_states, inputs.positions, batch_buffers.layer, ctx);
     }
 
-    final_norm_.forward(batch_buffers.hidden_states, batch_buffers.norm_output, ctx);
-    lm_head_.forward(batch_buffers.norm_output, logits, ctx);
+    final_norm_->forward(batch_buffers.hidden_states, batch_buffers.norm_output, ctx.execution());
+    return batch_buffers.norm_output;
 }
 
 void LlamaModel::validate_forward_inputs(const Tensor& input_ids,
-                                         const Tensor& positions,
-                                         const Tensor& logits) const
+                                         const Tensor& positions) const
 {
     if (tensor_dtype(input_ids) != DType::kInt32 || tensor_dtype(positions) != DType::kInt32)
     {
-        throw std::runtime_error("LlamaModel::forward_step: input_ids and positions must be int32.");
-    }
-    if (tensor_dtype(logits) != DType::kFloat32)
-    {
-        throw std::runtime_error("LlamaModel::forward_step: logits must be float32.");
+        throw std::runtime_error("LlamaModel::forward_hidden: input_ids and positions must be int32.");
     }
 
     if (input_ids.dim() != 1 || positions.dim() != 1)
     {
-        throw std::runtime_error("LlamaModel::forward_step: input_ids and positions must be rank-1.");
+        throw std::runtime_error("LlamaModel::forward_hidden: input_ids and positions must be rank-1.");
     }
     if (!input_ids.sizes().equals(positions.sizes()))
     {
-        throw std::runtime_error("LlamaModel::forward_step: input_ids and positions must have same shape.");
+        throw std::runtime_error("LlamaModel::forward_hidden: input_ids and positions must have same shape.");
     }
-    if (logits.dim() != 2 || logits.size(0) != input_ids.size(0) || logits.size(1) != config_.vocab_size)
+    if (tensor_data(input_ids) == nullptr || tensor_data(positions) == nullptr)
     {
-        throw std::runtime_error("LlamaModel::forward_step: logits shape must be [B, vocab_size].");
-    }
-    if (tensor_data(input_ids) == nullptr || tensor_data(positions) == nullptr || tensor_data(logits) == nullptr)
-    {
-        throw std::runtime_error("LlamaModel::forward_step: input/output pointers must be non-null.");
+        throw std::runtime_error("LlamaModel::forward_hidden: input pointers must be non-null.");
     }
 }
 
-void LlamaModel::validate_weight_shapes()
+void LlamaModel::validate_weight_shapes(const WeightMap& weight_map) const
 {
-    embed_tokens_ = weight_map_.get_tensor_view("model.embed_tokens.weight");
-    if (embed_tokens_.dim() != 2)
+    const Tensor& embed_tokens = weight_map.get_tensor_view("model.embed_tokens.weight");
+    if (embed_tokens.dim() != 2)
     {
         throw std::runtime_error("LlamaModel: model.embed_tokens.weight must be rank-2.");
     }
-
-    if (embed_tokens_.size(0) == config_.vocab_size && embed_tokens_.size(1) == config_.hidden_size)
-    {
-        embedding_layout_ = EmbeddingLayout::kVocabHidden;
-    }
-    else if (embed_tokens_.size(0) == config_.hidden_size && embed_tokens_.size(1) == config_.vocab_size)
-    {
-        embedding_layout_ = EmbeddingLayout::kHiddenVocab;
-    }
-    else
+    if (!((embed_tokens.size(0) == config_.vocab_size && embed_tokens.size(1) == config_.hidden_size)
+          || (embed_tokens.size(0) == config_.hidden_size && embed_tokens.size(1) == config_.vocab_size)))
     {
         throw std::runtime_error("LlamaModel: unsupported embed_tokens shape.");
     }
-}
-
-void LlamaModel::bind_top_level_weights()
-{
-    final_norm_.bind_weights(weight_map_.get_tensor_as<float>("model.norm.weight"));
-    const std::string lm_head_key = weight_map_.contains("lm_head.weight")
-        ? std::string("lm_head.weight")
-        : std::string("model.embed_tokens.weight");
-    lm_head_.bind_weight(
-        weight_map_.get_tensor_as<float>(lm_head_key),
-        config_.vocab_size,
-        config_.hidden_size,
-        modules::WeightLayout::kOutIn);
-}
-
-void LlamaModel::lookup_embedding(const Tensor& ids, Tensor& out) const
-{
-    if (tensor_dtype(ids) != DType::kInt32 || tensor_dtype(out) != DType::kFloat32)
-    {
-        throw std::runtime_error("LlamaModel::lookup_embedding: ids/out dtype mismatch.");
-    }
-    if (ids.dim() != 1 || out.dim() != 2 || out.size(0) != ids.size(0) || out.size(1) != config_.hidden_size)
-    {
-        throw std::runtime_error("LlamaModel::lookup_embedding: ids/out shape mismatch.");
-    }
-    ops::embedding_lookup(
-        ids,
-        embed_tokens_,
-        out,
-        config_.vocab_size,
-        config_.hidden_size,
-        embedding_layout_ == EmbeddingLayout::kVocabHidden);
 }
 
 LlamaModelBuffers LlamaModel::make_batch_buffers(int batch_size) const
@@ -235,6 +189,47 @@ LlamaModelBuffers LlamaModel::make_batch_buffers(int batch_size) const
 Tensor LlamaModel::make_batch_view_2d(const Tensor& backing, int batch_size, int width) const
 {
     return make_tensor_from_blob(tensor_data(backing), {batch_size, width}, DType::kFloat32);
+}
+
+LlamaForCausalLM::LlamaForCausalLM(LlamaConfig config, WeightMap weight_map)
+    : config_(std::move(config))
+{
+    model_ = register_module(
+        "model",
+        std::make_shared<LlamaModel>(config_, weight_map));
+    lm_head_ = register_module(
+        "lm_head",
+        std::make_shared<modules::Linear>(config_.hidden_size, config_.vocab_size));
+    bind_lm_head(weight_map);
+}
+
+void LlamaForCausalLM::allocate_buffers(int max_batch_size)
+{
+    model_->allocate_buffers(max_batch_size);
+}
+
+void LlamaForCausalLM::allocate_buffers(int max_batch_size, const ParallelConfig& parallel_config)
+{
+    model_->allocate_buffers(max_batch_size, parallel_config);
+}
+
+Tensor LlamaForCausalLM::forward(const PreparedInputs& inputs, RuntimeContext& ctx)
+{
+    Tensor hidden_states = model_->forward_hidden(inputs, ctx);
+    return compute_logits(hidden_states, ctx);
+}
+
+Tensor LlamaForCausalLM::compute_logits(const Tensor& hidden_states, RuntimeContext& ctx) const
+{
+    return lm_head_->forward(hidden_states, ctx.execution());
+}
+
+void LlamaForCausalLM::bind_lm_head(const WeightMap& weight_map)
+{
+    const std::string lm_head_key = weight_map.contains("lm_head.weight")
+        ? std::string("lm_head.weight")
+        : std::string("model.embed_tokens.weight");
+    lm_head_->bind_weight(weight_map.get_tensor_view(lm_head_key), modules::WeightLayout::kOutIn);
 }
 
 } // namespace tiny_llm

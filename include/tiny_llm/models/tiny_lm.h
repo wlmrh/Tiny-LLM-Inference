@@ -43,10 +43,7 @@ public:
     int32_t expected_eos_id() const override { return cfg_.eos_id; }
     int32_t expected_unk_id() const override { return cfg_.unk_id; }
 
-    void forward_step(const Tensor& input_ids,
-                      const Tensor& positions,
-                      Tensor& logits,
-                      ExecutionContext& ctx) override;
+    Tensor forward(const PreparedInputs& inputs, RuntimeContext& ctx) override;
 
 private:
     TinyLMConfig cfg_;

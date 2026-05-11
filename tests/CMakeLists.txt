@@ -100,6 +100,12 @@ target_include_directories(test_paged_attention PRIVATE
 target_link_libraries(test_paged_attention PRIVATE c10 ${TORCH_LIBRARIES})
 add_test(NAME test_paged_attention COMMAND test_paged_attention)
 
+add_executable(test_model_runner_prepared_inputs
+    "${TINYLLM_TEST_UNIT_DIR}/test_model_runner_prepared_inputs.cpp"
+)
+target_link_libraries(test_model_runner_prepared_inputs PRIVATE tiny_llm_models)
+add_test(NAME test_model_runner_prepared_inputs COMMAND test_model_runner_prepared_inputs)
+
 add_executable(test_tiny_lm_runtime "${TINYLLM_TEST_INTEGRATION_DIR}/test_tiny_lm_runtime.cpp")
 target_link_libraries(test_tiny_lm_runtime PRIVATE tiny_llm_models)
 target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

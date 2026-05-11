@@ -269,11 +269,13 @@ TinyEmbeddingLM TinyEmbeddingLM::from_checkpoint(const std::string& path)
     return TinyEmbeddingLM(cfg, std::move(embedding), std::move(projection), std::move(bias));
 }
 
-void TinyEmbeddingLM::forward_step(const Tensor& input_ids,
-                                   const Tensor& positions,
-                                   Tensor& logits,
-                                   ExecutionContext& ctx)
+Tensor TinyEmbeddingLM::forward(const PreparedInputs& inputs, RuntimeContext& ctx)
 {
+    const Tensor& input_ids = inputs.input_ids;
+    const Tensor& positions = inputs.positions;
+    Tensor logits = torch::zeros(
+        {input_ids.size(0), cfg_.vocab},
+        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(ctx.device()));
     validate_forward_inputs(input_ids, positions, logits, cfg_);
 
     const std::vector<int64_t> input_shape = tensor_shape(input_ids);
@@ -303,7 +305,7 @@ void TinyEmbeddingLM::forward_step(const Tensor& input_ids,
 
     Tensor hidden_tensor = make_tensor_from_blob(hidden.data(), {B, H}, DType::kFloat32);
     Tensor projection_tensor = make_tensor_from_blob(const_cast<float*>(projection_.data()), {H, V}, DType::kFloat32);
-    ExecutionContext& exec_ctx = resolve_execution_context(ctx);
+    ExecutionContext& exec_ctx = resolve_execution_context(ctx.execution());
     ops::gemm(hidden_tensor, projection_tensor, logits, exec_ctx);
 
     for (int32_t b = 0; b < B; ++b)
@@ -314,6 +316,8 @@ void TinyEmbeddingLM::forward_step(const Tensor& input_ids,
             logits_ptr[row_offset + static_cast<size_t>(v)] += bias_[static_cast<size_t>(v)];
         }
     }
+
+    return logits;
 }
 
 } // namespace tiny_llm

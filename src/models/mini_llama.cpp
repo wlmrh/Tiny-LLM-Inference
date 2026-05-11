@@ -124,11 +124,13 @@ void fill_projection_weight(int H, std::vector<float>& w)
 
 } // namespace
 
-void MiniLLaMA::forward_step(const Tensor& input_ids,
-                             const Tensor& positions,
-                             Tensor& logits,
-                             ExecutionContext& ctx)
+Tensor MiniLLaMA::forward(const PreparedInputs& inputs, RuntimeContext& ctx)
 {
+    const Tensor& input_ids = inputs.input_ids;
+    const Tensor& positions = inputs.positions;
+    Tensor logits = torch::zeros(
+        {input_ids.size(0), cfg_.vocab_size},
+        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(ctx.device()));
     validate_forward_inputs(input_ids, positions, logits, cfg_);
 
     const std::vector<int64_t> input_shape = tensor_shape(input_ids);
@@ -152,9 +154,10 @@ void MiniLLaMA::forward_step(const Tensor& input_ids,
     Tensor proj_w_tensor = make_tensor_from_blob(proj_w.data(), {H, H}, DType::kFloat32);
     Tensor hidden_proj_tensor = make_tensor_from_blob(hidden_proj.data(), {B, H}, DType::kFloat32);
     Tensor hidden_attn_tensor = make_tensor_from_blob(hidden_attn.data(), {B, H}, DType::kFloat32);
-    ExecutionContext& exec_ctx = resolve_execution_context(ctx);
+    ExecutionContext& exec_ctx = resolve_execution_context(ctx.execution());
 
     ops::gemm(hidden_tensor, proj_w_tensor, hidden_proj_tensor, exec_ctx);
+    ops::PagedAttentionRuntimeMetadataGuard metadata_guard(ctx.attention_metadata());
     ops::attention_paged(hidden_proj_tensor, hidden_attn_tensor, exec_ctx);
 
     for (int b = 0; b < B; ++b)
@@ -175,6 +178,8 @@ void MiniLLaMA::forward_step(const Tensor& input_ids,
                 feature + row_mean * 0.1f + periodic * 0.05f;
         }
     }
+
+    return logits;
 }
 
 } // namespace tiny_llm

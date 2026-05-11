@@ -97,8 +97,9 @@ add_library(tiny_llm STATIC
     src/runtime/parallel_config.cpp
     src/runtime/scheduler.cpp
     src/runtime/execution_context.cpp
+    src/runtime/sampler.cpp
     src/runtime/processors.cpp
-    src/runtime/executor.cpp
+    src/runtime/model_runner.cpp
     src/runtime/kv_cache.cpp
     src/runtime/engine_core.cpp
     src/runtime/engine.cpp

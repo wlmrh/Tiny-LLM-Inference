@@ -3,15 +3,15 @@
 #include <cstdint>
 
 #include "tiny_llm/core/tensor.h"
+#include "tiny_llm/runtime/prepared_inputs.h"
+#include "tiny_llm/runtime/runtime_context.h"
 
 namespace tiny_llm {
 
-class ExecutionContext;
-
 /**
- * @brief Runtime model contract used by the scheduler.
+ * @brief Runtime model contract used by ModelRunner.
  */
-class Model {
+class Model : public torch::nn::Module {
 public:
     virtual ~Model() = default;
 
@@ -26,12 +26,9 @@ public:
     virtual int32_t vocab_size() const = 0;
 
     /**
-     * @brief Performs one decode step and writes next-token logits.
+     * @brief Computes logits for a flattened scheduler batch.
      */
-    virtual void forward_step(const Tensor& input_ids,
-                              const Tensor& positions,
-                              Tensor& logits,
-                              ExecutionContext& ctx) = 0;
+    virtual Tensor forward(const PreparedInputs& inputs, RuntimeContext& ctx) = 0;
 
     /**
      * @brief Expected BOS token id for model/tokenizer contract checks.
