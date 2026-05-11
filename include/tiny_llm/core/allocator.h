@@ -126,6 +126,11 @@ public:
     size_t total_block_count() const;
 
     /**
+     * @brief Returns the base pointer of the contiguous block memory pool.
+     */
+    void* memory_pool() const { return memory_pool_; }
+
+    /**
      * @brief Returns fixed byte size of each physical block.
      */
     size_t block_size_bytes() const { return block_size_; }

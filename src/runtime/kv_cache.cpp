@@ -57,11 +57,25 @@ size_t KVCache::free_block_count() const {
     return blocks_->free_block_count();
 }
 
+size_t KVCache::total_block_count() const {
+    if (blocks_ == nullptr) {
+        return 0;
+    }
+    return blocks_->total_block_count();
+}
+
 size_t KVCache::block_size_bytes() const {
     if (blocks_ == nullptr) {
         return 0;
     }
     return blocks_->block_size_bytes();
+}
+
+void* KVCache::block_pool_base() const {
+    if (blocks_ == nullptr) {
+        return nullptr;
+    }
+    return blocks_->memory_pool();
 }
 
 void* KVCache::block_ptr(int32_t block_id) const {
