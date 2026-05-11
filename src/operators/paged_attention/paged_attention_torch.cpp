@@ -214,16 +214,24 @@ bool try_run_cuda_optimized_attention(const LlamaAttentionParams& params)
         return false;
     }
 
+    if (!params.positions->device().is_cuda()
+        || !params.metadata->seq_indices->device().is_cuda()
+        || !params.metadata->context_lens->device().is_cuda()
+        || !params.metadata->block_tables->device().is_cuda())
+    {
+        return false;
+    }
+
     KVCache& kv_cache = *params.ctx->kv();
-    void* base = kv_cache.block_ptr(0);
-    if (base == nullptr)
+    void* base = kv_cache.block_pool_base();
+    if (base == nullptr || kv_cache.total_block_count() == 0)
     {
         return false;
     }
 
     const Tensor& block_tables = *params.metadata->block_tables;
     const std::vector<int64_t> block_shape = tensor_shape(block_tables);
-    cuda::launch_paged_attention_decode_f32(
+    cuda::launch_paged_attention_f32(
         static_cast<const float*>(tensor_data(*params.q)),
         static_cast<const float*>(tensor_data(*params.k)),
         static_cast<const float*>(tensor_data(*params.v)),
@@ -236,6 +244,7 @@ bool try_run_cuda_optimized_attention(const LlamaAttentionParams& params)
         params.q->size(0),
         block_shape[1],
         block_shape[2],
+        static_cast<int64_t>(kv_cache.total_block_count()),
         static_cast<int64_t>(kv_cache.block_size_bytes()),
         params.metadata->block_size_tokens,
         params.layer_id,
