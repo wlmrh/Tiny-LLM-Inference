@@ -178,18 +178,19 @@ void LlamaSelfAttention::compute_attention(const Tensor& positions,
                                            Tensor& out,
                                            RuntimeContext& ctx) const
 {
-    ops::PagedAttentionRuntimeMetadataGuard metadata_guard(ctx.attention_metadata());
-    ops::llama_attention(
-        positions,
-        q,
-        k,
-        v,
-        out,
-        ctx.execution(),
-        layer_id_,
-        config_.num_attention_heads,
-        config_.num_key_value_heads,
-        config_.head_dim);
+    ops::LlamaAttentionParams params;
+    params.positions = &positions;
+    params.q = &q;
+    params.k = &k;
+    params.v = &v;
+    params.out = &out;
+    params.ctx = &ctx.execution();
+    params.metadata = &ctx.attention_metadata();
+    params.layer_id = layer_id_;
+    params.num_attention_heads = config_.num_attention_heads;
+    params.num_key_value_heads = config_.num_key_value_heads;
+    params.head_dim = config_.head_dim;
+    ops::llama_attention_forward(params);
 }
 
 LlamaMLP::LlamaMLP(const LlamaConfig& config)

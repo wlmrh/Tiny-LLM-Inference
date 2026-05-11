@@ -109,6 +109,8 @@ add_library(tiny_llm STATIC
     src/operators/matmul/matmul.cpp
     src/operators/llama_ops.cpp
     src/operators/paged_attention/paged_attention.cpp
+    src/operators/paged_attention/paged_attention_cpu.cpp
+    src/operators/paged_attention/paged_attention_torch.cpp
     
     # --- Models 模块 ---
     src/models/hf_llama_config_loader.cpp
