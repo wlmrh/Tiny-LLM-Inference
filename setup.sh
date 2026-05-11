@@ -77,7 +77,7 @@ rm -rf build
 
 # 7. 编译项目
 echo -e "\n[7/7] 开始编译 C++ 推理引擎..."
-cmake -B build
+cmake -S . -B build -DTINYLLM_ENABLE_CUDA=ON
 # 使用所有 CPU 核心并行编译
 cmake --build build -j$(nproc)
 
