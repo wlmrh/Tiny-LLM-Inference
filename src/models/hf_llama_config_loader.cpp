@@ -82,6 +82,20 @@ float read_optional_float(const hf_json::Value& root,
     return static_cast<float>(value->as_number(error_prefix + ": " + key));
 }
 
+std::string read_optional_string(const hf_json::Value& root,
+                                 const std::string& key,
+                                 const std::string& default_value,
+                                 const std::string& error_prefix)
+{
+    const hf_json::Value* value = hf_json::find_object_field(root, key, error_prefix);
+    if (value == nullptr || value->type == hf_json::ValueType::kNull)
+    {
+        return default_value;
+    }
+
+    return value->as_string(error_prefix + ": " + key);
+}
+
 int32_t resolve_token_id(const std::string& token_name,
                          const std::optional<int32_t>& config_id,
                          const std::optional<int32_t>& tokenizer_id,
@@ -158,6 +172,26 @@ LlamaConfig HFLlamaConfigLoader::load_from_files(const std::string& config_file_
     config.vocab_size = read_required_int(config_root, "vocab_size", kErr);
     config.rms_norm_eps = read_optional_float(config_root, "rms_norm_eps", 1e-6f, kErr);
     config.rope_theta = read_optional_float(config_root, "rope_theta", config.rope_theta, kErr);
+    if (const hf_json::Value* rope_scaling = hf_json::find_object_field(config_root, "rope_scaling", kErr))
+    {
+        if (rope_scaling->type != hf_json::ValueType::kNull)
+        {
+            (void)rope_scaling->as_object(std::string(kErr) + ": rope_scaling");
+            config.rope_scaling_type =
+                read_optional_string(*rope_scaling, "rope_type", config.rope_scaling_type, kErr);
+            config.rope_scaling_type =
+                read_optional_string(*rope_scaling, "type", config.rope_scaling_type, kErr);
+            config.rope_scaling_factor =
+                read_optional_float(*rope_scaling, "factor", config.rope_scaling_factor, kErr);
+            config.rope_scaling_low_freq_factor =
+                read_optional_float(*rope_scaling, "low_freq_factor", config.rope_scaling_low_freq_factor, kErr);
+            config.rope_scaling_high_freq_factor =
+                read_optional_float(*rope_scaling, "high_freq_factor", config.rope_scaling_high_freq_factor, kErr);
+            config.rope_scaling_original_max_position_embeddings =
+                read_optional_int(*rope_scaling, "original_max_position_embeddings", kErr)
+                    .value_or(config.rope_scaling_original_max_position_embeddings);
+        }
+    }
     config.pad_token_id = read_optional_int(config_root, "pad_token_id", kErr).value_or(config.pad_token_id);
     if (const hf_json::Value* hidden_act = hf_json::find_object_field(config_root, "hidden_act", kErr))
     {
@@ -184,6 +218,28 @@ LlamaConfig HFLlamaConfigLoader::load_from_files(const std::string& config_file_
     {
         throw std::runtime_error(
             "HFLlamaConfigLoader::load_from_files: num_attention_heads must be divisible by num_key_value_heads.");
+    }
+    if (!config.rope_scaling_type.empty())
+    {
+        if (config.rope_scaling_factor <= 0.0f)
+        {
+            throw std::runtime_error("HFLlamaConfigLoader::load_from_files: rope scaling factor must be positive.");
+        }
+        if (config.rope_scaling_type == "llama3")
+        {
+            if (config.rope_scaling_low_freq_factor <= 0.0f
+                || config.rope_scaling_high_freq_factor <= 0.0f
+                || config.rope_scaling_original_max_position_embeddings <= 0)
+            {
+                throw std::runtime_error(
+                    "HFLlamaConfigLoader::load_from_files: invalid llama3 rope_scaling configuration.");
+            }
+            if (config.rope_scaling_high_freq_factor <= config.rope_scaling_low_freq_factor)
+            {
+                throw std::runtime_error(
+                    "HFLlamaConfigLoader::load_from_files: llama3 high_freq_factor must exceed low_freq_factor.");
+            }
+        }
     }
     config.head_dim = config.hidden_size / config.num_attention_heads;
 

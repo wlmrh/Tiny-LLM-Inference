@@ -26,6 +26,11 @@ struct LlamaConfig {
     int32_t pad_token_id = -1;
     float rms_norm_eps = 1e-6f;
     float rope_theta = 10000.0f;
+    std::string rope_scaling_type;
+    float rope_scaling_factor = 1.0f;
+    float rope_scaling_low_freq_factor = 1.0f;
+    float rope_scaling_high_freq_factor = 1.0f;
+    int32_t rope_scaling_original_max_position_embeddings = 0;
     std::string hidden_act = "silu";
     std::string model_type = "llama";
     std::string torch_dtype = "float32";

@@ -27,7 +27,12 @@ void apply_rope(const Tensor& positions,
                 int32_t num_attention_heads,
                 int32_t num_key_value_heads,
                 int32_t head_dim,
-                float rope_theta);
+                float rope_theta,
+                const char* rope_scaling_type = "",
+                float rope_scaling_factor = 1.0f,
+                float rope_scaling_low_freq_factor = 1.0f,
+                float rope_scaling_high_freq_factor = 1.0f,
+                int32_t rope_scaling_original_max_position_embeddings = 0);
 
 void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out);
 

@@ -115,7 +115,12 @@ void run_apply_rope_device(const Tensor& positions,
                            int32_t num_attention_heads,
                            int32_t num_key_value_heads,
                            int32_t head_dim,
-                           float rope_theta)
+                           float rope_theta,
+                           const std::string& rope_scaling_type,
+                           float rope_scaling_factor,
+                           float rope_scaling_low_freq_factor,
+                           float rope_scaling_high_freq_factor,
+                           int32_t rope_scaling_original_max_position_embeddings)
 {
     validate_same_device({std::cref(positions), std::cref(q), std::cref(k)}, "apply_rope");
     const int64_t rows = q.size(0);
@@ -125,7 +130,30 @@ void run_apply_rope_device(const Tensor& positions,
     const Tensor exponent = dim * (2.0f / static_cast<float>(head_dim));
     const Tensor base = torch::full({rotary_half}, rope_theta, options);
     const Tensor positions_f = positions.to(options);
-    const Tensor theta = positions_f.unsqueeze(1) / torch::pow(base, exponent);
+    Tensor inv_freq = 1.0f / torch::pow(base, exponent);
+    if (rope_scaling_type == "llama3")
+    {
+        const float low_freq_wavelen =
+            static_cast<float>(rope_scaling_original_max_position_embeddings) / rope_scaling_low_freq_factor;
+        const float high_freq_wavelen =
+            static_cast<float>(rope_scaling_original_max_position_embeddings) / rope_scaling_high_freq_factor;
+        const Tensor wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
+        const Tensor smooth_factor =
+            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen
+             - rope_scaling_low_freq_factor)
+            / (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
+        const Tensor medium_freq =
+            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
+        inv_freq = torch::where(
+            wavelen > low_freq_wavelen,
+            inv_freq / rope_scaling_factor,
+            torch::where(wavelen < high_freq_wavelen, inv_freq, medium_freq));
+    }
+    else if (!rope_scaling_type.empty())
+    {
+        inv_freq = inv_freq / rope_scaling_factor;
+    }
+    const Tensor theta = positions_f.unsqueeze(1) * inv_freq;
     const Tensor cos_theta = torch::cos(theta).unsqueeze(1);
     const Tensor sin_theta = torch::sin(theta).unsqueeze(1);
 
@@ -269,17 +297,34 @@ void apply_rope(const Tensor& positions,
                 int32_t num_attention_heads,
                 int32_t num_key_value_heads,
                 int32_t head_dim,
-                float rope_theta)
+                float rope_theta,
+                const char* rope_scaling_type,
+                float rope_scaling_factor,
+                float rope_scaling_low_freq_factor,
+                float rope_scaling_high_freq_factor,
+                int32_t rope_scaling_original_max_position_embeddings)
 {
     const int64_t rows = q.size(0);
     const int32_t hidden_size = num_attention_heads * head_dim;
     const int32_t kv_hidden_size = num_key_value_heads * head_dim;
+    const std::string scaling_type = rope_scaling_type == nullptr ? std::string() : std::string(rope_scaling_type);
     validate_float_tensor_2d(q, rows, hidden_size, "apply_rope::q");
     validate_float_tensor_2d(k, rows, kv_hidden_size, "apply_rope::k");
     validate_int_tensor_1d(positions, rows, "apply_rope::positions");
     if (head_dim <= 0 || head_dim % 2 != 0)
     {
         throw std::runtime_error("apply_rope: head_dim must be a positive even number.");
+    }
+    if (rope_theta <= 0.0f || rope_scaling_factor <= 0.0f)
+    {
+        throw std::runtime_error("apply_rope: rope theta and scaling factor must be positive.");
+    }
+    if (scaling_type == "llama3"
+        && (rope_scaling_low_freq_factor <= 0.0f
+            || rope_scaling_high_freq_factor <= rope_scaling_low_freq_factor
+            || rope_scaling_original_max_position_embeddings <= 0))
+    {
+        throw std::runtime_error("apply_rope: invalid llama3 rope scaling configuration.");
     }
 
     if (any_cuda({std::cref(positions), std::cref(q), std::cref(k)}))
@@ -291,7 +336,12 @@ void apply_rope(const Tensor& positions,
             num_attention_heads,
             num_key_value_heads,
             head_dim,
-            rope_theta);
+            rope_theta,
+            scaling_type,
+            rope_scaling_factor,
+            rope_scaling_low_freq_factor,
+            rope_scaling_high_freq_factor,
+            rope_scaling_original_max_position_embeddings);
         return;
     }
 
@@ -315,9 +365,37 @@ void apply_rope(const Tensor& positions,
             {
                 const int32_t idx0 = head_offset + dim;
                 const int32_t idx1 = head_offset + rotary_half + dim;
-                const float theta = position / std::pow(
+                float inv_freq = 1.0f / std::pow(
                     rope_theta,
                     static_cast<float>(2 * dim) / static_cast<float>(head_dim));
+                if (scaling_type == "llama3")
+                {
+                    const float wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
+                    const float low_freq_wavelen =
+                        static_cast<float>(rope_scaling_original_max_position_embeddings)
+                        / rope_scaling_low_freq_factor;
+                    const float high_freq_wavelen =
+                        static_cast<float>(rope_scaling_original_max_position_embeddings)
+                        / rope_scaling_high_freq_factor;
+                    if (wavelen > low_freq_wavelen)
+                    {
+                        inv_freq /= rope_scaling_factor;
+                    }
+                    else if (wavelen >= high_freq_wavelen)
+                    {
+                        const float smooth_factor =
+                            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen
+                             - rope_scaling_low_freq_factor)
+                            / (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
+                        inv_freq =
+                            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
+                    }
+                }
+                else if (!scaling_type.empty())
+                {
+                    inv_freq /= rope_scaling_factor;
+                }
+                const float theta = position * inv_freq;
                 const float cos_theta = std::cos(theta);
                 const float sin_theta = std::sin(theta);
 
@@ -339,9 +417,37 @@ void apply_rope(const Tensor& positions,
             {
                 const int32_t idx0 = head_offset + dim;
                 const int32_t idx1 = head_offset + rotary_half + dim;
-                const float theta = position / std::pow(
+                float inv_freq = 1.0f / std::pow(
                     rope_theta,
                     static_cast<float>(2 * dim) / static_cast<float>(head_dim));
+                if (scaling_type == "llama3")
+                {
+                    const float wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
+                    const float low_freq_wavelen =
+                        static_cast<float>(rope_scaling_original_max_position_embeddings)
+                        / rope_scaling_low_freq_factor;
+                    const float high_freq_wavelen =
+                        static_cast<float>(rope_scaling_original_max_position_embeddings)
+                        / rope_scaling_high_freq_factor;
+                    if (wavelen > low_freq_wavelen)
+                    {
+                        inv_freq /= rope_scaling_factor;
+                    }
+                    else if (wavelen >= high_freq_wavelen)
+                    {
+                        const float smooth_factor =
+                            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen
+                             - rope_scaling_low_freq_factor)
+                            / (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
+                        inv_freq =
+                            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
+                    }
+                }
+                else if (!scaling_type.empty())
+                {
+                    inv_freq /= rope_scaling_factor;
+                }
+                const float theta = position * inv_freq;
                 const float cos_theta = std::cos(theta);
                 const float sin_theta = std::sin(theta);
 

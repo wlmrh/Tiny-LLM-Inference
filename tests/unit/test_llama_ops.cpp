@@ -59,6 +59,37 @@ int main()
     expect_near(rope_k.data_ptr<float>()[0], 3.0f * c - 4.0f * s, "rope k first mismatch.");
     expect_near(rope_k.data_ptr<float>()[1], 4.0f * c + 3.0f * s, "rope k second mismatch.");
 
+    tiny_llm::Tensor llama3_positions = torch::tensor({8192}, torch::TensorOptions().dtype(torch::kInt32));
+    tiny_llm::Tensor llama3_rope_q = torch::tensor({{0.0f, 1.0f, 2.0f, 3.0f}},
+                                                   torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor llama3_rope_k = torch::tensor({{4.0f, 5.0f, 6.0f, 7.0f}},
+                                                   torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::ops::apply_rope(
+        llama3_positions,
+        llama3_rope_q,
+        llama3_rope_k,
+        1,
+        1,
+        4,
+        500000.0f,
+        "llama3",
+        32.0f,
+        1.0f,
+        4.0f,
+        8192);
+    const float base_inv_freq = 1.0f / std::sqrt(500000.0f);
+    const float wavelen = (2.0f * static_cast<float>(M_PI)) / base_inv_freq;
+    const float smooth_factor = (8192.0f / wavelen - 1.0f) / (4.0f - 1.0f);
+    const float inv_freq =
+        (1.0f - smooth_factor) * (base_inv_freq / 32.0f) + smooth_factor * base_inv_freq;
+    const float scaled_theta = 8192.0f * inv_freq;
+    const float scaled_c = std::cos(scaled_theta);
+    const float scaled_s = std::sin(scaled_theta);
+    expect_near(llama3_rope_q.data_ptr<float>()[1], 1.0f * scaled_c - 3.0f * scaled_s, "llama3 rope q mismatch.");
+    expect_near(llama3_rope_q.data_ptr<float>()[3], 3.0f * scaled_c + 1.0f * scaled_s, "llama3 rope q mismatch.");
+    expect_near(llama3_rope_k.data_ptr<float>()[1], 5.0f * scaled_c - 7.0f * scaled_s, "llama3 rope k mismatch.");
+    expect_near(llama3_rope_k.data_ptr<float>()[3], 7.0f * scaled_c + 5.0f * scaled_s, "llama3 rope k mismatch.");
+
     tiny_llm::Tensor gate = torch::tensor({{-1.0f, 0.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor up = torch::tensor({{2.0f, 3.0f, 4.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor activated = torch::empty({1, 3}, torch::TensorOptions().dtype(torch::kFloat32));
