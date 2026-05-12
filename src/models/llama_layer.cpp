@@ -106,6 +106,9 @@ void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::st
         0,
         modules::WeightLayout::kOutIn,
         weight_map.get_tensor_view(prefix + "self_attn.q_proj.weight"),
+        weight_map.contains(prefix + "self_attn.q_proj.bias")
+            ? weight_map.get_tensor_view(prefix + "self_attn.q_proj.bias")
+            : Tensor{},
     };
     qkv_descs_[1] = {
         nullptr,
@@ -114,6 +117,9 @@ void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::st
         config_.hidden_size,
         modules::WeightLayout::kOutIn,
         weight_map.get_tensor_view(prefix + "self_attn.k_proj.weight"),
+        weight_map.contains(prefix + "self_attn.k_proj.bias")
+            ? weight_map.get_tensor_view(prefix + "self_attn.k_proj.bias")
+            : Tensor{},
     };
     qkv_descs_[2] = {
         nullptr,
@@ -122,6 +128,9 @@ void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::st
         config_.hidden_size + kv_hidden_size(config_),
         modules::WeightLayout::kOutIn,
         weight_map.get_tensor_view(prefix + "self_attn.v_proj.weight"),
+        weight_map.contains(prefix + "self_attn.v_proj.bias")
+            ? weight_map.get_tensor_view(prefix + "self_attn.v_proj.bias")
+            : Tensor{},
     };
     qkv_proj_->bind_stacked_weights(qkv_descs_.data(), static_cast<int32_t>(qkv_descs_.size()));
     o_proj_->bind_weight(weight_map.get_tensor_view(prefix + "self_attn.o_proj.weight"), modules::WeightLayout::kOutIn);

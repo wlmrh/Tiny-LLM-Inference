@@ -23,6 +23,7 @@ struct StackedWeightDesc {
     int32_t output_offset = 0;
     WeightLayout layout = WeightLayout::kInOut;
     Tensor weight;
+    Tensor bias;
 };
 
 class Linear : public torch::nn::Module {

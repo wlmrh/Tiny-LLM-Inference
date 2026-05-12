@@ -47,6 +47,27 @@ bool needs_torch_matmul_path(const Tensor& input, const Tensor& output, const Te
     return input.device().is_cuda() || output.device().is_cuda() || weight.device().is_cuda();
 }
 
+void add_bias_to_output_slice(Tensor& output,
+                              int32_t output_offset,
+                              int32_t out_features,
+                              const Tensor& bias)
+{
+    if (!bias.defined())
+    {
+        return;
+    }
+    if (tensor_dtype(bias) != DType::kFloat32 || bias.dim() != 1 || bias.size(0) != out_features)
+    {
+        throw std::runtime_error("modules::Linear::forward: bias tensor shape/dtype mismatch.");
+    }
+    if (output.device() != bias.device())
+    {
+        throw std::runtime_error("modules::Linear::forward: output and bias devices must match.");
+    }
+
+    output.narrow(1, output_offset, out_features).add_(bias);
+}
+
 void run_out_in_matmul(const Tensor& input,
                        const Tensor& weight_out_in,
                        Tensor& output)
@@ -133,6 +154,7 @@ void Linear::bind_weight(const Tensor& weight, WeightLayout layout)
         0,
         layout,
         register_parameter("weight", weight, /*requires_grad=*/false),
+        Tensor{},
     };
     stacked_weights_.clear();
     use_stacked_weights_ = false;
@@ -166,6 +188,7 @@ void Linear::bind_weight(float* weight,
         0,
         layout,
         register_parameter("weight", weight_tensor, /*requires_grad=*/false),
+        Tensor{},
     };
     stacked_weights_.clear();
     use_stacked_weights_ = false;
@@ -187,6 +210,13 @@ void Linear::bind_stacked_weights(const StackedWeightDesc* descs, int32_t count)
             "weight_" + std::to_string(i),
             desc.weight,
             /*requires_grad=*/false);
+        if (desc.bias.defined())
+        {
+            desc.bias = register_parameter(
+                "bias_" + std::to_string(i),
+                desc.bias,
+                /*requires_grad=*/false);
+        }
         desc.data = static_cast<float*>(tensor_data(desc.weight));
         stacked_weights_.push_back(std::move(desc));
     }
@@ -274,6 +304,7 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
             {
                 run_out_in_matmul(input, weight, output_slice);
             }
+            add_bias_to_output_slice(output, desc.output_offset, desc.out_features, desc.bias);
             continue;
         }
 
@@ -295,6 +326,24 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
                     out_col,
                     desc.layout);
                 output_ptr[output_row_offset + static_cast<size_t>(desc.output_offset + out_col)] = sum;
+            }
+        }
+        if (desc.bias.defined())
+        {
+            const float* bias_ptr = static_cast<const float*>(tensor_data(desc.bias));
+            if (bias_ptr == nullptr)
+            {
+                throw std::runtime_error("modules::Linear::forward: bias data pointer must be non-null.");
+            }
+            for (int64_t row = 0; row < rows; ++row)
+            {
+                const size_t output_row_offset =
+                    static_cast<size_t>(row) * static_cast<size_t>(out_features_total_);
+                for (int32_t out_col = 0; out_col < desc.out_features; ++out_col)
+                {
+                    output_ptr[output_row_offset + static_cast<size_t>(desc.output_offset + out_col)] +=
+                        bias_ptr[static_cast<size_t>(out_col)];
+                }
             }
         }
     }
@@ -379,6 +428,19 @@ void Linear::validate_descs(const StackedWeightDesc* descs, int32_t count) const
         else if (desc.data == nullptr)
         {
             throw std::runtime_error("modules::Linear::bind_stacked_weights: desc weight must be bound.");
+        }
+        if (desc.bias.defined())
+        {
+            if (tensor_dtype(desc.bias) != DType::kFloat32
+                || desc.bias.dim() != 1
+                || desc.bias.size(0) != desc.out_features)
+            {
+                throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.bias shape/dtype mismatch.");
+            }
+            if (tensor_data(desc.bias) == nullptr)
+            {
+                throw std::runtime_error("modules::Linear::bind_stacked_weights: desc.bias data pointer must be non-null.");
+            }
         }
         if (desc.in_features != in_features_)
         {

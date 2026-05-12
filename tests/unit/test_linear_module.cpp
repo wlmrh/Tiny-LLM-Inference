@@ -58,9 +58,12 @@ int main()
         {{0.0f, 1.0f, 0.0f},
          {0.0f, 0.0f, 1.0f}},
         torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor b1 = torch::tensor(
+        {10.0f, 20.0f},
+        torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::modules::StackedWeightDesc descs[2] = {
         {nullptr, 1, 3, 0, tiny_llm::modules::WeightLayout::kOutIn, w0},
-        {nullptr, 2, 3, 1, tiny_llm::modules::WeightLayout::kOutIn, w1},
+        {nullptr, 2, 3, 1, tiny_llm::modules::WeightLayout::kOutIn, w1, b1},
     };
 
     tiny_llm::modules::Linear stacked_linear(3, 3);
@@ -69,11 +72,11 @@ int main()
 
     const float* stacked_ptr = stacked_output.data_ptr<float>();
     expect_near(stacked_ptr[0], 3.0f, "stacked row 0 col 0 mismatch.");
-    expect_near(stacked_ptr[1], 2.0f, "stacked row 0 col 1 mismatch.");
-    expect_near(stacked_ptr[2], 3.0f, "stacked row 0 col 2 mismatch.");
+    expect_near(stacked_ptr[1], 12.0f, "stacked row 0 col 1 mismatch.");
+    expect_near(stacked_ptr[2], 23.0f, "stacked row 0 col 2 mismatch.");
     expect_near(stacked_ptr[3], 9.0f, "stacked row 1 col 0 mismatch.");
-    expect_near(stacked_ptr[4], 5.0f, "stacked row 1 col 1 mismatch.");
-    expect_near(stacked_ptr[5], 6.0f, "stacked row 1 col 2 mismatch.");
+    expect_near(stacked_ptr[4], 15.0f, "stacked row 1 col 1 mismatch.");
+    expect_near(stacked_ptr[5], 26.0f, "stacked row 1 col 2 mismatch.");
 
     return 0;
 }
