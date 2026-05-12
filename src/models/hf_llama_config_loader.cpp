@@ -60,6 +60,10 @@ std::optional<int32_t> read_optional_int(const hf_json::Value& root,
     {
         return std::nullopt;
     }
+    if (value->type == hf_json::ValueType::kNull)
+    {
+        return std::nullopt;
+    }
 
     return checked_to_int32(value->as_int64(error_prefix + ": " + key), error_prefix + ": " + key);
 }

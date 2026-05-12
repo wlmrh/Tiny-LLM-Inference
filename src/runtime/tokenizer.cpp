@@ -36,6 +36,7 @@ public:
 } // namespace tokenizers
 #endif
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -158,6 +159,10 @@ std::optional<std::string> read_optional_token_content_field(const hf_json::Valu
 {
     const hf_json::Value* value = hf_json::find_object_field(root, key, error_prefix);
     if (value == nullptr)
+    {
+        return std::nullopt;
+    }
+    if (value->type == hf_json::ValueType::kNull)
     {
         return std::nullopt;
     }
@@ -664,7 +669,8 @@ HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string& hf_model_di
 
     const LlamaConfig cfg = HFLlamaConfigLoader::load_from_dir(hf_model_dir);
     const HFSpecialTokenStrings token_strings = load_hf_special_token_strings(model_dir, kErr);
-    const int32_t vocab = static_cast<int32_t>(tokenizer_handle->GetVocabSize());
+    const int32_t tokenizer_vocab = static_cast<int32_t>(tokenizer_handle->GetVocabSize());
+    const int32_t vocab = std::max(tokenizer_vocab, cfg.vocab_size);
     const int32_t bos_id =
         resolve_special_token_id("bos_token_id", token_strings.bos, cfg.bos_token_id, tokenizer_handle.get(), true, kErr);
     const int32_t eos_id =

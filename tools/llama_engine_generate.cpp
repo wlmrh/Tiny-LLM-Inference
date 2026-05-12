@@ -92,6 +92,26 @@ size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig& config, int32_t block_s
     return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size * sizeof(float);
 }
 
+bool has_safetensors_weight(const std::filesystem::path& model_dir)
+{
+    if (std::filesystem::exists(model_dir / "model.safetensors"))
+    {
+        return true;
+    }
+    if (!std::filesystem::exists(model_dir) || !std::filesystem::is_directory(model_dir))
+    {
+        return false;
+    }
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".safetensors")
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string json_escape(const std::string& text)
 {
     std::ostringstream out;
@@ -194,17 +214,20 @@ int main(int argc, char** argv)
             throw std::runtime_error("max_new_tokens must be positive.");
         }
         if (!std::filesystem::exists(model_dir / "config.json")
-            || !std::filesystem::exists(model_dir / "model.safetensors")
+            || !has_safetensors_weight(model_dir)
             || !std::filesystem::exists(model_dir / "tokenizer.json"))
         {
-            throw std::runtime_error("model_dir must contain config.json, model.safetensors, and tokenizer.json.");
+            throw std::runtime_error("model_dir must contain config.json, tokenizer.json, and safetensors weights.");
         }
 
         const tiny_llm::LlamaConfig hf_config =
             tiny_llm::HFLlamaConfigLoader::load_from_dir(model_dir.string());
         tiny_llm::HFLlamaTokenizer tokenizer =
             tiny_llm::HFLlamaTokenizer::from_model_dir(model_dir.string());
-        assert(tokenizer.vocab_size() == hf_config.vocab_size);
+        if (tokenizer.vocab_size() > hf_config.vocab_size)
+        {
+            throw std::runtime_error("tokenizer vocab size exceeds model vocab size.");
+        }
 
         tiny_llm::StackAllocator allocator(16 * 1024 * 1024, parallel_config);
         constexpr int32_t kBlockSizeTokens = 16;

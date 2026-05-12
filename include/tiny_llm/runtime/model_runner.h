@@ -39,6 +39,7 @@ private:
 
     std::unique_ptr<Model> owned_model_;
     std::unique_ptr<HFSafeTensorLoader> owned_hf_loader_;
+    std::vector<std::unique_ptr<HFSafeTensorLoader>> owned_hf_loaders_;
     Model* model_ = nullptr;
     KVCache* kv_ = nullptr;
     int32_t kv_block_size_tokens_ = 16;

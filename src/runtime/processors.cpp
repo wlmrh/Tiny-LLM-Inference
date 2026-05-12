@@ -91,7 +91,7 @@ void InputPreprocessor::validate_tokenizer_contract() const
     const int32_t unk_id = tokenizer->unk_id();
     if (!tokenizer->is_valid_token_id(bos_id)
         || !tokenizer->is_valid_token_id(eos_id)
-        || !tokenizer->is_valid_token_id(unk_id))
+        || (unk_id >= 0 && !tokenizer->is_valid_token_id(unk_id)))
     {
         throw std::runtime_error("InputPreprocessor::validate_tokenizer_contract: tokenizer special token id is out of range.");
     }

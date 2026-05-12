@@ -82,6 +82,90 @@ Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
     return tensor.to(c10::kCPU, /*non_blocking=*/false, /*copy=*/true).contiguous();
 }
 
+std::vector<std::filesystem::path> resolve_hf_safetensor_paths(const EngineArgs& args)
+{
+    const std::filesystem::path model_dir(args.hf_model_dir);
+    std::vector<std::filesystem::path> paths;
+
+    if (!args.hf_weight_file.empty())
+    {
+        const std::filesystem::path requested = model_dir / args.hf_weight_file;
+        if (std::filesystem::exists(requested))
+        {
+            paths.push_back(requested);
+            return paths;
+        }
+        if (args.hf_weight_file != "model.safetensors")
+        {
+            throw std::runtime_error("ModelRunner: hf_weight_file does not exist: " + requested.string());
+        }
+    }
+
+    const std::filesystem::path default_weight = model_dir / "model.safetensors";
+    if (std::filesystem::exists(default_weight))
+    {
+        paths.push_back(default_weight);
+        return paths;
+    }
+
+    if (!std::filesystem::exists(model_dir) || !std::filesystem::is_directory(model_dir))
+    {
+        throw std::runtime_error("ModelRunner: hf_model_dir does not exist or is not a directory: " + args.hf_model_dir);
+    }
+
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
+        }
+        const std::filesystem::path& path = entry.path();
+        if (path.extension() == ".safetensors")
+        {
+            paths.push_back(path);
+        }
+    }
+    std::sort(paths.begin(), paths.end());
+    if (paths.empty())
+    {
+        throw std::runtime_error("ModelRunner: no safetensors weight files found in " + args.hf_model_dir);
+    }
+    return paths;
+}
+
+WeightMap load_weight_map_from_safetensors(
+    const std::vector<std::filesystem::path>& paths,
+    const ParallelConfig& parallel_config,
+    std::vector<std::unique_ptr<HFSafeTensorLoader>>& owned_loaders)
+{
+    WeightMap weight_map;
+    parallel_config.validate();
+    const c10::Device target_device = parallel_config.torch_device();
+    owned_loaders.clear();
+    owned_loaders.reserve(paths.size());
+
+    for (const std::filesystem::path& path : paths)
+    {
+        auto loader = std::make_unique<HFSafeTensorLoader>(HFSafeTensorLoader::from_file(path.string()));
+        for (const std::string& key : loader->keys())
+        {
+            Tensor tensor = loader->tensor(key);
+            if (tensor.device() != target_device)
+            {
+                tensor = tensor.to(target_device, /*non_blocking=*/false, /*copy=*/true).contiguous();
+            }
+            else if (!tensor.is_contiguous())
+            {
+                tensor = tensor.contiguous();
+            }
+            weight_map.add_tensor(key, tensor);
+        }
+        owned_loaders.push_back(std::move(loader));
+    }
+
+    return weight_map;
+}
+
 void validate_prepared_tensor_pack(const PreparedInputs& inputs,
                                    int32_t vocab_size,
                                    int32_t num_layers,
@@ -177,6 +261,7 @@ ModelRunner::~ModelRunner()
 void ModelRunner::init_from_args(const EngineArgs& args)
 {
     owned_hf_loader_.reset();
+    owned_hf_loaders_.clear();
     args.parallel_config.validate();
 
     if (args.kv_block_size_tokens <= 0)
@@ -207,18 +292,11 @@ void ModelRunner::init_from_args(const EngineArgs& args)
                 {
                     throw std::runtime_error("ModelRunner: hf_model_dir must be provided.");
                 }
-                const std::string weight_file = args.hf_weight_file.empty()
-                    ? std::string("model.safetensors")
-                    : args.hf_weight_file;
-                const std::filesystem::path weight_path =
-                    std::filesystem::path(args.hf_model_dir) / weight_file;
-
                 const LlamaConfig hf_config = HFLlamaConfigLoader::load_from_dir(args.hf_model_dir);
-                owned_hf_loader_ = std::make_unique<HFSafeTensorLoader>(
-                    HFSafeTensorLoader::from_file(weight_path.string()));
-                WeightMap weight_map = WeightMap::from_safetensors(
-                    *owned_hf_loader_,
-                    args.parallel_config);
+                WeightMap weight_map = load_weight_map_from_safetensors(
+                    resolve_hf_safetensor_paths(args),
+                    args.parallel_config,
+                    owned_hf_loaders_);
                 auto llama_model = std::make_unique<LlamaForCausalLM>(hf_config, std::move(weight_map));
                 llama_model->allocate_buffers(resolve_model_max_batch_size(args), args.parallel_config);
                 owned_model_ = std::move(llama_model);
