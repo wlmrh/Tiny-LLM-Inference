@@ -103,6 +103,7 @@ add_library(tiny_llm STATIC
     src/runtime/kv_cache.cpp
     src/runtime/engine_core.cpp
     src/runtime/engine.cpp
+    src/runtime/llm.cpp
     
     # --- Operators 模块 ---
     src/operators/rmsnorm/rmsnorm.cpp
@@ -160,6 +161,9 @@ target_link_libraries(llama_inference PRIVATE tiny_llm)
 
 add_executable(tiny_lm_inference examples/tiny_lm_inference.cpp)
 target_link_libraries(tiny_lm_inference PRIVATE tiny_llm)
+
+add_executable(offline_llm examples/offline_llm.cpp)
+target_link_libraries(offline_llm PRIVATE tiny_llm)
 
 include(CTest)
 add_subdirectory(tests)

@@ -123,6 +123,11 @@ target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CM
 add_test(NAME test_tiny_lm_runtime COMMAND test_tiny_lm_runtime)
 set_tests_properties(test_tiny_lm_runtime PROPERTIES SKIP_RETURN_CODE 77)
 
+add_executable(test_llm_offline "${TINYLLM_TEST_INTEGRATION_DIR}/test_llm_offline.cpp")
+target_link_libraries(test_llm_offline PRIVATE tiny_llm_models)
+add_test(NAME test_llm_offline COMMAND test_llm_offline)
+set_tests_properties(test_llm_offline PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(llama_logits_dump "${TINYLLM_TOOLS_DIR}/llama_logits_dump.cpp")
 target_link_libraries(llama_logits_dump PRIVATE tiny_llm_models)
 set_target_properties(llama_logits_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
