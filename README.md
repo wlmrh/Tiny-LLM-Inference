@@ -2,7 +2,7 @@
 
 Tiny-LLM-Inference is a compact C++17 inference engine inspired by vLLM. It is designed for learning, debugging, and validating the core mechanics of modern decoder-only LLM serving without hiding the interesting parts behind a large framework.
 
-The current implementation focuses on a single-process runtime for small LLaMA-family models, with SmolLM2-135M as the main Hugging Face reference model.
+The current implementation focuses on a single-process runtime for small LLaMA-family and Qwen2-family decoder models. SmolLM2-135M remains the main Hugging Face reference model, and Qwen2.5-1.5B-Instruct is supported as a larger CUDA smoke target.
 
 ## Highlights
 
@@ -10,7 +10,7 @@ The current implementation focuses on a single-process runtime for small LLaMA-f
   - `LLMEngine` owns text/tokenizer-facing request handling.
   - `EngineCore` runs scheduling, model execution, and output updates over token IDs.
 - FCFS continuous batching with chunked prefill, one-token decode steps, and simplified tail preemption.
-- Hugging Face LLaMA/SmolLM2 loading from `config.json`, `model.safetensors`, and `tokenizer.json`.
+- Hugging Face LLaMA/SmolLM2/Qwen2-family loading from `config.json`, safetensors weights, and `tokenizer.json`. Both single-file and sharded safetensors directories are accepted.
 - Standard LLaMA building blocks:
   - token embedding and LM-head projection
   - RoPE
@@ -18,6 +18,7 @@ The current implementation focuses on a single-process runtime for small LLaMA-f
   - SwiGLU MLP
   - grouped-query attention (GQA)
   - tied or untied LM heads, depending on the model config
+  - optional Q/K/V projection bias for Qwen2-style attention
 - CPU and CUDA runtime KV cache with paged metadata and physical KV block storage.
 - Tensor alignment tools for comparing C++ intermediate tensors, logits, and greedy generation against PyTorch/Transformers.
 - Optional CUDA build path with single-GPU SmolLM2 generation smoke coverage. The current CUDA paged-attention path is a correctness bridge, not the final optimized kernel.
@@ -100,13 +101,15 @@ cmake --build build -j
 
 ## Model Setup
 
-The LLaMA-family debugging and validation flow expects a local Hugging Face model directory containing at least:
+The Hugging Face debugging and validation flow expects a local model directory containing at least:
 
 ```text
 config.json
-model.safetensors
 tokenizer.json
+model.safetensors
 ```
+
+Sharded checkpoints are also supported when the directory contains `*.safetensors` files, optionally with `model.safetensors.index.json`. Qwen2-style tokenizer configs may omit `unk_token_id`, use JSON `null` for optional special tokens, and report a tokenizer vocab smaller than the padded model embedding vocab.
 
 For the main validated setup, place SmolLM2-135M at:
 
@@ -114,7 +117,20 @@ For the main validated setup, place SmolLM2-135M at:
 ~/models/smollm2-135M
 ```
 
-or pass the model directory explicitly to the tools/scripts.
+For Qwen2.5-1.5B-Instruct, the server setup used during validation stores the model at:
+
+```bash
+/models/Qwen2.5-1.5B-Instruct
+```
+
+On small system disks, keep the real files on a data disk and expose the expected path with a symlink. For example:
+
+```bash
+mkdir -p /root/autodl-tmp/models /models
+ln -s /root/autodl-tmp/models/Qwen2.5-1.5B-Instruct /models/Qwen2.5-1.5B-Instruct
+```
+
+If direct Hugging Face access is unavailable, use a reachable mirror or ModelScope to fetch `config.json`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`, and `model.safetensors`.
 
 ## Run Examples
 
@@ -130,7 +146,7 @@ MiniLLaMA example:
 ./build/llama_inference
 ```
 
-Run Hugging Face LLaMA/SmolLM2 greedy generation through the engine:
+Run Hugging Face LLaMA/SmolLM2/Qwen2-family greedy generation through the engine:
 
 ```bash
 ./build/tools/llama_engine_generate \
@@ -151,6 +167,17 @@ Run the same tool on CUDA:
   8 \
   hello \
   "tiny llm inference"
+```
+
+Run Qwen2.5-1.5B-Instruct on CUDA:
+
+```bash
+./build-cuda/tools/llama_engine_generate \
+  --device cuda:0 \
+  /models/Qwen2.5-1.5B-Instruct \
+  8 \
+  hello \
+  "你好"
 ```
 
 ## Test
@@ -178,7 +205,36 @@ LD_LIBRARY_PATH=/path/to/torch/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
 ctest --test-dir build-cuda --output-on-failure
 ```
 
-When `TINYLLM_ENABLE_CUDA=ON`, CTest registers `test_llama_generation_cuda_smoke`, which runs `llama_engine_generate --device cuda:0` and checks deterministic SmolLM2 token IDs for `hello` and `tiny llm inference`.
+When `TINYLLM_ENABLE_CUDA=ON`, CTest registers `test_llama_generation_cuda_smoke`, which runs `llama_engine_generate --device cuda:0` and checks deterministic SmolLM2 token IDs for `hello` and `tiny llm inference`. Qwen2.5 is currently validated with direct smoke commands because its output text is model-size and tokenizer-version sensitive.
+
+
+## Qwen2.5 Smoke Test
+
+After building CUDA and downloading the model, run:
+
+```bash
+./build-cuda/tools/llama_engine_generate \
+  --device cuda:0 \
+  /models/Qwen2.5-1.5B-Instruct \
+  8 \
+  hello \
+  "你好"
+```
+
+A successful run prints one JSON object per prompt. The validated server run produced outputs like:
+
+```json
+{"prompt":"hello","finish_reason":"length","generated_token_ids":[284,330,9707,4337,698,1350,3203,4791]}
+{"prompt":"你好","finish_reason":"length","generated_token_ids":[3837,35946,85106,100364,1773,220,108386,6313]}
+```
+
+For regression coverage around the architecture changes, build all CUDA targets and run:
+
+```bash
+cmake --build build-cuda -j
+ctest --test-dir build-cuda --output-on-failure \
+  -R 'test_linear_module|test_weight_map|test_llama_ops|test_model_blocks|test_model_runner_prepared_inputs|test_paged_attention_cuda'
+```
 
 ## Compare Against Transformers
 
