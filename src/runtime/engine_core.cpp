@@ -93,6 +93,7 @@ std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> EngineCore::step()
         throw std::runtime_error("EngineCore::step: scheduler/executor must be initialized.");
     }
 
+    last_step_profile_ = RuntimeProfilingStats{};
     if (!scheduler_->has_unfinished_requests())
     {
         return std::make_tuple(std::unordered_map<int, EngineCoreOutput>{}, false);
@@ -100,6 +101,7 @@ std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> EngineCore::step()
 
     const SchedulerOutput scheduler_output = scheduler_->schedule();
     ModelRunnerOutput model_output = runner_->run(scheduler_output);
+    last_step_profile_ = model_output.profiling;
 
     std::map<int, EngineCoreOutput> scheduler_outputs = scheduler_->update_from_output(scheduler_output, model_output);
     std::unordered_map<int, EngineCoreOutput> engine_core_outputs;

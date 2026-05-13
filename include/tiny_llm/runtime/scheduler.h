@@ -37,6 +37,7 @@ struct RequestData {
     uint64_t req_id = 0; // 请求 id
     std::vector<int32_t> new_token_ids; // 本轮要计算的新 token 集合
     int32_t num_computed_tokens = 0; // 已经计算过 kvcache 的 token 长度
+    bool is_prefill = false; // Whether this scheduled chunk is still processing prompt tokens.
     std::vector<int32_t> block_ids; // 该请求的映射表，将逻辑上的 block id 映射到物理块编号
     std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id
 };
@@ -54,12 +55,37 @@ struct SchedulerOutput {
 };
 
 /**
+ * @brief Fine-grained runtime timing for one engine step or one generation.
+ */
+struct RuntimeProfilingStats {
+    double prepare_inputs_ms = 0.0;
+    double prefill_ms = 0.0;
+    double decode_ms_total = 0.0;
+    double sampling_ms = 0.0;
+    int64_t prefill_tokens = 0;
+    int64_t decode_tokens = 0;
+    int64_t sampled_tokens = 0;
+
+    void add(const RuntimeProfilingStats& other)
+    {
+        prepare_inputs_ms += other.prepare_inputs_ms;
+        prefill_ms += other.prefill_ms;
+        decode_ms_total += other.decode_ms_total;
+        sampling_ms += other.sampling_ms;
+        prefill_tokens += other.prefill_tokens;
+        decode_tokens += other.decode_tokens;
+        sampled_tokens += other.sampled_tokens;
+    }
+};
+
+/**
  * @brief Aggregated model execution results for one runtime step.
  */
 struct ModelRunnerOutput {
     std::vector<uint64_t> req_ids; // 本轮执行的所有请求 id
     std::unordered_map<uint64_t, int32_t> req_id_to_index; // id -> index（该请求在sampled_token_ids 的第几项）
     std::vector<int32_t> sampled_token_ids; // 本轮迭代中，每个请求的产出（idx -> token_id），prefill 请求为 -1
+    RuntimeProfilingStats profiling;
     // std::vector<ModelTaskOutput> tasks;
 };
 

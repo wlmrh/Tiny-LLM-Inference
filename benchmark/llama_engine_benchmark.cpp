@@ -35,8 +35,14 @@ struct RepeatMetrics {
     double load_ms = 0.0;
     double total_ms = 0.0;
     double first_token_ms = 0.0;
+    double prepare_inputs_ms = 0.0;
+    double prefill_ms = 0.0;
+    double decode_ms_total = 0.0;
+    double sampling_ms = 0.0;
     int64_t prompt_tokens = 0;
     int64_t generated_tokens = 0;
+    int64_t prefill_tokens = 0;
+    int64_t decode_tokens = 0;
 };
 
 std::filesystem::path expand_user_path(const std::string& path)
@@ -305,6 +311,13 @@ RepeatMetrics run_once(const Options& options, bool measure)
     metrics.load_ms = elapsed_ms(load_start, load_end);
     metrics.total_ms = elapsed_ms(generation_start, generation_end);
     metrics.first_token_ms = saw_first_token ? elapsed_ms(generation_start, first_token_time) : 0.0;
+    const tiny_llm::RuntimeProfilingStats& profile = llm.last_generation_profile();
+    metrics.prepare_inputs_ms = profile.prepare_inputs_ms;
+    metrics.prefill_ms = profile.prefill_ms;
+    metrics.decode_ms_total = profile.decode_ms_total;
+    metrics.sampling_ms = profile.sampling_ms;
+    metrics.prefill_tokens = profile.prefill_tokens;
+    metrics.decode_tokens = profile.decode_tokens;
     metrics.prompt_tokens = options.prompt_tokens;
     metrics.generated_tokens = 0;
     for (const tiny_llm::CompletionOutput& output : outputs)
@@ -349,28 +362,54 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::vector<double> load_ms;
     std::vector<double> total_ms;
     std::vector<double> first_token_ms;
+    std::vector<double> prepare_inputs_ms;
+    std::vector<double> prefill_ms;
+    std::vector<double> decode_ms_total;
+    std::vector<double> decode_ms_per_token;
+    std::vector<double> sampling_ms;
     load_ms.reserve(repeats.size());
     total_ms.reserve(repeats.size());
     first_token_ms.reserve(repeats.size());
+    prepare_inputs_ms.reserve(repeats.size());
+    prefill_ms.reserve(repeats.size());
+    decode_ms_total.reserve(repeats.size());
+    decode_ms_per_token.reserve(repeats.size());
+    sampling_ms.reserve(repeats.size());
     int64_t generated_tokens = 0;
     int64_t prompt_tokens = -1;
+    int64_t prefill_tokens = 0;
+    int64_t decode_tokens = 0;
     for (const RepeatMetrics& metrics : repeats)
     {
         load_ms.push_back(metrics.load_ms);
         total_ms.push_back(metrics.total_ms);
         first_token_ms.push_back(metrics.first_token_ms);
+        prepare_inputs_ms.push_back(metrics.prepare_inputs_ms);
+        prefill_ms.push_back(metrics.prefill_ms);
+        decode_ms_total.push_back(metrics.decode_ms_total);
+        decode_ms_per_token.push_back(metrics.decode_tokens > 0
+            ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens)
+            : 0.0);
+        sampling_ms.push_back(metrics.sampling_ms);
         generated_tokens += metrics.generated_tokens;
+        prefill_tokens += metrics.prefill_tokens;
+        decode_tokens += metrics.decode_tokens;
         prompt_tokens = metrics.prompt_tokens;
     }
 
     const double avg_load_ms = mean(load_ms);
     const double avg_total_ms = mean(total_ms);
     const double avg_first_ms = mean(first_token_ms);
+    const double avg_prepare_inputs_ms = mean(prepare_inputs_ms);
+    const double avg_prefill_ms = mean(prefill_ms);
+    const double avg_decode_ms_total = mean(decode_ms_total);
+    const double avg_decode_ms_per_token = mean(decode_ms_per_token);
+    const double avg_sampling_ms = mean(sampling_ms);
     const double avg_generated_tokens = repeats.empty() ? 0.0 : static_cast<double>(generated_tokens) / repeats.size();
     const double e2e_tokens_per_s = avg_total_ms > 0.0 ? avg_generated_tokens / (avg_total_ms / 1000.0) : 0.0;
     const double decode_ms = std::max(0.0, avg_total_ms - avg_first_ms);
-    const double decode_tokens = std::max(0.0, avg_generated_tokens - static_cast<double>(options.prompts.size()));
-    const double decode_tokens_per_s = decode_ms > 0.0 ? decode_tokens / (decode_ms / 1000.0) : 0.0;
+    const double generated_decode_tokens = std::max(0.0, avg_generated_tokens - static_cast<double>(options.prompts.size()));
+    const double decode_tokens_per_s = decode_ms > 0.0 ? generated_decode_tokens / (decode_ms / 1000.0) : 0.0;
 
     std::cout << "llama_engine_benchmark\n";
     std::cout << "  model: " << options.model_dir.string() << "\n";
@@ -383,6 +422,13 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "  avg_first_token_latency_ms: " << avg_first_ms << "\n";
     std::cout << "  avg_generated_tokens: " << avg_generated_tokens << "\n";
     std::cout << "  total_generated_tokens: " << generated_tokens << "\n";
+    std::cout << "  prepare_inputs_ms: " << avg_prepare_inputs_ms << "\n";
+    std::cout << "  prefill_ms: " << avg_prefill_ms << "\n";
+    std::cout << "  decode_ms_total: " << avg_decode_ms_total << "\n";
+    std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
+    std::cout << "  sampling_ms: " << avg_sampling_ms << "\n";
+    std::cout << "  avg_prefill_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << "\n";
+    std::cout << "  avg_decode_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << "\n";
     if (prompt_tokens >= 0)
     {
         std::cout << "  prompt_tokens: " << prompt_tokens << "\n";
@@ -413,6 +459,46 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << repeats[i].load_ms;
     }
     std::cout << "]\n";
+    std::cout << "  repeat_prepare_inputs_ms: [";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ", ";
+        }
+        std::cout << repeats[i].prepare_inputs_ms;
+    }
+    std::cout << "]\n";
+    std::cout << "  repeat_prefill_ms: [";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ", ";
+        }
+        std::cout << repeats[i].prefill_ms;
+    }
+    std::cout << "]\n";
+    std::cout << "  repeat_decode_ms_total: [";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ", ";
+        }
+        std::cout << repeats[i].decode_ms_total;
+    }
+    std::cout << "]\n";
+    std::cout << "  repeat_sampling_ms: [";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ", ";
+        }
+        std::cout << repeats[i].sampling_ms;
+    }
+    std::cout << "]\n";
 
     if (!options.json)
     {
@@ -434,6 +520,13 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"avg_first_token_latency_ms\":" << avg_first_ms << ",";
     std::cout << "\"avg_generated_tokens\":" << avg_generated_tokens << ",";
     std::cout << "\"total_generated_tokens\":" << generated_tokens << ",";
+    std::cout << "\"prepare_inputs_ms\":" << avg_prepare_inputs_ms << ",";
+    std::cout << "\"prefill_ms\":" << avg_prefill_ms << ",";
+    std::cout << "\"decode_ms_total\":" << avg_decode_ms_total << ",";
+    std::cout << "\"decode_ms_per_token\":" << avg_decode_ms_per_token << ",";
+    std::cout << "\"sampling_ms\":" << avg_sampling_ms << ",";
+    std::cout << "\"avg_prefill_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << ",";
+    std::cout << "\"avg_decode_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << ",";
     std::cout << "\"end_to_end_tokens_per_s\":" << e2e_tokens_per_s << ",";
     std::cout << "\"decode_tokens_per_s\":" << decode_tokens_per_s << ",";
     std::cout << "\"repeat_total_latency_ms\":[";
@@ -454,6 +547,46 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
             std::cout << ",";
         }
         std::cout << repeats[i].load_ms;
+    }
+    std::cout << "],";
+    std::cout << "\"repeat_prepare_inputs_ms\":[";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << repeats[i].prepare_inputs_ms;
+    }
+    std::cout << "],";
+    std::cout << "\"repeat_prefill_ms\":[";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << repeats[i].prefill_ms;
+    }
+    std::cout << "],";
+    std::cout << "\"repeat_decode_ms_total\":[";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << repeats[i].decode_ms_total;
+    }
+    std::cout << "],";
+    std::cout << "\"repeat_sampling_ms\":[";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << repeats[i].sampling_ms;
     }
     std::cout << "]}\n";
 }

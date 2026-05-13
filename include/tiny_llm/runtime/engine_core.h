@@ -35,10 +35,12 @@ public:
     void add_request(const EngineCoreRequest& request);
 
     std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> step();
+    const RuntimeProfilingStats& last_step_profile() const { return last_step_profile_; }
 
 private:
     std::unique_ptr<Scheduler> scheduler_;
     std::unique_ptr<ModelRunner> runner_;
+    RuntimeProfilingStats last_step_profile_;
 };
 
 } // namespace tiny_llm

@@ -15,6 +15,7 @@
 #include "tiny_llm/runtime/runtime_context.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -22,9 +23,34 @@
 #include <string>
 #include <vector>
 
+#if TINYLLM_ENABLE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+
 namespace tiny_llm {
 
 namespace {
+
+using ProfileClock = std::chrono::steady_clock;
+
+double elapsed_profile_ms(ProfileClock::time_point start, ProfileClock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+void synchronize_for_profile(const c10::Device& device)
+{
+#if TINYLLM_ENABLE_CUDA
+    if (device.is_cuda())
+    {
+        const int device_index = device.index() >= 0 ? static_cast<int>(device.index()) : 0;
+        cudaSetDevice(device_index);
+        cudaDeviceSynchronize();
+    }
+#else
+    (void)device;
+#endif
+}
 
 int64_t checked_numel(const std::vector<int64_t>& shape, const char* caller)
 {
@@ -507,8 +533,38 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs) const
 
 ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 {
+    validate_handles();
+    const c10::Device runtime_device = require_global_execution_context("ModelRunner::run").device();
+
+    int64_t prefill_tokens = 0;
+    int64_t decode_tokens = 0;
+    for (const RequestData& req_data : scheduler_output.scheduled_reqs)
+    {
+        const auto count_it = scheduler_output.num_scheduled_tokens.find(req_data.req_id);
+        if (count_it == scheduler_output.num_scheduled_tokens.end() || count_it->second <= 0)
+        {
+            continue;
+        }
+        if (req_data.is_prefill)
+        {
+            prefill_tokens += count_it->second;
+        }
+        else
+        {
+            decode_tokens += count_it->second;
+        }
+    }
+
+    synchronize_for_profile(runtime_device);
+    const auto prepare_start = ProfileClock::now();
     PreparedInputs inputs = prepare_inputs(scheduler_output);
+    synchronize_for_profile(runtime_device);
+    const auto prepare_end = ProfileClock::now();
+
     ModelRunnerOutput output;
+    output.profiling.prepare_inputs_ms = elapsed_profile_ms(prepare_start, prepare_end);
+    output.profiling.prefill_tokens = prefill_tokens;
+    output.profiling.decode_tokens = decode_tokens;
     output.req_ids.reserve(prepared_req_ids_.size());
     output.sampled_token_ids.reserve(prepared_req_ids_.size());
     output.req_id_to_index.reserve(prepared_req_ids_.size());
@@ -517,11 +573,38 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         return output;
     }
 
+    synchronize_for_profile(runtime_device);
+    const auto model_start = ProfileClock::now();
     Tensor logits = run_model(inputs);
+    synchronize_for_profile(runtime_device);
+    const auto model_end = ProfileClock::now();
+
+    const double model_ms = elapsed_profile_ms(model_start, model_end);
+    const int64_t model_tokens = prefill_tokens + decode_tokens;
+    if (model_tokens > 0 && prefill_tokens > 0 && decode_tokens > 0)
+    {
+        output.profiling.prefill_ms = model_ms * static_cast<double>(prefill_tokens) / static_cast<double>(model_tokens);
+        output.profiling.decode_ms_total = model_ms * static_cast<double>(decode_tokens) / static_cast<double>(model_tokens);
+    }
+    else if (prefill_tokens > 0)
+    {
+        output.profiling.prefill_ms = model_ms;
+    }
+    else
+    {
+        output.profiling.decode_ms_total = model_ms;
+    }
+
+    synchronize_for_profile(runtime_device);
+    const auto sampling_start = ProfileClock::now();
     std::vector<int32_t> sampled_rows = sample_greedy_rows(
         logits,
         inputs.sample_row_offsets,
         model_->vocab_size());
+    synchronize_for_profile(runtime_device);
+    const auto sampling_end = ProfileClock::now();
+    output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);
+    output.profiling.sampled_tokens = static_cast<int64_t>(inputs.sample_row_offsets.size());
 
     for (size_t i = 0; i < prepared_req_ids_.size(); ++i)
     {

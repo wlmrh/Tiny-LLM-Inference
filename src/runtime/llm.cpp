@@ -332,6 +332,8 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
         return {};
     }
 
+    last_generation_profile_ = RuntimeProfilingStats{};
+
     std::vector<CompletionOutput> results(prompts.size());
     std::unordered_map<std::string, size_t> request_to_index;
     request_to_index.reserve(prompts.size());
@@ -348,6 +350,7 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
     while (engine_->has_unfinished_requests())
     {
         const std::vector<UserOutput> step_outputs = engine_->step();
+        last_generation_profile_.add(engine_->last_step_profile());
         for (const UserOutput& output : step_outputs)
         {
             auto it = request_to_index.find(output.external_id);

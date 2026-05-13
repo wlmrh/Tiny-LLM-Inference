@@ -54,6 +54,7 @@ bool LLMEngine::has_unfinished_requests() const
 std::vector<UserOutput> LLMEngine::step()
 {
     auto [core_outputs, has_scheduled_tokens] = core_->step();
+    last_step_profile_ = core_->last_step_profile();
 
     std::vector<UserOutput> user_outputs = output_preprocessor_.process_outputs(core_outputs);
 

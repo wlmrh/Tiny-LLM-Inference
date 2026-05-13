@@ -172,7 +172,7 @@ Run an end-to-end benchmark through the same offline LLM path:
   ~/models/smollm2-135M
 ```
 
-The benchmark reports load/init time, total generation latency, first-token latency, generated-token throughput, prompt token count, and an optional JSON summary. Use `--device cuda:0` with a CUDA build.
+The benchmark reports load/init time, total generation latency, first-token latency, generated-token throughput, prompt token count, and an optional JSON summary. TinyLLM also reports `prepare_inputs_ms`, `prefill_ms`, `decode_ms_total`, `decode_ms_per_token`, and `sampling_ms` to help separate input packing, prompt forward, decode forward, and sampling costs. Use `--device cuda:0` with a CUDA build.
 
 Run the Transformers `generate()` baseline with the same prompts and metric schema:
 

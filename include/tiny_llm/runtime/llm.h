@@ -94,6 +94,8 @@ public:
                                      const UserSamplingParams& sampling_params,
                                      CompletionStreamCallback callback);
 
+    const RuntimeProfilingStats& last_generation_profile() const { return last_generation_profile_; }
+
 private:
     void initialize();
     void release_kv_pool() noexcept;
@@ -104,6 +106,7 @@ private:
     std::unique_ptr<LLMEngine> engine_;
     void* kv_pool_ = nullptr;
     uint64_t next_generation_id_ = 1;
+    RuntimeProfilingStats last_generation_profile_;
 };
 
 } // namespace tiny_llm

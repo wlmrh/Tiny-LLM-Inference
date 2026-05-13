@@ -134,6 +134,15 @@ def print_table(results: List[Dict[str, Any]], comparison: Dict[str, Any]) -> No
             f"{float(item['decode_tokens_per_s']):>14.3f} "
             f"{float(item['avg_generated_tokens']):>10.3f}"
         )
+    for item in results:
+        if all(key in item for key in ("prepare_inputs_ms", "prefill_ms", "decode_ms_total", "decode_ms_per_token", "sampling_ms")):
+            print(f"{item['backend']} breakdown")
+            print(f"  prepare_inputs_ms: {float(item['prepare_inputs_ms']):.3f}")
+            print(f"  prefill_ms: {float(item['prefill_ms']):.3f}")
+            print(f"  decode_ms_total: {float(item['decode_ms_total']):.3f}")
+            print(f"  decode_ms_per_token: {float(item['decode_ms_per_token']):.3f}")
+            print(f"  sampling_ms: {float(item['sampling_ms']):.3f}")
+
     ratios = comparison.get("ratios", {})
     if ratios:
         print("ratios tinyllm/transformers")

@@ -621,6 +621,7 @@ SchedulerOutput Scheduler::schedule()
             RequestData req_data;
             req_data.req_id = request_id;
             req_data.num_computed_tokens = req->num_computed;
+            req_data.is_prefill = true;
             req_data.block_tables = std::move(block_tables);
             if (!req_data.block_tables.empty())
             {
@@ -656,6 +657,7 @@ SchedulerOutput Scheduler::schedule()
         RequestData req_data;
         req_data.req_id = request_id;
         req_data.num_computed_tokens = req->num_computed;
+        req_data.is_prefill = false;
         req_data.block_tables = std::move(block_tables);
         if (!req_data.block_tables.empty())
         {
@@ -712,6 +714,7 @@ SchedulerOutput Scheduler::schedule()
                 RequestData req_data;
                 req_data.req_id = request_id;
                 req_data.num_computed_tokens = req->num_computed;
+                req_data.is_prefill = false;
                 req_data.block_tables = std::move(block_tables);
                 if (!req_data.block_tables.empty())
                 {
@@ -737,6 +740,7 @@ SchedulerOutput Scheduler::schedule()
             RequestData req_data;
             req_data.req_id = request_id;
             req_data.num_computed_tokens = req->num_computed;
+            req_data.is_prefill = true;
             req_data.block_tables = std::move(block_tables);
             if (!req_data.block_tables.empty())
             {

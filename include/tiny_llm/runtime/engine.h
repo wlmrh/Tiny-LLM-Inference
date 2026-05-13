@@ -40,9 +40,11 @@ public:
      * @brief Runs one decode step for active requests and returns user outputs.
      */
     std::vector<UserOutput> step();
+    const RuntimeProfilingStats& last_step_profile() const { return last_step_profile_; }
 
 private:
     std::unique_ptr<EngineCore> core_;
+    RuntimeProfilingStats last_step_profile_;
     InputPreprocessor input_preprocessor_;
     OutPreprocessor output_preprocessor_;
 };
