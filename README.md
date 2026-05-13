@@ -31,7 +31,7 @@ src/                     Engine, runtime, operators, models, and backends
 examples/                Small runnable examples
 tools/                   Standalone C++ debugging utilities
 scripts/                 Python comparison and inspection scripts
-tests/                   CTest entry points
+tests/                   GoogleTest and CTest entry points
 docs/                    Design notes and implementation plans
 assets/tiny_lm/          Tiny toy model assets
 ```
@@ -47,6 +47,8 @@ Required:
 - Python 3, recommended for PyTorch discovery and comparison scripts
 - PyTorch/libtorch
 - Rust `cargo`, required by `tokenizers-cpp`
+
+Test-only dependencies are fetched by CMake. GoogleTest is built from source through `tests/CMakeLists.txt` so it inherits libtorch's C++ ABI flags; avoid linking a prebuilt GTest with a mismatched ABI.
 
 Optional:
 
@@ -182,10 +184,17 @@ Run Qwen2.5-1.5B-Instruct on CUDA:
 
 ## Test
 
-Run all registered CTest tests:
+Run all registered CTest tests. C++ unit and integration tests are GoogleTest binaries discovered with `gtest_discover_tests()`; Python comparison and smoke scripts remain direct CTest entries:
 
 ```bash
 ctest --test-dir build --output-on-failure
+```
+
+Run focused runtime unit coverage without a model directory:
+
+```bash
+ctest --test-dir build --output-on-failure \
+  -R 'Scheduler|KVCache|ModelRunner|EngineCore|PagedAttention'
 ```
 
 Run the runtime smoke test with a local SmolLM2 model:
@@ -195,7 +204,7 @@ TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
 ctest --test-dir build --output-on-failure
 ```
 
-The Transformers comparison tests return CTest skip code `77` when their model path or Python dependencies are unavailable.
+The model-backed GoogleTest integration tests use `GTEST_SKIP()` when `TINYLLM_HF_TINY_LLAMA_DIR` or required model files are unavailable. The Transformers comparison tests return CTest skip code `77` when their model path or Python dependencies are unavailable.
 
 CUDA CTest with SmolLM2 generation smoke:
 
@@ -228,13 +237,35 @@ A successful run prints one JSON object per prompt. The validated server run pro
 {"prompt":"你好","finish_reason":"length","generated_token_ids":[3837,35946,85106,100364,1773,220,108386,6313]}
 ```
 
-For regression coverage around the architecture changes, build all CUDA targets and run:
+For regression coverage around the runtime architecture, build all CUDA targets and run the focused GoogleTest/CTest subset:
 
 ```bash
 cmake --build build-cuda -j
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
 ctest --test-dir build-cuda --output-on-failure \
-  -R 'test_linear_module|test_weight_map|test_llama_ops|test_model_blocks|test_model_runner_prepared_inputs|test_paged_attention_cuda'
+  -R 'Scheduler|KVCache|ModelRunner|EngineCore|PagedAttention|test_llama_generation_cuda_smoke'
 ```
+
+
+## Test Architecture
+
+C++ tests use GoogleTest and are registered with CTest from `tests/CMakeLists.txt`. The tree intentionally stays shallow:
+
+```text
+tests/unit/          Fast unit tests for core runtime, modules, operators, scheduler, KV cache, and EngineCore
+tests/integration/   Model-backed LLM API tests that skip when local HF assets are unavailable
+tools/               Standalone debugging utilities built alongside tests but not CTest sources
+scripts/             Python alignment and smoke helpers registered directly with CTest
+```
+
+Runtime behavior is covered by focused tests that do not require real model weights:
+
+- `test_scheduler.cpp` covers FCFS ordering, chunked prefill, one-token decode, stop tokens, max-token finish, and cleanup.
+- `test_kv_cache_manager.cpp` covers multi-layer block tables, allocation failure, release, and reuse.
+- `test_model_runner_prepared_inputs.cpp` covers scheduler-to-tensor flattening, sampled rows, and malformed scheduler outputs.
+- `test_engine_core.cpp` uses a fake model to validate `EngineCore::step()` generation accounting.
+
+`test_model_blocks.cpp` was removed because it duplicated narrower module/operator tests. Add new coverage at the subsystem boundary that owns the behavior instead of restoring broad smoke tests.
 
 ## Compare Against Transformers
 
@@ -384,9 +415,9 @@ Install Rust from:
 https://rustup.rs/
 ```
 
-### tokenizers-cpp configure tries to access GitHub repeatedly
+### FetchContent dependencies try to access the network repeatedly
 
-`tokenizers-cpp` is fetched through CMake `FetchContent`. After the dependency has been populated once, the project keeps `FETCHCONTENT_UPDATES_DISCONNECTED` enabled so repeated configures do not depend on GitHub availability. If a build tree was created before this setting existed, rerun CMake after updating the repository, or create a fresh build directory.
+`tokenizers-cpp` and GoogleTest are fetched through CMake `FetchContent`. After dependencies have been populated once, the project keeps `FETCHCONTENT_UPDATES_DISCONNECTED` enabled so repeated configures do not depend on remote availability. If a build tree was created before this setting existed, rerun CMake after updating the repository, or create a fresh build directory.
 
 ### Transformers comparisons are skipped
 
@@ -412,4 +443,4 @@ Some libtorch distributions depend on `libomp.dylib`. If macOS cannot locate it 
 - Prefer public headers under `include/tiny_llm/...` for new code.
 - Keep debug executables in `tools/` and Python diagnostics in `scripts/`.
 - Use tensor/logit/generation comparison scripts after changes to model loading, operators, attention, scheduler metadata, or KV-cache behavior.
-- Avoid restoring historical `test_llama_phase*` bring-up files as regular tests; ongoing LLaMA coverage should use focused smoke tests and Transformers alignment scripts.
+- Avoid restoring historical `test_llama_phase*` bring-up files or the removed `test_model_blocks.cpp` broad smoke as regular tests; use focused GoogleTest cases and Transformers alignment scripts instead.

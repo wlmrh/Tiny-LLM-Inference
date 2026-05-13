@@ -9,12 +9,14 @@ Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with
 - libtorch integration: `find_package(Torch QUIET)` first, then Python `torch.utils.cmake_prefix_path`, then `$HOME/libtorch*`. `${TORCH_LIBRARIES}` is linked into `tiny_llm`; `TORCH_CXX_FLAGS` is appended globally so the libtorch ABI flag is inherited by the project and third-party tokenizer code.
 - CPU/CUDA mode: CPU is the default (`TINYLLM_ENABLE_CUDA=OFF`) and compiles `src/core/cpu/cpu_allocator.cpp`. CUDA mode (`TINYLLM_ENABLE_CUDA=ON`) enables CUDA language, requires `CUDAToolkit`, links `CUDA::cudart`, `CUDA::cublas`, `${TORCH_LIBRARIES}`, and compiles CUDA allocator/operator kernels. CUDA builds must still keep CPU as the default runtime unless `EngineArgs::parallel_config` or a tool option explicitly selects CUDA.
 - Tokenizer integration: the Rust-backed HuggingFace tokenizer path is provided by `tokenizers-cpp`, fetched with CMake `FetchContent` from `https://github.com/mlc-ai/tokenizers-cpp.git` and linked as `tokenizers_cpp`. CMake requires `cargo` before fetching it.
-- FetchContent update policy: after the initial tokenizers-cpp population, CMake should not update/fetch it on every configure. Keep `FETCHCONTENT_UPDATES_DISCONNECTED` enabled so repeated local/remote configures do not depend on GitHub availability.
+- FetchContent update policy: after the initial tokenizers-cpp and googletest populations, CMake should not update/fetch them on every configure. Keep `FETCHCONTENT_UPDATES_DISCONNECTED` enabled so repeated local/remote configures do not depend on remote availability.
+- Test framework: C++ tests use GoogleTest, pulled by `tests/CMakeLists.txt` with CMake `FetchContent` and linked through `GTest::gtest_main`. GoogleTest is built from source in the build tree so it inherits libtorch's global ABI flag; do not link a prebuilt system/Conda GTest that may use a different `_GLIBCXX_USE_CXX11_ABI` value.
 - Tokenizer wrapper path: C++ runtime wrappers live in `include/tiny_llm/runtime/tokenizer.h` and `src/runtime/tokenizer.cpp`. `HFLlamaTokenizer` loads `tokenizer.json` via `tokenizers::Tokenizer::FromBlobJSON` or `tokenizer.model` via `FromBlobSentencePiece`. HF tokenizer configs may encode special tokens as strings, objects with `content`, or JSON `null`; Qwen2 checkpoints may omit `unk_token_id` and may report tokenizer vocab smaller than the padded model vocab.
 
 # Architecture (架构与目录)
 
-- Test/tool layout: automated CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostic executables out of `tests/` unless they are the actual test entry point.
+- Test/tool layout: automated GoogleTest/CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostic executables out of `tests/` unless they are the actual test entry point. `tests/CMakeLists.txt` uses `gtest_discover_tests()` for C++ test cases, while Python Transformers/smoke checks remain direct CTest registrations.
+- Runtime test coverage: scheduler/KV/engine behavior is covered by `tests/unit/test_scheduler.cpp`, `tests/unit/test_kv_cache_manager.cpp`, `tests/unit/test_model_runner_prepared_inputs.cpp`, and `tests/unit/test_engine_core.cpp`. These tests use fake models or small host-side KV pools rather than real HF weights, so they should stay fast and deterministic. The old redundant `test_model_blocks.cpp` smoke test was removed; add focused module/operator coverage instead of restoring it.
 - Runtime scheduling: `include/tiny_llm/runtime/scheduler.h` and `src/runtime/scheduler.cpp`. `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, preemption, and the runtime `KVCache` used by generation. `KVCacheManager` bridges scheduling decisions to KV block allocation and can return all per-layer block tables for scheduled requests.
 - Engine frontend/core: `include/tiny_llm/runtime/engine.h`, `src/runtime/engine.cpp`, `include/tiny_llm/runtime/engine_core.h`, and `src/runtime/engine_core.cpp`. `LLMEngine` converts user text to core requests; `EngineCore::step()` calls `Scheduler::schedule()`, `ModelRunner::run()`, then `Scheduler::update_from_output()`. `EngineCore` passes the scheduler-owned `KVCache*` into `ModelRunner`; do not create a second runner-local KV cache for the same engine.
 - Model execution: `include/tiny_llm/runtime/model_runner.h` and `src/runtime/model_runner.cpp`. `ModelRunner` loads HF weights from either `model.safetensors` or all `*.safetensors` shards in sorted order, then flattens scheduled request tokens into `PreparedInputs` (`input_ids`, `positions`, `slot_mapping`, `seq_indices`, `context_lens`, rank-3 `block_tables`, and `sample_row_offsets`), creates an explicit `RuntimeContext`, runs `Model::forward(const PreparedInputs&, RuntimeContext&)`, then greedily samples the request-final rows. The legacy `ModelExecutor`/`forward_step()` path has been removed.
@@ -105,16 +107,19 @@ ctest --test-dir build-cuda --output-on-failure
 
 CUDA builds register `test_llama_generation_cuda_smoke`, which runs `tools/llama_engine_generate --device cuda:0` and checks deterministic SmolLM2 token IDs for `hello` and `tiny llm inference`.
 
-Run the currently approved tiny runtime test binary directly:
+Run an individual GoogleTest binary directly, optionally filtering cases:
 
 ```bash
-./build/tests/test_tiny_lm_runtime
+./build/tests/test_scheduler --gtest_filter='SchedulerTest.*'
+./build/tests/test_tiny_lm_runtime --gtest_filter='TinyLMRuntimeIntegrationTest.*'
 ```
 
-Run the SmolLM2 runtime smoke test with the local model path:
+Run the SmolLM2 runtime integration tests through CTest:
 
 ```bash
-./build/tests/test_tiny_lm_runtime ~/models/smollm2-135M
+TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
+ctest --test-dir build --output-on-failure \
+  -R 'TinyLMRuntimeIntegrationTest|LLMOfflineIntegrationTest|test_llama_generation_cpu_smoke'
 ```
 
 Run examples:
@@ -141,7 +146,7 @@ Run focused CUDA regression tests after Qwen/LLaMA runtime changes:
 ```bash
 cmake --build build-cuda -j
 ctest --test-dir build-cuda --output-on-failure \
-  -R 'test_linear_module|test_weight_map|test_llama_ops|test_model_blocks|test_model_runner_prepared_inputs|test_paged_attention_cuda'
+  -R 'Scheduler|KVCache|ModelRunner|EngineCore|PagedAttention|test_llama_generation_cuda_smoke'
 ```
 
 
