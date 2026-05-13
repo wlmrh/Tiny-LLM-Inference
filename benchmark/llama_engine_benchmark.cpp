@@ -403,6 +403,16 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << repeats[i].total_ms;
     }
     std::cout << "]\n";
+    std::cout << "  repeat_load_init_ms: [";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ", ";
+        }
+        std::cout << repeats[i].load_ms;
+    }
+    std::cout << "]\n";
 
     if (!options.json)
     {
@@ -411,6 +421,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
 
     std::cout << "{";
     std::cout << "\"benchmark\":\"llama_engine_benchmark\",";
+    std::cout << "\"backend\":\"tinyllm\",";
     std::cout << "\"model\":\"" << json_escape(options.model_dir.string()) << "\",";
     std::cout << "\"device\":\"" << json_escape(options.device_text) << "\",";
     std::cout << "\"prompt_count\":" << options.prompts.size() << ",";
@@ -433,6 +444,16 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
             std::cout << ",";
         }
         std::cout << repeats[i].total_ms;
+    }
+    std::cout << "],";
+    std::cout << "\"repeat_load_init_ms\":[";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << repeats[i].load_ms;
     }
     std::cout << "]}\n";
 }

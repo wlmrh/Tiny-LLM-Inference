@@ -15,7 +15,7 @@ Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with
 
 # Architecture (架构与目录)
 
-- Test/tool/benchmark layout: automated GoogleTest/CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; manual performance benchmarks live under top-level `benchmark/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostics or benchmarks out of `tests/` unless they are actual correctness test entry points. `tests/CMakeLists.txt` uses `gtest_discover_tests()` for C++ test cases, while Python Transformers/smoke checks remain direct CTest registrations.
+- Test/tool/benchmark layout: automated GoogleTest/CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; manual performance benchmarks and performance comparison wrappers live under top-level `benchmark/`; Python correctness comparison/debug helpers live under `scripts/`. Keep new diagnostics or benchmarks out of `tests/` unless they are actual correctness test entry points. `tests/CMakeLists.txt` uses `gtest_discover_tests()` for C++ test cases, while Python Transformers/smoke checks remain direct CTest registrations.
 - Runtime test coverage: scheduler/KV/engine behavior is covered by `tests/unit/test_scheduler.cpp`, `tests/unit/test_kv_cache_manager.cpp`, `tests/unit/test_model_runner_prepared_inputs.cpp`, and `tests/unit/test_engine_core.cpp`. These tests use fake models or small host-side KV pools rather than real HF weights, so they should stay fast and deterministic. The old redundant `test_model_blocks.cpp` smoke test was removed; add focused module/operator coverage instead of restoring it.
 - Runtime scheduling: `include/tiny_llm/runtime/scheduler.h` and `src/runtime/scheduler.cpp`. `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, preemption, and the runtime `KVCache` used by generation. `KVCacheManager` bridges scheduling decisions to KV block allocation and can return all per-layer block tables for scheduled requests.
 - Engine frontend/core: `include/tiny_llm/runtime/engine.h`, `src/runtime/engine.cpp`, `include/tiny_llm/runtime/engine_core.h`, and `src/runtime/engine_core.cpp`. `LLMEngine` converts user text to core requests; `EngineCore::step()` calls `Scheduler::schedule()`, `ModelRunner::run()`, then `Scheduler::update_from_output()`. `EngineCore` passes the scheduler-owned `KVCache*` into `ModelRunner`; do not create a second runner-local KV cache for the same engine.
@@ -152,13 +152,15 @@ ctest --test-dir build-cuda --output-on-failure \
 
 # Debug Tools & Alignment Scripts (调试工具)
 
-The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMakeLists.txt`; they are not themselves CTest test sources. The Python files in `scripts/` compare tool output against PyTorch/Transformers or inspect model files.
+The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMakeLists.txt`; they are not themselves CTest test sources. The Python files in `scripts/` compare tool output against PyTorch/Transformers or inspect model files. The `benchmark/` directory contains manual performance tools and comparison wrappers; benchmark runs should not be registered as regular CTest tests.
 
 - `tools/hf_safetensor_dump.cpp`: inspect selected safetensors weights and model metadata. Build with `cmake --build build -j`, then run `./build/tools/hf_safetensor_dump ~/models/smollm2-135M`.
 - `tools/llama_logits_dump.cpp`: dump C++ logits for explicit token IDs into a binary file for script-based comparison. Normally use it through `scripts/compare_llama_logits_with_transformers.py`.
 - `tools/llama_tensor_dump.cpp`: dump C++ intermediate tensors such as embedding, per-layer norms, QKV, attention outputs, MLP activations, final norm, and logits. Normally use it through `scripts/compare_llama_tensors_with_transformers.py`.
 - `tools/llama_engine_generate.cpp`: run `LLMEngine` greedy generation for one or more prompts and emit JSON lines containing output text and generated token IDs. It supports `--device cpu`, `--device cuda`, and `--device cuda:<device_id>`. Normally use it through `scripts/compare_llama_generation_with_transformers.py` or `scripts/run_llama_generation_smoke.py`.
-- `benchmark/llama_engine_benchmark.cpp`: run an end-to-end offline LLM benchmark using the real `LLM` path. It supports `--device`, `--warmup`, `--repeat`, `--max-new-tokens`, repeated `--prompt`, and `--json`; it reports load/init time, first-token latency, total latency, prompt/generated token counts, and throughput. Build it via the top-level `benchmark/` CMake directory and run it manually; do not register benchmark runs as regular CTest tests.
+- `benchmark/llama_engine_benchmark.cpp`: run an end-to-end offline LLM benchmark using the real `LLM` path. It supports `--device`, `--warmup`, `--repeat`, `--max-new-tokens`, repeated `--prompt`, and `--json`; it reports load/init time, first-token latency, total latency, prompt/generated token counts, throughput, and repeat arrays. Build it via the top-level `benchmark/` CMake directory and run it manually; do not register benchmark runs as regular CTest tests.
+- `benchmark/transformers_generate_benchmark.py`: run the Hugging Face Transformers `generate()` baseline with the same CLI shape and JSON metric schema. It uses local model files, float32 weights, greedy decoding, batched prompts, and `LogitsProcessor` timing for first-token latency.
+- `benchmark/run_benchmark_comparison.py`: run TinyLLM and/or Transformers benchmark backends, parse their JSON summaries, print a compact comparison table, and optionally emit one JSON summary with TinyLLM/Transformers ratios.
 
 Historical `test_llama_phase*` files were temporary bring-up checks for the LLaMA integration and should not be restored as regular tests. Use the focused runtime smoke test plus the Transformers comparison scripts for ongoing coverage.
 
@@ -203,6 +205,25 @@ Run the end-to-end benchmark manually:
 
 ```bash
 ./build/benchmark/llama_engine_benchmark \
+  --warmup 1 \
+  --repeat 3 \
+  --max-new-tokens 8 \
+  --json \
+  ~/models/smollm2-135M
+```
+
+Run the Transformers baseline and TinyLLM comparison wrapper manually:
+
+```bash
+python3 benchmark/transformers_generate_benchmark.py \
+  --warmup 1 \
+  --repeat 3 \
+  --max-new-tokens 8 \
+  --json \
+  ~/models/smollm2-135M
+
+python3 benchmark/run_benchmark_comparison.py \
+  --tinyllm-binary build/benchmark/llama_engine_benchmark \
   --warmup 1 \
   --repeat 3 \
   --max-new-tokens 8 \

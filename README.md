@@ -174,6 +174,31 @@ Run an end-to-end benchmark through the same offline LLM path:
 
 The benchmark reports load/init time, total generation latency, first-token latency, generated-token throughput, prompt token count, and an optional JSON summary. Use `--device cuda:0` with a CUDA build.
 
+Run the Transformers `generate()` baseline with the same prompts and metric schema:
+
+```bash
+python3 benchmark/transformers_generate_benchmark.py \
+  --warmup 1 \
+  --repeat 3 \
+  --max-new-tokens 8 \
+  --json \
+  ~/models/smollm2-135M
+```
+
+Compare TinyLLM against Transformers in one command:
+
+```bash
+python3 benchmark/run_benchmark_comparison.py \
+  --tinyllm-binary build/benchmark/llama_engine_benchmark \
+  --warmup 1 \
+  --repeat 3 \
+  --max-new-tokens 8 \
+  --json \
+  ~/models/smollm2-135M
+```
+
+The comparison wrapper does not build the C++ benchmark for you; run `cmake --build` first. The main latency and throughput metrics exclude model loading and warmup, while load/init time is reported separately.
+
 Run the same tool on CUDA:
 
 ```bash
