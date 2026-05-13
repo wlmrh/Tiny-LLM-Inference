@@ -1,0 +1,468 @@
+#include "tiny_llm/runtime/llm.h"
+#include "tiny_llm/runtime/tokenizer.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+struct Options {
+    tiny_llm::ParallelConfig parallel_config = tiny_llm::ParallelConfig::cpu();
+    std::string device_text = "cpu";
+    int32_t warmup = 1;
+    int32_t repeat = 3;
+    int32_t max_new_tokens = 8;
+    bool json = false;
+    std::vector<std::string> prompts;
+    std::filesystem::path model_dir;
+    int64_t prompt_tokens = -1;
+};
+
+struct RepeatMetrics {
+    double load_ms = 0.0;
+    double total_ms = 0.0;
+    double first_token_ms = 0.0;
+    int64_t prompt_tokens = 0;
+    int64_t generated_tokens = 0;
+};
+
+std::filesystem::path expand_user_path(const std::string& path)
+{
+    if (path.empty() || path[0] != '~')
+    {
+        return std::filesystem::path(path);
+    }
+
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0')
+    {
+        return std::filesystem::path(path);
+    }
+    if (path.size() == 1)
+    {
+        return std::filesystem::path(home);
+    }
+    if (path[1] == '/')
+    {
+        return std::filesystem::path(home) / path.substr(2);
+    }
+    return std::filesystem::path(path);
+}
+
+int32_t parse_positive_int(const char* text, const char* name)
+{
+    try
+    {
+        size_t consumed = 0;
+        const long value = std::stol(text, &consumed);
+        if (consumed != std::string(text).size() || value <= 0 || value > std::numeric_limits<int32_t>::max())
+        {
+            throw std::runtime_error("expected positive int32");
+        }
+        return static_cast<int32_t>(value);
+    }
+    catch (const std::exception& ex)
+    {
+        throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
+    }
+}
+
+int32_t parse_non_negative_int(const char* text, const char* name)
+{
+    try
+    {
+        size_t consumed = 0;
+        const long value = std::stol(text, &consumed);
+        if (consumed != std::string(text).size() || value < 0 || value > std::numeric_limits<int32_t>::max())
+        {
+            throw std::runtime_error("expected non-negative int32");
+        }
+        return static_cast<int32_t>(value);
+    }
+    catch (const std::exception& ex)
+    {
+        throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
+    }
+}
+
+tiny_llm::ParallelConfig parse_device(const std::string& text)
+{
+    if (text == "cpu")
+    {
+        return tiny_llm::ParallelConfig::cpu();
+    }
+    if (text == "cuda")
+    {
+        return tiny_llm::ParallelConfig::cuda(0);
+    }
+
+    const std::string prefix = "cuda:";
+    if (text.rfind(prefix, 0) == 0)
+    {
+        const int32_t device_id = parse_non_negative_int(text.c_str() + prefix.size(), "cuda device id");
+        return tiny_llm::ParallelConfig::cuda(device_id);
+    }
+
+    throw std::runtime_error("device must be cpu, cuda, or cuda:<device_id>.");
+}
+
+bool has_safetensors_weight(const std::filesystem::path& model_dir)
+{
+    if (std::filesystem::exists(model_dir / "model.safetensors"))
+    {
+        return true;
+    }
+    if (!std::filesystem::is_directory(model_dir))
+    {
+        return false;
+    }
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".safetensors")
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void validate_model_dir(const std::filesystem::path& model_dir)
+{
+    if (!std::filesystem::is_directory(model_dir))
+    {
+        throw std::runtime_error("model_dir is not a directory: " + model_dir.string());
+    }
+    if (!std::filesystem::exists(model_dir / "config.json"))
+    {
+        throw std::runtime_error("model_dir must contain config.json: " + model_dir.string());
+    }
+    if (!std::filesystem::exists(model_dir / "tokenizer.json")
+        && !std::filesystem::exists(model_dir / "tokenizer.model"))
+    {
+        throw std::runtime_error("model_dir must contain tokenizer.json or tokenizer.model: " + model_dir.string());
+    }
+    if (!has_safetensors_weight(model_dir))
+    {
+        throw std::runtime_error("model_dir must contain model.safetensors or safetensors shards: " + model_dir.string());
+    }
+}
+
+void print_usage(const char* argv0)
+{
+    std::cerr << "usage: " << argv0
+              << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
+              << " [--max-new-tokens N] [--prompt TEXT]... [--json] <model_dir>\n";
+}
+
+Options parse_args(int argc, char** argv)
+{
+    Options options;
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg(argv[i]);
+        auto require_value = [&](const char* name) -> const char* {
+            if (i + 1 >= argc)
+            {
+                throw std::runtime_error(std::string(name) + " requires a value.");
+            }
+            return argv[++i];
+        };
+
+        if (arg == "--device")
+        {
+            options.device_text = require_value("--device");
+            options.parallel_config = parse_device(options.device_text);
+        }
+        else if (arg == "--warmup")
+        {
+            options.warmup = parse_non_negative_int(require_value("--warmup"), "warmup");
+        }
+        else if (arg == "--repeat")
+        {
+            options.repeat = parse_positive_int(require_value("--repeat"), "repeat");
+        }
+        else if (arg == "--max-new-tokens")
+        {
+            options.max_new_tokens = parse_positive_int(require_value("--max-new-tokens"), "max-new-tokens");
+        }
+        else if (arg == "--prompt")
+        {
+            options.prompts.push_back(require_value("--prompt"));
+        }
+        else if (arg == "--json")
+        {
+            options.json = true;
+        }
+        else if (arg == "--help" || arg == "-h")
+        {
+            print_usage(argv[0]);
+            std::exit(0);
+        }
+        else if (!arg.empty() && arg[0] == '-')
+        {
+            throw std::runtime_error("unknown option: " + arg);
+        }
+        else
+        {
+            if (!options.model_dir.empty())
+            {
+                throw std::runtime_error("multiple model_dir arguments were provided.");
+            }
+            options.model_dir = expand_user_path(arg);
+        }
+    }
+
+    if (options.model_dir.empty())
+    {
+        throw std::runtime_error("model_dir is required.");
+    }
+    if (options.prompts.empty())
+    {
+        options.prompts = {"hello", "tiny llm inference"};
+    }
+    options.parallel_config.validate();
+#if !TINYLLM_ENABLE_CUDA
+    if (options.parallel_config.is_cuda())
+    {
+        throw std::runtime_error("--device cuda requires a CUDA build.");
+    }
+#endif
+    validate_model_dir(options.model_dir);
+    return options;
+}
+
+double elapsed_ms(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+double mean(const std::vector<double>& values)
+{
+    if (values.empty())
+    {
+        return 0.0;
+    }
+    return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
+}
+
+int64_t count_prompt_tokens(const std::filesystem::path& model_dir, const std::vector<std::string>& prompts)
+{
+    tiny_llm::HFLlamaTokenizer tokenizer = tiny_llm::HFLlamaTokenizer::from_model_dir(model_dir.string());
+    int64_t total = 0;
+    for (const std::string& prompt : prompts)
+    {
+        total += static_cast<int64_t>(tokenizer.encode(prompt).size());
+    }
+    return total;
+}
+
+RepeatMetrics run_once(const Options& options, bool measure)
+{
+    RepeatMetrics metrics;
+    const auto load_start = Clock::now();
+    tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
+    llm_options.max_tokens = options.max_new_tokens;
+    tiny_llm::LLM llm(llm_options);
+    const auto load_end = Clock::now();
+
+    tiny_llm::UserSamplingParams sampling_params;
+    sampling_params.temperature = 0.0f;
+    sampling_params.top_p = 1.0f;
+    sampling_params.top_k = 0;
+    sampling_params.max_tokens = options.max_new_tokens;
+
+    bool saw_first_token = false;
+    Clock::time_point first_token_time{};
+    const auto generation_start = Clock::now();
+    const std::vector<tiny_llm::CompletionOutput> outputs =
+        llm.generate_stream(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput&) {
+            if (!saw_first_token)
+            {
+                saw_first_token = true;
+                first_token_time = Clock::now();
+            }
+        });
+    const auto generation_end = Clock::now();
+
+    if (!measure)
+    {
+        return metrics;
+    }
+
+    metrics.load_ms = elapsed_ms(load_start, load_end);
+    metrics.total_ms = elapsed_ms(generation_start, generation_end);
+    metrics.first_token_ms = saw_first_token ? elapsed_ms(generation_start, first_token_time) : 0.0;
+    metrics.prompt_tokens = options.prompt_tokens;
+    metrics.generated_tokens = 0;
+    for (const tiny_llm::CompletionOutput& output : outputs)
+    {
+        metrics.generated_tokens += static_cast<int64_t>(output.token_ids.size());
+    }
+    return metrics;
+}
+
+std::string json_escape(const std::string& text)
+{
+    std::ostringstream out;
+    for (unsigned char ch : text)
+    {
+        switch (ch)
+        {
+        case '"': out << "\\\""; break;
+        case '\\': out << "\\\\"; break;
+        case '\b': out << "\\b"; break;
+        case '\f': out << "\\f"; break;
+        case '\n': out << "\\n"; break;
+        case '\r': out << "\\r"; break;
+        case '\t': out << "\\t"; break;
+        default:
+            if (ch < 0x20)
+            {
+                const char* hex = "0123456789abcdef";
+                out << "\\u00" << hex[(ch >> 4) & 0x0f] << hex[ch & 0x0f];
+            }
+            else
+            {
+                out << static_cast<char>(ch);
+            }
+            break;
+        }
+    }
+    return out.str();
+}
+
+void print_summary(const Options& options, const std::vector<RepeatMetrics>& repeats)
+{
+    std::vector<double> load_ms;
+    std::vector<double> total_ms;
+    std::vector<double> first_token_ms;
+    load_ms.reserve(repeats.size());
+    total_ms.reserve(repeats.size());
+    first_token_ms.reserve(repeats.size());
+    int64_t generated_tokens = 0;
+    int64_t prompt_tokens = -1;
+    for (const RepeatMetrics& metrics : repeats)
+    {
+        load_ms.push_back(metrics.load_ms);
+        total_ms.push_back(metrics.total_ms);
+        first_token_ms.push_back(metrics.first_token_ms);
+        generated_tokens += metrics.generated_tokens;
+        prompt_tokens = metrics.prompt_tokens;
+    }
+
+    const double avg_load_ms = mean(load_ms);
+    const double avg_total_ms = mean(total_ms);
+    const double avg_first_ms = mean(first_token_ms);
+    const double avg_generated_tokens = repeats.empty() ? 0.0 : static_cast<double>(generated_tokens) / repeats.size();
+    const double e2e_tokens_per_s = avg_total_ms > 0.0 ? avg_generated_tokens / (avg_total_ms / 1000.0) : 0.0;
+    const double decode_ms = std::max(0.0, avg_total_ms - avg_first_ms);
+    const double decode_tokens = std::max(0.0, avg_generated_tokens - static_cast<double>(options.prompts.size()));
+    const double decode_tokens_per_s = decode_ms > 0.0 ? decode_tokens / (decode_ms / 1000.0) : 0.0;
+
+    std::cout << "llama_engine_benchmark\n";
+    std::cout << "  model: " << options.model_dir.string() << "\n";
+    std::cout << "  device: " << options.device_text << "\n";
+    std::cout << "  prompts: " << options.prompts.size() << ", warmup: " << options.warmup
+              << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens << "\n";
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "  avg_load_init_ms: " << avg_load_ms << "\n";
+    std::cout << "  avg_total_latency_ms: " << avg_total_ms << "\n";
+    std::cout << "  avg_first_token_latency_ms: " << avg_first_ms << "\n";
+    std::cout << "  avg_generated_tokens: " << avg_generated_tokens << "\n";
+    std::cout << "  total_generated_tokens: " << generated_tokens << "\n";
+    if (prompt_tokens >= 0)
+    {
+        std::cout << "  prompt_tokens: " << prompt_tokens << "\n";
+    }
+    else
+    {
+        std::cout << "  prompt_tokens: unavailable\n";
+    }
+    std::cout << "  end_to_end_tokens_per_s: " << e2e_tokens_per_s << "\n";
+    std::cout << "  decode_tokens_per_s: " << decode_tokens_per_s << "\n";
+    std::cout << "  repeat_total_latency_ms: [";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ", ";
+        }
+        std::cout << repeats[i].total_ms;
+    }
+    std::cout << "]\n";
+
+    if (!options.json)
+    {
+        return;
+    }
+
+    std::cout << "{";
+    std::cout << "\"benchmark\":\"llama_engine_benchmark\",";
+    std::cout << "\"model\":\"" << json_escape(options.model_dir.string()) << "\",";
+    std::cout << "\"device\":\"" << json_escape(options.device_text) << "\",";
+    std::cout << "\"prompt_count\":" << options.prompts.size() << ",";
+    std::cout << "\"prompt_tokens\":" << prompt_tokens << ",";
+    std::cout << "\"warmup\":" << options.warmup << ",";
+    std::cout << "\"repeat\":" << options.repeat << ",";
+    std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
+    std::cout << "\"avg_load_init_ms\":" << avg_load_ms << ",";
+    std::cout << "\"avg_total_latency_ms\":" << avg_total_ms << ",";
+    std::cout << "\"avg_first_token_latency_ms\":" << avg_first_ms << ",";
+    std::cout << "\"avg_generated_tokens\":" << avg_generated_tokens << ",";
+    std::cout << "\"total_generated_tokens\":" << generated_tokens << ",";
+    std::cout << "\"end_to_end_tokens_per_s\":" << e2e_tokens_per_s << ",";
+    std::cout << "\"decode_tokens_per_s\":" << decode_tokens_per_s << ",";
+    std::cout << "\"repeat_total_latency_ms\":[";
+    for (size_t i = 0; i < repeats.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << repeats[i].total_ms;
+    }
+    std::cout << "]}\n";
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    try
+    {
+        Options options = parse_args(argc, argv);
+        options.prompt_tokens = count_prompt_tokens(options.model_dir, options.prompts);
+        for (int32_t i = 0; i < options.warmup; ++i)
+        {
+            (void)run_once(options, false);
+        }
+
+        std::vector<RepeatMetrics> repeats;
+        repeats.reserve(static_cast<size_t>(options.repeat));
+        for (int32_t i = 0; i < options.repeat; ++i)
+        {
+            repeats.push_back(run_once(options, true));
+        }
+        print_summary(options, repeats);
+    }
+    catch (const std::exception& ex)
+    {
+        std::cerr << "llama_engine_benchmark failed: " << ex.what() << "\n";
+        print_usage(argv[0]);
+        return 1;
+    }
+    return 0;
+}

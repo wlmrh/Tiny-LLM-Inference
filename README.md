@@ -160,6 +160,19 @@ Run Hugging Face LLaMA/SmolLM2/Qwen2-family greedy generation through the engine
 
 The tool prints one JSON object per prompt, including generated token IDs and decoded output text.
 
+Run an end-to-end benchmark through the same offline LLM path:
+
+```bash
+./build/tools/llama_engine_benchmark \
+  --warmup 1 \
+  --repeat 3 \
+  --max-new-tokens 8 \
+  --json \
+  ~/models/smollm2-135M
+```
+
+The benchmark reports load/init time, total generation latency, first-token latency, generated-token throughput, prompt token count, and an optional JSON summary. Use `--device cuda:0` with a CUDA build.
+
 Run the same tool on CUDA:
 
 ```bash

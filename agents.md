@@ -158,6 +158,7 @@ The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMak
 - `tools/llama_logits_dump.cpp`: dump C++ logits for explicit token IDs into a binary file for script-based comparison. Normally use it through `scripts/compare_llama_logits_with_transformers.py`.
 - `tools/llama_tensor_dump.cpp`: dump C++ intermediate tensors such as embedding, per-layer norms, QKV, attention outputs, MLP activations, final norm, and logits. Normally use it through `scripts/compare_llama_tensors_with_transformers.py`.
 - `tools/llama_engine_generate.cpp`: run `LLMEngine` greedy generation for one or more prompts and emit JSON lines containing output text and generated token IDs. It supports `--device cpu`, `--device cuda`, and `--device cuda:<device_id>`. Normally use it through `scripts/compare_llama_generation_with_transformers.py` or `scripts/run_llama_generation_smoke.py`.
+- `tools/llama_engine_benchmark.cpp`: run an end-to-end offline LLM benchmark using the real `LLM` path. It supports `--device`, `--warmup`, `--repeat`, `--max-new-tokens`, repeated `--prompt`, and `--json`; it reports load/init time, first-token latency, total latency, prompt/generated token counts, and throughput. Build it via CMake and run it manually; do not register benchmark runs as regular CTest tests.
 
 Historical `test_llama_phase*` files were temporary bring-up checks for the LLaMA integration and should not be restored as regular tests. Use the focused runtime smoke test plus the Transformers comparison scripts for ongoing coverage.
 
@@ -196,6 +197,17 @@ python3 scripts/compare_llama_generation_with_transformers.py \
   --prompt hello \
   --prompt 'tiny llm inference' \
   --show-only
+```
+
+Run the end-to-end benchmark manually:
+
+```bash
+./build/tools/llama_engine_benchmark \
+  --warmup 1 \
+  --repeat 3 \
+  --max-new-tokens 8 \
+  --json \
+  ~/models/smollm2-135M
 ```
 
 Run greedy generation smoke directly on CUDA:
