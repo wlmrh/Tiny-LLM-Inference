@@ -7,6 +7,10 @@
 #include <vector>
 
 namespace {
+std::string g_model_dir_arg;
+}
+
+namespace {
 std::filesystem::path expand_user_path(const std::string& path)
 {
     if (path.empty() || path[0] != '~')
@@ -32,6 +36,10 @@ std::filesystem::path expand_user_path(const std::string& path)
 
 std::string resolve_model_dir()
 {
+    if (!g_model_dir_arg.empty())
+    {
+        return expand_user_path(g_model_dir_arg).string();
+    }
     if (const char* env_hf_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR"))
     {
         return expand_user_path(env_hf_dir).string();
@@ -114,4 +122,20 @@ TEST(TinyLMRuntimeIntegrationTest, GenerateStreamReturnsEventsAndFinalOutputs)
         EXPECT_GT(stream_event_counts[i], 0);
         EXPECT_FALSE(streamed_text[i].empty());
     }
+}
+
+int main(int argc, char** argv)
+{
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string arg(argv[i]);
+        if (arg.rfind("--gtest", 0) != 0)
+        {
+            g_model_dir_arg = arg;
+            break;
+        }
+    }
+
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

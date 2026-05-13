@@ -111,7 +111,7 @@ Run an individual GoogleTest binary directly, optionally filtering cases:
 
 ```bash
 ./build/tests/test_scheduler --gtest_filter='SchedulerTest.*'
-./build/tests/test_tiny_lm_runtime --gtest_filter='TinyLMRuntimeIntegrationTest.*'
+./build/tests/test_tiny_lm_runtime ~/models/smollm2-135M --gtest_filter='TinyLMRuntimeIntegrationTest.*'
 ```
 
 Run the SmolLM2 runtime integration tests through CTest:

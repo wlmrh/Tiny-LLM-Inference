@@ -22,6 +22,13 @@ function(tinyllm_add_gtest target)
     gtest_discover_tests(${target})
 endfunction()
 
+function(tinyllm_add_gtest_with_custom_main target)
+    add_executable(${target} ${ARGN})
+    target_link_libraries(${target} PRIVATE tiny_llm GTest::gtest)
+    target_include_directories(${target} PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    gtest_discover_tests(${target})
+endfunction()
+
 tinyllm_add_gtest(test_parallel_config
     "${TINYLLM_TEST_UNIT_DIR}/test_parallel_config.cpp")
 
@@ -60,7 +67,7 @@ tinyllm_add_gtest(test_kv_cache_manager
 tinyllm_add_gtest(test_engine_core
     "${TINYLLM_TEST_UNIT_DIR}/test_engine_core.cpp")
 
-tinyllm_add_gtest(test_tiny_lm_runtime
+tinyllm_add_gtest_with_custom_main(test_tiny_lm_runtime
     "${TINYLLM_TEST_INTEGRATION_DIR}/test_tiny_lm_runtime.cpp")
 target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 

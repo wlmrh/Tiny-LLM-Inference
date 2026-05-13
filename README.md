@@ -197,9 +197,11 @@ ctest --test-dir build --output-on-failure \
   -R 'Scheduler|KVCache|ModelRunner|EngineCore|PagedAttention'
 ```
 
-Run the runtime smoke test with a local SmolLM2 model:
+Run the runtime smoke test with a local SmolLM2 model. The GoogleTest binary accepts the model directory as its first non-GoogleTest argument, and CTest also supports the `TINYLLM_HF_TINY_LLAMA_DIR` environment variable:
 
 ```bash
+./build/tests/test_tiny_lm_runtime ~/models/smollm2-135M
+
 TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
 ctest --test-dir build --output-on-failure
 ```
