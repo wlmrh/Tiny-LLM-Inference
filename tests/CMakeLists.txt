@@ -3,145 +3,84 @@ set(TINYLLM_TEST_INTEGRATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/integration")
 set(TINYLLM_TOOLS_DIR "${CMAKE_SOURCE_DIR}/tools")
 set(TINYLLM_SCRIPTS_DIR "${CMAKE_SOURCE_DIR}/scripts")
 
-add_executable(test_parallel_config
-    "${TINYLLM_TEST_UNIT_DIR}/test_parallel_config.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
-)
-target_include_directories(test_parallel_config PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_parallel_config PRIVATE c10)
-add_test(NAME test_parallel_config COMMAND test_parallel_config)
+include(FetchContent)
+include(GoogleTest)
 
-add_executable(test_runtime_device_config
-    "${TINYLLM_TEST_UNIT_DIR}/test_runtime_device_config.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/execution_context.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/kv_cache.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/allocator_common.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/cpu/cpu_allocator.cpp"
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://gitee.com/mirrors/googletest.git
+    GIT_TAG v1.14.0
 )
-target_include_directories(test_runtime_device_config PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_runtime_device_config PRIVATE c10 ${TORCH_LIBRARIES})
-add_test(NAME test_runtime_device_config COMMAND test_runtime_device_config)
+FetchContent_MakeAvailable(googletest)
 
-add_executable(test_weight_map
-    "${TINYLLM_TEST_UNIT_DIR}/test_weight_map.cpp"
-    "${CMAKE_SOURCE_DIR}/src/models/llama_weight_map.cpp"
-    "${CMAKE_SOURCE_DIR}/src/models/hf_safetensors_loader.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
-)
-target_include_directories(test_weight_map PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_weight_map PRIVATE c10 ${TORCH_LIBRARIES})
-add_test(NAME test_weight_map COMMAND test_weight_map)
+function(tinyllm_add_gtest target)
+    add_executable(${target} ${ARGN})
+    target_link_libraries(${target} PRIVATE tiny_llm GTest::gtest_main)
+    target_include_directories(${target} PRIVATE "${CMAKE_SOURCE_DIR}/include")
+    gtest_discover_tests(${target})
+endfunction()
 
-add_executable(test_linear_module
-    "${TINYLLM_TEST_UNIT_DIR}/test_linear_module.cpp"
-    "${CMAKE_SOURCE_DIR}/src/models/modules/linear.cpp"
-    "${CMAKE_SOURCE_DIR}/src/operators/matmul/matmul.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
-)
-target_include_directories(test_linear_module PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_linear_module PRIVATE c10 ${TORCH_LIBRARIES})
-add_test(NAME test_linear_module COMMAND test_linear_module)
+tinyllm_add_gtest(test_parallel_config
+    "${TINYLLM_TEST_UNIT_DIR}/test_parallel_config.cpp")
 
-add_executable(test_rmsnorm_module
-    "${TINYLLM_TEST_UNIT_DIR}/test_rmsnorm_module.cpp"
-    "${CMAKE_SOURCE_DIR}/src/models/modules/rmsnorm.cpp"
-    "${CMAKE_SOURCE_DIR}/src/operators/rmsnorm/rmsnorm.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
-)
-target_include_directories(test_rmsnorm_module PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_rmsnorm_module PRIVATE c10 ${TORCH_LIBRARIES})
-add_test(NAME test_rmsnorm_module COMMAND test_rmsnorm_module)
+tinyllm_add_gtest(test_runtime_device_config
+    "${TINYLLM_TEST_UNIT_DIR}/test_runtime_device_config.cpp")
 
-add_executable(test_model_blocks
-    "${TINYLLM_TEST_UNIT_DIR}/test_model_blocks.cpp"
-)
-target_link_libraries(test_model_blocks PRIVATE tiny_llm_models)
-add_test(NAME test_model_blocks COMMAND test_model_blocks)
+tinyllm_add_gtest(test_weight_map
+    "${TINYLLM_TEST_UNIT_DIR}/test_weight_map.cpp")
 
-add_executable(test_llama_ops
-    "${TINYLLM_TEST_UNIT_DIR}/test_llama_ops.cpp"
-    "${CMAKE_SOURCE_DIR}/src/operators/llama_ops.cpp"
-)
-target_include_directories(test_llama_ops PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_llama_ops PRIVATE c10 ${TORCH_LIBRARIES})
-add_test(NAME test_llama_ops COMMAND test_llama_ops)
+tinyllm_add_gtest(test_linear_module
+    "${TINYLLM_TEST_UNIT_DIR}/test_linear_module.cpp")
 
-add_executable(test_paged_attention
-    "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention.cpp"
-    "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention.cpp"
-    "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention_cpu.cpp"
-    "${CMAKE_SOURCE_DIR}/src/operators/paged_attention/paged_attention_torch.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/kv_cache.cpp"
-    "${CMAKE_SOURCE_DIR}/src/runtime/parallel_config.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/allocator_common.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/cpu/cpu_allocator.cpp"
-)
-target_include_directories(test_paged_attention PRIVATE
-    "${CMAKE_SOURCE_DIR}/include"
-    ${TORCH_INCLUDE_DIRS}
-)
-target_link_libraries(test_paged_attention PRIVATE c10 ${TORCH_LIBRARIES})
-add_test(NAME test_paged_attention COMMAND test_paged_attention)
+tinyllm_add_gtest(test_rmsnorm_module
+    "${TINYLLM_TEST_UNIT_DIR}/test_rmsnorm_module.cpp")
+
+tinyllm_add_gtest(test_llama_ops
+    "${TINYLLM_TEST_UNIT_DIR}/test_llama_ops.cpp")
+
+tinyllm_add_gtest(test_paged_attention
+    "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention.cpp")
 
 if (TINYLLM_ENABLE_CUDA)
-    add_executable(test_paged_attention_cuda
-        "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention_cuda.cpp"
-    )
-    target_link_libraries(test_paged_attention_cuda PRIVATE tiny_llm_operators)
-    add_test(NAME test_paged_attention_cuda COMMAND test_paged_attention_cuda)
-    set_tests_properties(test_paged_attention_cuda PROPERTIES SKIP_RETURN_CODE 77)
+    tinyllm_add_gtest(test_paged_attention_cuda
+        "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention_cuda.cpp")
 endif()
 
-add_executable(test_model_runner_prepared_inputs
-    "${TINYLLM_TEST_UNIT_DIR}/test_model_runner_prepared_inputs.cpp"
-)
-target_link_libraries(test_model_runner_prepared_inputs PRIVATE tiny_llm_models)
-add_test(NAME test_model_runner_prepared_inputs COMMAND test_model_runner_prepared_inputs)
+tinyllm_add_gtest(test_model_runner_prepared_inputs
+    "${TINYLLM_TEST_UNIT_DIR}/test_model_runner_prepared_inputs.cpp")
 
-add_executable(test_tiny_lm_runtime "${TINYLLM_TEST_INTEGRATION_DIR}/test_tiny_lm_runtime.cpp")
-target_link_libraries(test_tiny_lm_runtime PRIVATE tiny_llm_models)
+tinyllm_add_gtest(test_scheduler
+    "${TINYLLM_TEST_UNIT_DIR}/test_scheduler.cpp")
+
+tinyllm_add_gtest(test_kv_cache_manager
+    "${TINYLLM_TEST_UNIT_DIR}/test_kv_cache_manager.cpp")
+
+tinyllm_add_gtest(test_engine_core
+    "${TINYLLM_TEST_UNIT_DIR}/test_engine_core.cpp")
+
+tinyllm_add_gtest(test_tiny_lm_runtime
+    "${TINYLLM_TEST_INTEGRATION_DIR}/test_tiny_lm_runtime.cpp")
 target_compile_definitions(test_tiny_lm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-add_test(NAME test_tiny_lm_runtime COMMAND test_tiny_lm_runtime)
-set_tests_properties(test_tiny_lm_runtime PROPERTIES SKIP_RETURN_CODE 77)
 
-add_executable(test_llm_offline "${TINYLLM_TEST_INTEGRATION_DIR}/test_llm_offline.cpp")
-target_link_libraries(test_llm_offline PRIVATE tiny_llm_models)
-add_test(NAME test_llm_offline COMMAND test_llm_offline)
-set_tests_properties(test_llm_offline PROPERTIES SKIP_RETURN_CODE 77)
+tinyllm_add_gtest(test_llm_offline
+    "${TINYLLM_TEST_INTEGRATION_DIR}/test_llm_offline.cpp")
 
 add_executable(llama_logits_dump "${TINYLLM_TOOLS_DIR}/llama_logits_dump.cpp")
-target_link_libraries(llama_logits_dump PRIVATE tiny_llm_models)
+target_link_libraries(llama_logits_dump PRIVATE tiny_llm)
 set_target_properties(llama_logits_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
 add_executable(llama_tensor_dump "${TINYLLM_TOOLS_DIR}/llama_tensor_dump.cpp")
-target_link_libraries(llama_tensor_dump PRIVATE tiny_llm_models)
+target_link_libraries(llama_tensor_dump PRIVATE tiny_llm)
 set_target_properties(llama_tensor_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
 add_executable(llama_engine_generate "${TINYLLM_TOOLS_DIR}/llama_engine_generate.cpp")
-target_link_libraries(llama_engine_generate PRIVATE tiny_llm_models)
+target_link_libraries(llama_engine_generate PRIVATE tiny_llm)
 set_target_properties(llama_engine_generate PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
 add_executable(hf_safetensor_dump "${TINYLLM_TOOLS_DIR}/hf_safetensor_dump.cpp")
-target_link_libraries(hf_safetensor_dump PRIVATE tiny_llm_models)
+target_link_libraries(hf_safetensor_dump PRIVATE tiny_llm)
 set_target_properties(hf_safetensor_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
 find_package(Python3 COMPONENTS Interpreter QUIET)

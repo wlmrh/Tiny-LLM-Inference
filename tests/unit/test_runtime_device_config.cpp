@@ -6,73 +6,45 @@
 #include "tiny_llm/runtime/parallel_config.h"
 
 #include <cstdlib>
-#include <stdexcept>
+#include <gtest/gtest.h>
+#include <memory>
 
-namespace {
-
-void expect_true(bool condition, const char* message)
-{
-    if (!condition)
-    {
-        throw std::runtime_error(message);
-    }
-}
-
-template <typename Fn>
-void expect_throws(Fn fn, const char* message)
-{
-    try
-    {
-        fn();
-    }
-    catch (const std::runtime_error&)
-    {
-        return;
-    }
-    throw std::runtime_error(message);
-}
-
-} // namespace
-
-int main()
+TEST(RuntimeDeviceConfigTest, RuntimeObjectsCarryCpuDeviceConfig)
 {
     tiny_llm::StackAllocator workspace(1024, tiny_llm::ParallelConfig::cpu());
-    expect_true(workspace.parallel_config().is_cpu(), "workspace must record CPU config.");
-    expect_true(workspace.device().is_cpu(), "workspace device must be CPU.");
+    EXPECT_TRUE(workspace.parallel_config().is_cpu());
+    EXPECT_TRUE(workspace.device().is_cpu());
 
-    tiny_llm::BlockAllocator blocks(4, 64, std::malloc(4 * 64), tiny_llm::ParallelConfig::cpu());
-    expect_true(blocks.parallel_config().is_cpu(), "block allocator must record CPU config.");
-    expect_true(blocks.device().is_cpu(), "block allocator device must be CPU.");
-    void* block_pool = blocks.get_block_ptr(0);
-    expect_true(block_pool != nullptr, "block pointer must be non-null.");
+    auto pool = std::make_unique<unsigned char[]>(4 * 64);
+    tiny_llm::BlockAllocator blocks(4, 64, pool.get(), tiny_llm::ParallelConfig::cpu());
+    EXPECT_TRUE(blocks.parallel_config().is_cpu());
+    EXPECT_TRUE(blocks.device().is_cpu());
+    EXPECT_NE(blocks.get_block_ptr(0), nullptr);
 
     tiny_llm::KVCache::Config kv_cfg;
     kv_cfg.num_layers = 2;
     kv_cfg.block_size_tokens = 16;
     tiny_llm::KVCache kv(kv_cfg, &blocks);
-    expect_true(kv.parallel_config().is_cpu(), "KVCache must inherit block allocator config.");
-    expect_true(kv.device().is_cpu(), "KVCache device must be CPU.");
+    EXPECT_TRUE(kv.parallel_config().is_cpu());
+    EXPECT_TRUE(kv.device().is_cpu());
 
     tiny_llm::EngineArgs args;
     args.workspace = &workspace;
     args.parallel_config = tiny_llm::ParallelConfig::cpu();
     tiny_llm::initialize_global_execution_context(args, &kv);
     tiny_llm::ExecutionContext& ctx =
-        tiny_llm::require_global_execution_context("test_runtime_device_config");
-    expect_true(ctx.parallel_config().is_cpu(), "ExecutionContext must record EngineArgs config.");
-    expect_true(ctx.device().is_cpu(), "ExecutionContext device must be CPU.");
+        tiny_llm::require_global_execution_context("RuntimeDeviceConfigTest");
+    EXPECT_TRUE(ctx.parallel_config().is_cpu());
+    EXPECT_TRUE(ctx.device().is_cpu());
     tiny_llm::reset_global_execution_context();
+}
 
-    tiny_llm::EngineArgs mismatched_workspace_args;
-    mismatched_workspace_args.workspace = &workspace;
-    mismatched_workspace_args.parallel_config = tiny_llm::ParallelConfig::cuda(0);
-    expect_throws(
-        [&]() {
-            tiny_llm::initialize_global_execution_context(mismatched_workspace_args, &kv);
-        },
-        "mismatched workspace and EngineArgs device must throw.");
-
+TEST(RuntimeDeviceConfigTest, RejectsMismatchedWorkspaceDevice)
+{
+    tiny_llm::StackAllocator workspace(1024, tiny_llm::ParallelConfig::cpu());
+    tiny_llm::EngineArgs args;
+    args.workspace = &workspace;
+    args.parallel_config = tiny_llm::ParallelConfig::cuda(0);
+    EXPECT_THROW(tiny_llm::initialize_global_execution_context(args, nullptr), std::runtime_error);
     tiny_llm::reset_global_execution_context();
-    std::free(block_pool);
-    return 0;
 }

@@ -1,18 +1,12 @@
-#include <cassert>
+#include "tiny_llm/runtime/llm.h"
+
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
 
-#include "tiny_llm/runtime/llm.h"
-
-#ifndef TINYLLM_SOURCE_DIR
-#error "TINYLLM_SOURCE_DIR must be defined by CMake for test assets."
-#endif
-
 namespace {
-
 std::filesystem::path expand_user_path(const std::string& path)
 {
     if (path.empty() || path[0] != '~')
@@ -25,7 +19,6 @@ std::filesystem::path expand_user_path(const std::string& path)
     {
         return std::filesystem::path(path);
     }
-
     if (path.size() == 1)
     {
         return std::filesystem::path(home);
@@ -34,112 +27,91 @@ std::filesystem::path expand_user_path(const std::string& path)
     {
         return std::filesystem::path(home) / path.substr(2);
     }
-
     return std::filesystem::path(path);
 }
 
-std::string resolve_model_dir(int argc, char** argv)
+std::string resolve_model_dir()
 {
-    if (argc > 1)
-    {
-        return expand_user_path(argv[1]).string();
-    }
     if (const char* env_hf_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR"))
     {
         return expand_user_path(env_hf_dir).string();
     }
-
-    std::cerr << "TINYLLM_HF_TINY_LLAMA_DIR is not set; skipping tiny LLM runtime integration test.\n";
     return {};
 }
 
-bool has_required_model_files(const std::filesystem::path& model_dir)
+bool has_required_model_files(const std::filesystem::path& model_dir, std::string& reason)
 {
+    if (model_dir.empty())
+    {
+        reason = "TINYLLM_HF_TINY_LLAMA_DIR is not set.";
+        return false;
+    }
     if (!std::filesystem::is_directory(model_dir))
     {
-        std::cerr << "model directory does not exist: " << model_dir << "\n";
+        reason = "Model directory does not exist: " + model_dir.string();
         return false;
     }
     if (!std::filesystem::exists(model_dir / "config.json"))
     {
-        std::cerr << "missing config.json under: " << model_dir << "\n";
+        reason = "Missing config.json under: " + model_dir.string();
         return false;
     }
     if (!std::filesystem::exists(model_dir / "model.safetensors"))
     {
-        std::cerr << "missing model.safetensors under: " << model_dir << "\n";
+        reason = "Missing model.safetensors under: " + model_dir.string();
         return false;
     }
     if (!std::filesystem::exists(model_dir / "tokenizer.json")
         && !std::filesystem::exists(model_dir / "tokenizer.model"))
     {
-        std::cerr << "missing tokenizer.json or tokenizer.model under: " << model_dir << "\n";
+        reason = "Missing tokenizer.json or tokenizer.model under: " + model_dir.string();
         return false;
     }
     return true;
 }
+}
 
-} // namespace
-
-int main(int argc, char** argv)
+TEST(TinyLMRuntimeIntegrationTest, GenerateStreamReturnsEventsAndFinalOutputs)
 {
-    const std::string hf_model_dir = resolve_model_dir(argc, argv);
-    if (hf_model_dir.empty())
+    const std::filesystem::path model_dir(resolve_model_dir());
+    std::string skip_reason;
+    if (!has_required_model_files(model_dir, skip_reason))
     {
-        return 77;
-    }
-    if (!has_required_model_files(hf_model_dir))
-    {
-        return 77;
+        GTEST_SKIP() << skip_reason;
     }
 
-    try
-    {
 #if TINYLLM_ENABLE_CUDA
-        tiny_llm::LLMOptions options(hf_model_dir, tiny_llm::ParallelConfig::cuda(0));
+    tiny_llm::LLMOptions options(model_dir.string(), tiny_llm::ParallelConfig::cuda(0));
 #else
-        tiny_llm::LLMOptions options(hf_model_dir);
+    tiny_llm::LLMOptions options(model_dir.string());
 #endif
 
-        tiny_llm::LLMSamplingParams sampling_params;
-        sampling_params.temperature = 0.0f;
-        sampling_params.max_tokens = 8;
+    tiny_llm::LLMSamplingParams sampling_params;
+    sampling_params.temperature = 0.0f;
+    sampling_params.max_tokens = 8;
 
-        tiny_llm::LLM llm(options);
-        const std::vector<std::string> prompts = {"hello", "tiny llm inference"};
-        std::vector<int32_t> stream_event_counts(prompts.size(), 0);
-        std::vector<std::string> streamed_text(prompts.size());
+    tiny_llm::LLM llm(options);
+    const std::vector<std::string> prompts = {"hello", "tiny llm inference"};
+    std::vector<int32_t> stream_event_counts(prompts.size(), 0);
+    std::vector<std::string> streamed_text(prompts.size());
 
-        const std::vector<tiny_llm::CompletionOutput> outputs =
-            llm.generate_stream(prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
-                assert(output.prompt_index < prompts.size());
-                assert(output.prompt == prompts[output.prompt_index]);
-                assert(output.token_id >= 0);
-                ++stream_event_counts[output.prompt_index];
-                streamed_text[output.prompt_index] += output.delta_text;
-            });
+    const std::vector<tiny_llm::CompletionOutput> outputs =
+        llm.generate_stream(prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
+            ASSERT_LT(output.prompt_index, prompts.size());
+            EXPECT_EQ(output.prompt, prompts[output.prompt_index]);
+            EXPECT_GE(output.token_id, 0);
+            ++stream_event_counts[output.prompt_index];
+            streamed_text[output.prompt_index] += output.delta_text;
+        });
 
-        assert(outputs.size() == prompts.size());
-        for (size_t i = 0; i < outputs.size(); ++i)
-        {
-            const tiny_llm::CompletionOutput& output = outputs[i];
-            assert(output.prompt == prompts[i]);
-            assert(output.finished);
-            assert(!output.text.empty());
-            assert(!output.token_ids.empty());
-            assert(stream_event_counts[i] > 0);
-            assert(!streamed_text[i].empty());
-
-            std::cout << "[test_tiny_lm_runtime] prompt: " << output.prompt << "\n";
-            std::cout << "[test_tiny_lm_runtime] streamed: " << streamed_text[i] << "\n";
-            std::cout << "[test_tiny_lm_runtime] output: " << output.text << "\n";
-        }
-    }
-    catch (const std::exception& e)
+    ASSERT_EQ(outputs.size(), prompts.size());
+    for (size_t i = 0; i < outputs.size(); ++i)
     {
-        std::cerr << e.what() << "\n";
-        return 1;
+        EXPECT_EQ(outputs[i].prompt, prompts[i]);
+        EXPECT_TRUE(outputs[i].finished);
+        EXPECT_FALSE(outputs[i].text.empty());
+        EXPECT_FALSE(outputs[i].token_ids.empty());
+        EXPECT_GT(stream_event_counts[i], 0);
+        EXPECT_FALSE(streamed_text[i].empty());
     }
-
-    return 0;
 }

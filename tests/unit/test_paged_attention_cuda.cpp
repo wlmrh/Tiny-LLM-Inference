@@ -8,12 +8,12 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
-
 void check_cuda(cudaError_t status, const char* message)
 {
     if (status != cudaSuccess)
@@ -22,22 +22,16 @@ void check_cuda(cudaError_t status, const char* message)
     }
 }
 
-void expect_close(const tiny_llm::Tensor& actual, const tiny_llm::Tensor& expected, float tolerance, const char* label)
+void expect_close(const tiny_llm::Tensor& actual, const tiny_llm::Tensor& expected, float tolerance)
 {
     tiny_llm::Tensor a = actual.cpu().contiguous();
     tiny_llm::Tensor e = expected.cpu().contiguous();
-    if (a.numel() != e.numel())
-    {
-        throw std::runtime_error(std::string(label) + ": numel mismatch.");
-    }
+    ASSERT_EQ(a.numel(), e.numel());
     const float* ap = a.data_ptr<float>();
     const float* ep = e.data_ptr<float>();
     for (int64_t i = 0; i < a.numel(); ++i)
     {
-        if (std::fabs(ap[i] - ep[i]) > tolerance)
-        {
-            throw std::runtime_error(std::string(label) + ": value mismatch.");
-        }
+        EXPECT_NEAR(ap[i], ep[i], tolerance) << "index " << i;
     }
 }
 
@@ -48,9 +42,7 @@ tiny_llm::Tensor int_cuda(std::vector<int32_t> values, std::vector<int64_t> shap
 
 tiny_llm::Tensor make_values(int64_t rows, int64_t cols, float offset)
 {
-    tiny_llm::Tensor values = torch::arange(
-        rows * cols,
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor values = torch::arange(rows * cols, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     return (values.reshape({rows, cols}) + offset) / 100.0f;
 }
 
@@ -82,11 +74,7 @@ CaseResult run_prefill_then_decode(bool optimized,
         {static_cast<int64_t>(kNumBlocks * block_floats)},
         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
-    tiny_llm::BlockAllocator blocks(
-        kNumBlocks,
-        block_floats * sizeof(float),
-        pool.data_ptr<float>(),
-        tiny_llm::ParallelConfig::cuda(0));
+    tiny_llm::BlockAllocator blocks(kNumBlocks, block_floats * sizeof(float), pool.data_ptr<float>(), tiny_llm::ParallelConfig::cuda(0));
     tiny_llm::KVCache::Config kv_cfg;
     kv_cfg.num_layers = 1;
     kv_cfg.block_size_tokens = kBlockSizeTokens;
@@ -149,26 +137,23 @@ CaseResult run_prefill_then_decode(bool optimized,
     unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
     return {out_prefill.detach().cpu(), out_decode.detach().cpu()};
 }
+}
 
-} // namespace
-
-int main()
+TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForPrefillAndDecode)
 {
     check_cuda(cudaSetDevice(0), "set CUDA device");
     if (!torch::cuda::is_available())
     {
-        return 77;
+        GTEST_SKIP() << "CUDA is not available.";
     }
 
     const CaseResult reference_small = run_prefill_then_decode(false, 1, 1, 4);
     const CaseResult optimized_small = run_prefill_then_decode(true, 1, 1, 4);
-    expect_close(optimized_small.prefill, reference_small.prefill, 1e-4f, "small prefill parity");
-    expect_close(optimized_small.decode, reference_small.decode, 1e-4f, "small decode parity");
+    expect_close(optimized_small.prefill, reference_small.prefill, 1e-4f);
+    expect_close(optimized_small.decode, reference_small.decode, 1e-4f);
 
     const CaseResult reference_smol = run_prefill_then_decode(false, 9, 3, 64);
     const CaseResult optimized_smol = run_prefill_then_decode(true, 9, 3, 64);
-    expect_close(optimized_smol.prefill, reference_smol.prefill, 1e-4f, "smollm prefill parity");
-    expect_close(optimized_smol.decode, reference_smol.decode, 1e-4f, "smollm decode parity");
-
-    return 0;
+    expect_close(optimized_smol.prefill, reference_smol.prefill, 1e-4f);
+    expect_close(optimized_smol.decode, reference_smol.decode, 1e-4f);
 }
