@@ -15,7 +15,7 @@ Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with
 
 # Architecture (架构与目录)
 
-- Test/tool layout: automated GoogleTest/CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostic executables out of `tests/` unless they are the actual test entry point. `tests/CMakeLists.txt` uses `gtest_discover_tests()` for C++ test cases, while Python Transformers/smoke checks remain direct CTest registrations.
+- Test/tool/benchmark layout: automated GoogleTest/CTest entry points live under `tests/unit/` and `tests/integration/`; standalone C++ debugging runtimes live under `tools/`; manual performance benchmarks live under top-level `benchmark/`; Python comparison/debug helpers live under `scripts/`. Keep new diagnostics or benchmarks out of `tests/` unless they are actual correctness test entry points. `tests/CMakeLists.txt` uses `gtest_discover_tests()` for C++ test cases, while Python Transformers/smoke checks remain direct CTest registrations.
 - Runtime test coverage: scheduler/KV/engine behavior is covered by `tests/unit/test_scheduler.cpp`, `tests/unit/test_kv_cache_manager.cpp`, `tests/unit/test_model_runner_prepared_inputs.cpp`, and `tests/unit/test_engine_core.cpp`. These tests use fake models or small host-side KV pools rather than real HF weights, so they should stay fast and deterministic. The old redundant `test_model_blocks.cpp` smoke test was removed; add focused module/operator coverage instead of restoring it.
 - Runtime scheduling: `include/tiny_llm/runtime/scheduler.h` and `src/runtime/scheduler.cpp`. `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, preemption, and the runtime `KVCache` used by generation. `KVCacheManager` bridges scheduling decisions to KV block allocation and can return all per-layer block tables for scheduled requests.
 - Engine frontend/core: `include/tiny_llm/runtime/engine.h`, `src/runtime/engine.cpp`, `include/tiny_llm/runtime/engine_core.h`, and `src/runtime/engine_core.cpp`. `LLMEngine` converts user text to core requests; `EngineCore::step()` calls `Scheduler::schedule()`, `ModelRunner::run()`, then `Scheduler::update_from_output()`. `EngineCore` passes the scheduler-owned `KVCache*` into `ModelRunner`; do not create a second runner-local KV cache for the same engine.
@@ -158,7 +158,7 @@ The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMak
 - `tools/llama_logits_dump.cpp`: dump C++ logits for explicit token IDs into a binary file for script-based comparison. Normally use it through `scripts/compare_llama_logits_with_transformers.py`.
 - `tools/llama_tensor_dump.cpp`: dump C++ intermediate tensors such as embedding, per-layer norms, QKV, attention outputs, MLP activations, final norm, and logits. Normally use it through `scripts/compare_llama_tensors_with_transformers.py`.
 - `tools/llama_engine_generate.cpp`: run `LLMEngine` greedy generation for one or more prompts and emit JSON lines containing output text and generated token IDs. It supports `--device cpu`, `--device cuda`, and `--device cuda:<device_id>`. Normally use it through `scripts/compare_llama_generation_with_transformers.py` or `scripts/run_llama_generation_smoke.py`.
-- `tools/llama_engine_benchmark.cpp`: run an end-to-end offline LLM benchmark using the real `LLM` path. It supports `--device`, `--warmup`, `--repeat`, `--max-new-tokens`, repeated `--prompt`, and `--json`; it reports load/init time, first-token latency, total latency, prompt/generated token counts, and throughput. Build it via CMake and run it manually; do not register benchmark runs as regular CTest tests.
+- `benchmark/llama_engine_benchmark.cpp`: run an end-to-end offline LLM benchmark using the real `LLM` path. It supports `--device`, `--warmup`, `--repeat`, `--max-new-tokens`, repeated `--prompt`, and `--json`; it reports load/init time, first-token latency, total latency, prompt/generated token counts, and throughput. Build it via the top-level `benchmark/` CMake directory and run it manually; do not register benchmark runs as regular CTest tests.
 
 Historical `test_llama_phase*` files were temporary bring-up checks for the LLaMA integration and should not be restored as regular tests. Use the focused runtime smoke test plus the Transformers comparison scripts for ongoing coverage.
 
@@ -202,7 +202,7 @@ python3 scripts/compare_llama_generation_with_transformers.py \
 Run the end-to-end benchmark manually:
 
 ```bash
-./build/tools/llama_engine_benchmark \
+./build/benchmark/llama_engine_benchmark \
   --warmup 1 \
   --repeat 3 \
   --max-new-tokens 8 \

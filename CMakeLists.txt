@@ -165,5 +165,7 @@ target_link_libraries(tiny_lm_inference PRIVATE tiny_llm)
 add_executable(offline_llm examples/offline_llm.cpp)
 target_link_libraries(offline_llm PRIVATE tiny_llm)
 
+add_subdirectory(benchmark)
+
 include(CTest)
 add_subdirectory(tests)

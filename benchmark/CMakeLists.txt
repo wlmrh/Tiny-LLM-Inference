@@ -1,0 +1,3 @@
+add_executable(llama_engine_benchmark llama_engine_benchmark.cpp)
+target_link_libraries(llama_engine_benchmark PRIVATE tiny_llm)
+set_target_properties(llama_engine_benchmark PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/benchmark")

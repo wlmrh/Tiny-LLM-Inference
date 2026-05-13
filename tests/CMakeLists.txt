@@ -86,10 +86,6 @@ add_executable(llama_engine_generate "${TINYLLM_TOOLS_DIR}/llama_engine_generate
 target_link_libraries(llama_engine_generate PRIVATE tiny_llm)
 set_target_properties(llama_engine_generate PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
-add_executable(llama_engine_benchmark "${TINYLLM_TOOLS_DIR}/llama_engine_benchmark.cpp")
-target_link_libraries(llama_engine_benchmark PRIVATE tiny_llm)
-set_target_properties(llama_engine_benchmark PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
-
 add_executable(hf_safetensor_dump "${TINYLLM_TOOLS_DIR}/hf_safetensor_dump.cpp")
 target_link_libraries(hf_safetensor_dump PRIVATE tiny_llm)
 set_target_properties(hf_safetensor_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")

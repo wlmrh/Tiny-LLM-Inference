@@ -30,6 +30,7 @@ include/tiny_llm/        Public C++ headers
 src/                     Engine, runtime, operators, models, and backends
 examples/                Small runnable examples
 tools/                   Standalone C++ debugging utilities
+benchmark/               Manual performance benchmark targets
 scripts/                 Python comparison and inspection scripts
 tests/                   GoogleTest and CTest entry points
 docs/                    Design notes and implementation plans
@@ -163,7 +164,7 @@ The tool prints one JSON object per prompt, including generated token IDs and de
 Run an end-to-end benchmark through the same offline LLM path:
 
 ```bash
-./build/tools/llama_engine_benchmark \
+./build/benchmark/llama_engine_benchmark \
   --warmup 1 \
   --repeat 3 \
   --max-new-tokens 8 \
