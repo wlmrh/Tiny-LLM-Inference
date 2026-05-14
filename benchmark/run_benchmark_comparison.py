@@ -135,13 +135,29 @@ def print_table(results: List[Dict[str, Any]], comparison: Dict[str, Any]) -> No
             f"{float(item['avg_generated_tokens']):>10.3f}"
         )
     for item in results:
-        if all(key in item for key in ("prepare_inputs_ms", "prefill_ms", "decode_ms_total", "decode_ms_per_token", "sampling_ms")):
-            print(f"{item['backend']} breakdown")
-            print(f"  prepare_inputs_ms: {float(item['prepare_inputs_ms']):.3f}")
-            print(f"  prefill_ms: {float(item['prefill_ms']):.3f}")
-            print(f"  decode_ms_total: {float(item['decode_ms_total']):.3f}")
-            print(f"  decode_ms_per_token: {float(item['decode_ms_per_token']):.3f}")
-            print(f"  sampling_ms: {float(item['sampling_ms']):.3f}")
+        print(f"{item['backend']} details")
+        print(f"  latency:")
+        print(f"    load_init_ms: {float(item['avg_load_init_ms']):.3f}")
+        print(f"    total_latency_ms: {float(item['avg_total_latency_ms']):.3f}")
+        print(f"    first_token_latency_ms: {float(item['avg_first_token_latency_ms']):.3f}")
+        if "prepare_inputs_ms" in item:
+            print(f"    prepare_inputs_ms: {float(item['prepare_inputs_ms']):.3f}")
+        if "prefill_ms" in item:
+            print(f"    prefill_ms: {float(item['prefill_ms']):.3f}")
+        if "decode_ms_total" in item:
+            print(f"    decode_ms_total: {float(item['decode_ms_total']):.3f}")
+        if "decode_ms_per_token" in item:
+            print(f"    decode_ms_per_token: {float(item['decode_ms_per_token']):.3f}")
+        if "sampling_ms" in item:
+            print(f"    sampling_ms: {float(item['sampling_ms']):.3f}")
+        print(f"  tokens:")
+        print(f"    prompt_tokens: {int(item['prompt_tokens'])}")
+        print(f"    avg_generated_tokens: {float(item['avg_generated_tokens']):.3f}")
+        if "avg_decode_tokens" in item:
+            print(f"    avg_decode_tokens: {float(item['avg_decode_tokens']):.3f}")
+        print(f"  throughput:")
+        print(f"    end_to_end_tokens_per_s: {float(item['end_to_end_tokens_per_s']):.3f}")
+        print(f"    decode_tokens_per_s: {float(item['decode_tokens_per_s']):.3f}")
 
     ratios = comparison.get("ratios", {})
     if ratios:

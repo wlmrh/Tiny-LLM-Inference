@@ -214,6 +214,7 @@ def build_summary(args: argparse.Namespace, model_dir: Path, device_text: str, p
     decode_ms = max(0.0, avg_total_ms - avg_first_ms)
     decode_tokens = max(0.0, avg_generated_tokens - float(len(prompts)))
     decode_tokens_per_s = decode_tokens / (decode_ms / 1000.0) if decode_ms > 0.0 else 0.0
+    decode_ms_per_token = decode_ms / decode_tokens if decode_tokens > 0.0 else 0.0
     return {
         "benchmark": "transformers_generate_benchmark",
         "backend": "transformers",
@@ -229,6 +230,9 @@ def build_summary(args: argparse.Namespace, model_dir: Path, device_text: str, p
         "avg_first_token_latency_ms": avg_first_ms,
         "avg_generated_tokens": avg_generated_tokens,
         "total_generated_tokens": total_generated_tokens,
+        "decode_ms_total": decode_ms,
+        "decode_ms_per_token": decode_ms_per_token,
+        "avg_decode_tokens": decode_tokens,
         "end_to_end_tokens_per_s": e2e_tokens_per_s,
         "decode_tokens_per_s": decode_tokens_per_s,
         "repeat_total_latency_ms": total_ms,
@@ -244,17 +248,25 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
         f"  prompts: {summary['prompt_count']}, warmup: {summary['warmup']}, "
         f"repeat: {summary['repeat']}, max_new_tokens: {summary['max_new_tokens']}"
     )
-    print(f"  avg_load_init_ms: {summary['avg_load_init_ms']:.3f}")
-    print(f"  avg_total_latency_ms: {summary['avg_total_latency_ms']:.3f}")
-    print(f"  avg_first_token_latency_ms: {summary['avg_first_token_latency_ms']:.3f}")
-    print(f"  avg_generated_tokens: {summary['avg_generated_tokens']:.3f}")
-    print(f"  total_generated_tokens: {summary['total_generated_tokens']}")
-    print(f"  prompt_tokens: {summary['prompt_tokens']}")
-    print(f"  end_to_end_tokens_per_s: {summary['end_to_end_tokens_per_s']:.3f}")
-    print(f"  decode_tokens_per_s: {summary['decode_tokens_per_s']:.3f}")
-    print(f"  repeat_total_latency_ms: {[round(x, 3) for x in summary['repeat_total_latency_ms']]}")
-    print(f"  repeat_load_init_ms: {[round(x, 3) for x in summary['repeat_load_init_ms']]}")
+    print("  latency:")
+    print(f"    avg_load_init_ms: {summary['avg_load_init_ms']:.3f}")
+    print(f"    avg_total_latency_ms: {summary['avg_total_latency_ms']:.3f}")
+    print(f"    avg_first_token_latency_ms: {summary['avg_first_token_latency_ms']:.3f}")
+    print(f"    decode_ms_total: {summary['decode_ms_total']:.3f}")
+    print(f"    decode_ms_per_token: {summary['decode_ms_per_token']:.3f}")
+    print("  tokens:")
+    print(f"    prompt_tokens: {summary['prompt_tokens']}")
+    print(f"    avg_generated_tokens: {summary['avg_generated_tokens']:.3f}")
+    print(f"    total_generated_tokens: {summary['total_generated_tokens']}")
+    print(f"    avg_decode_tokens: {summary['avg_decode_tokens']:.3f}")
+    print("  throughput:")
+    print(f"    end_to_end_tokens_per_s: {summary['end_to_end_tokens_per_s']:.3f}")
+    print(f"    decode_tokens_per_s: {summary['decode_tokens_per_s']:.3f}")
+    print("  repeats:")
+    print(f"    repeat_total_latency_ms: {[round(x, 3) for x in summary['repeat_total_latency_ms']]}")
+    print(f"    repeat_load_init_ms: {[round(x, 3) for x in summary['repeat_load_init_ms']]}")
     if emit_json:
+        print("  json: see final machine-readable line below")
         print(json.dumps(summary, separators=(",", ":")))
 
 

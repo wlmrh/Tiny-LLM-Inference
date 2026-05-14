@@ -197,7 +197,7 @@ python3 benchmark/run_benchmark_comparison.py \
   ~/models/smollm2-135M
 ```
 
-The comparison wrapper does not build the C++ benchmark for you; run `cmake --build` first. The main latency and throughput metrics exclude model loading and warmup, while load/init time is reported separately.
+The comparison wrapper does not build the C++ benchmark for you; run `cmake --build` first. It prints a compact table plus per-backend readable detail sections; `--json` only appends a final machine-readable line. The main latency and throughput metrics exclude model loading and warmup, while load/init time is reported separately.
 
 Run the same tool on CUDA:
 
