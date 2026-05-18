@@ -34,10 +34,10 @@ const PagedAttentionRuntimeMetadata* explicit_or_legacy_metadata(const LlamaAtte
     return &g_runtime_metadata;
 }
 
-bool wants_cuda_optimized_backend()
+bool wants_torch_reference_backend()
 {
     const char* value = std::getenv("TINYLLM_PAGED_ATTENTION_BACKEND");
-    return value != nullptr && std::string(value) == "cuda";
+    return value != nullptr && std::string(value) == "torch";
 }
 
 void validate_attention_paged_metadata(const Tensor& q)
@@ -488,7 +488,7 @@ void llama_attention_forward(const LlamaAttentionParams& input_params)
         return;
     }
 
-    if (wants_cuda_optimized_backend() && try_run_cuda_optimized_attention(params))
+    if (!wants_torch_reference_backend() && try_run_cuda_optimized_attention(params))
     {
         return;
     }

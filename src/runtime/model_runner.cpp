@@ -238,7 +238,20 @@ void validate_prepared_tensor_pack(const PreparedInputs& inputs,
     {
         throw std::runtime_error(std::string(caller) + ": block_tables must be [num_layers, num_seqs, max_blocks_per_seq].");
     }
+    const c10::Device device = inputs.input_ids.device();
+    if (inputs.positions.device() != device
+        || inputs.slot_mapping.device() != device
+        || inputs.seq_indices.device() != device
+        || inputs.context_lens.device() != device
+        || inputs.block_tables.device() != device)
+    {
+        throw std::runtime_error(std::string(caller) + ": prepared tensors must be on the same device.");
+    }
     if (input_shape[0] == 0)
+    {
+        return;
+    }
+    if (device.is_cuda())
     {
         return;
     }
