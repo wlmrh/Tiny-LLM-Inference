@@ -54,16 +54,35 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
 
     if (logits.device().is_cuda())
     {
-        std::vector<int64_t> row_indices;
-        row_indices.reserve(sample_rows.size());
-        for (int32_t row : sample_rows)
+        bool sample_rows_are_dense_prefix = static_cast<int64_t>(sample_rows.size()) == logits.size(0);
+        for (size_t i = 0; i < sample_rows.size() && sample_rows_are_dense_prefix; ++i)
         {
-            row_indices.push_back(static_cast<int64_t>(row));
+            sample_rows_are_dense_prefix = sample_rows[i] == static_cast<int32_t>(i);
         }
-        Tensor row_tensor = torch::tensor(
-            row_indices,
-            torch::TensorOptions().dtype(torch::kInt64).device(logits.device()));
-        Tensor sampled_tokens = logits.index_select(0, row_tensor).argmax(/*dim=*/1);
+
+        Tensor sampled_tokens;
+        if (sample_rows_are_dense_prefix)
+        {
+            sampled_tokens = logits.argmax(/*dim=*/1);
+        }
+        else if (sample_rows.size() == 1)
+        {
+            sampled_tokens = logits.narrow(0, sample_rows.front(), 1).argmax(/*dim=*/1);
+        }
+        else
+        {
+            std::vector<int64_t> row_indices;
+            row_indices.reserve(sample_rows.size());
+            for (int32_t row : sample_rows)
+            {
+                row_indices.push_back(static_cast<int64_t>(row));
+            }
+            Tensor row_tensor = torch::tensor(
+                row_indices,
+                torch::TensorOptions().dtype(torch::kInt64).device(logits.device()));
+            sampled_tokens = logits.index_select(0, row_tensor).argmax(/*dim=*/1);
+        }
+
         Tensor sampled_cpu = sampled_tokens.to(
             torch::TensorOptions().dtype(torch::kInt32).device(c10::kCPU),
             /*non_blocking=*/false,
