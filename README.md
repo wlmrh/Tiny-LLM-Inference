@@ -100,7 +100,7 @@ Each generation command prints one JSON object per prompt.
 
 ## Benchmark
 
-TinyLLM CPU benchmark:
+TinyLLM CPU benchmark smoke test. This path is useful for functional checks and timing breakdowns, but it is not the performance target; TinyLLM's CPU dense layers are intentionally simple and are much slower than mature Transformers CPU kernels.
 
 ```bash
 ./build/benchmark/llama_engine_benchmark \
@@ -136,10 +136,11 @@ TINYLLM_PAGED_ATTENTION_BACKEND=cuda \
   /models/smollm2-135M
 ```
 
-Transformers baseline:
+Transformers baseline on CUDA:
 
 ```bash
 python3 benchmark/transformers_generate_benchmark.py \
+  --device cuda:0 \
   --warmup 1 \
   --repeat 3 \
   --max-new-tokens 8 \
@@ -147,19 +148,7 @@ python3 benchmark/transformers_generate_benchmark.py \
   /models/smollm2-135M
 ```
 
-TinyLLM vs Transformers comparison:
-
-```bash
-python3 benchmark/run_benchmark_comparison.py \
-  --tinyllm-binary build/benchmark/llama_engine_benchmark \
-  --warmup 1 \
-  --repeat 3 \
-  --max-new-tokens 50 \
-  --json \
-  /models/Qwen2.5-1.5B-Instruct
-```
-
-CUDA comparison:
+TinyLLM vs Transformers CUDA comparison. Use this command for performance comparisons on the remote RTX 4090 server:
 
 ```bash
 python3 benchmark/run_benchmark_comparison.py \
