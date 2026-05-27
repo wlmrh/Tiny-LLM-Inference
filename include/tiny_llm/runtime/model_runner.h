@@ -35,7 +35,7 @@ private:
     void init_from_args(const EngineArgs& args);
     void validate_handles() const;
     int32_t resolve_model_max_batch_size(const EngineArgs& args) const;
-    Tensor run_model(const PreparedInputs& inputs) const;
+    Tensor run_model(const PreparedInputs& inputs, RuntimeProfilingStats* profiling) const;
 
     std::unique_ptr<Model> owned_model_;
     std::unique_ptr<HFSafeTensorLoader> owned_hf_loader_;

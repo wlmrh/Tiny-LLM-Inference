@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
     parser.add_argument("--prompt", action="append", dest="prompts", default=[])
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--profile-detail", action="store_true", help="enable TinyLLM detailed runtime profiling")
     parser.add_argument("model_dir")
     return parser.parse_args()
 
@@ -81,7 +82,10 @@ def run_tinyllm(args: argparse.Namespace) -> Dict[str, Any]:
     binary = Path(args.tinyllm_binary)
     if not binary.exists():
         raise RuntimeError(f"TinyLLM benchmark binary does not exist: {binary}; build it first with cmake --build")
-    return run_command([str(binary), *command_common_args(args)], "tinyllm")
+    common = command_common_args(args)
+    if args.profile_detail:
+        common.insert(-1, "--profile-detail")
+    return run_command([str(binary), *common], "tinyllm")
 
 
 def run_transformers(args: argparse.Namespace) -> Dict[str, Any]:
@@ -150,6 +154,21 @@ def print_table(results: List[Dict[str, Any]], comparison: Dict[str, Any]) -> No
             print(f"    decode_ms_per_token: {float(item['decode_ms_per_token']):.3f}")
         if "sampling_ms" in item:
             print(f"    sampling_ms: {float(item['sampling_ms']):.3f}")
+        detail_keys = [
+            "embedding_ms",
+            "qkv_proj_ms",
+            "rope_ms",
+            "attention_ms",
+            "o_proj_ms",
+            "mlp_ms",
+            "norm_ms",
+            "lm_head_ms",
+        ]
+        if any(key in item and float(item[key]) != 0.0 for key in detail_keys):
+            print(f"  detailed_profile:")
+            for key in detail_keys:
+                if key in item:
+                    print(f"    {key}: {float(item[key]):.3f}")
         print(f"  tokens:")
         print(f"    prompt_tokens: {int(item['prompt_tokens'])}")
         print(f"    avg_generated_tokens: {float(item['avg_generated_tokens']):.3f}")

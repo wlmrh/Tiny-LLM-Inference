@@ -1,5 +1,7 @@
 #include "tiny_llm/models/llama_model.h"
 
+#include "tiny_llm/runtime/profiling.h"
+
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -116,14 +118,20 @@ Tensor LlamaModel::forward_hidden(const PreparedInputs& inputs, RuntimeContext& 
     }
 
     LlamaModelBuffers batch_buffers = make_batch_buffers(batch_size);
-    embed_tokens_->forward(inputs.input_ids, batch_buffers.hidden_states);
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::embedding_ms);
+        embed_tokens_->forward(inputs.input_ids, batch_buffers.hidden_states);
+    }
 
     for (const std::shared_ptr<LlamaDecoderLayer>& layer : layers_)
     {
         layer->forward(batch_buffers.hidden_states, inputs.positions, batch_buffers.layer, ctx);
     }
 
-    final_norm_->forward(batch_buffers.hidden_states, batch_buffers.norm_output, ctx.execution());
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::norm_ms);
+        final_norm_->forward(batch_buffers.hidden_states, batch_buffers.norm_output, ctx.execution());
+    }
     return batch_buffers.norm_output;
 }
 
@@ -221,6 +229,7 @@ Tensor LlamaForCausalLM::forward(const PreparedInputs& inputs, RuntimeContext& c
 
 Tensor LlamaForCausalLM::compute_logits(const Tensor& hidden_states, RuntimeContext& ctx) const
 {
+    ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::lm_head_ms);
     return lm_head_->forward(hidden_states, ctx.execution());
 }
 

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -50,6 +51,17 @@ void synchronize_for_profile(const c10::Device& device)
 #else
     (void)device;
 #endif
+}
+
+bool runtime_detail_profile_enabled()
+{
+    const char* value = std::getenv("TINYLLM_PROFILE_DETAIL");
+    if (value == nullptr)
+    {
+        return false;
+    }
+    const std::string text(value);
+    return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
 }
 
 int64_t checked_numel(const std::vector<int64_t>& shape, const char* caller)
@@ -518,7 +530,7 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
     return prepared;
 }
 
-Tensor ModelRunner::run_model(const PreparedInputs& inputs) const
+Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStats* profiling) const
 {
     validate_handles();
     validate_prepared_tensor_pack(inputs, model_->vocab_size(), model_->num_layers(), "ModelRunner::run_model");
@@ -538,7 +550,7 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs) const
     metadata.enabled = true;
 
     ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run_model");
-    RuntimeContext runtime_ctx(exec_ctx, metadata);
+    RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, runtime_detail_profile_enabled());
     auto guard = exec_ctx.step_guard();
     (void)guard;
     return model_->forward(inputs, runtime_ctx);
@@ -588,7 +600,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
     synchronize_for_profile(runtime_device);
     const auto model_start = ProfileClock::now();
-    Tensor logits = run_model(inputs);
+    Tensor logits = run_model(inputs, &output.profiling);
     synchronize_for_profile(runtime_device);
     const auto model_end = ProfileClock::now();
 

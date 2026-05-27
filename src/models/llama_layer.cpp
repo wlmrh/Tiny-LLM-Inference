@@ -3,6 +3,7 @@
 #include "tiny_llm/operators/llama_ops.h"
 #include "tiny_llm/operators/paged_attention.h"
 #include "tiny_llm/runtime/kv_cache.h"
+#include "tiny_llm/runtime/profiling.h"
 
 #include <algorithm>
 #include <cstring>
@@ -148,11 +149,23 @@ void LlamaSelfAttention::forward(const Tensor& hidden_states,
 {
     validate_forward_inputs(hidden_states, positions, buffers);
 
-    qkv_proj_->forward(hidden_states, buffers.qkv, ctx.execution());
-    split_qkv(buffers.qkv, buffers.q, buffers.k, buffers.v);
-    apply_rope(positions, buffers.q, buffers.k);
-    compute_attention(positions, buffers.q, buffers.k, buffers.v, buffers.attn_output, ctx);
-    o_proj_->forward(buffers.attn_output, buffers.proj_output, ctx.execution());
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::qkv_proj_ms);
+        qkv_proj_->forward(hidden_states, buffers.qkv, ctx.execution());
+        split_qkv(buffers.qkv, buffers.q, buffers.k, buffers.v);
+    }
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::rope_ms);
+        apply_rope(positions, buffers.q, buffers.k);
+    }
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::attention_ms);
+        compute_attention(positions, buffers.q, buffers.k, buffers.v, buffers.attn_output, ctx);
+    }
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::o_proj_ms);
+        o_proj_->forward(buffers.attn_output, buffers.proj_output, ctx.execution());
+    }
 }
 
 void LlamaSelfAttention::validate_forward_inputs(const Tensor& hidden_states,
@@ -237,10 +250,13 @@ void LlamaMLP::forward(const Tensor& hidden_states,
                        RuntimeContext& ctx) const
 {
     validate_forward_inputs(hidden_states, buffers);
-    gate_proj_->forward(hidden_states, buffers.gate, ctx.execution());
-    up_proj_->forward(hidden_states, buffers.up, ctx.execution());
-    apply_activation(buffers.gate, buffers.up, buffers.activated);
-    down_proj_->forward(buffers.activated, buffers.down, ctx.execution());
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::mlp_ms);
+        gate_proj_->forward(hidden_states, buffers.gate, ctx.execution());
+        up_proj_->forward(hidden_states, buffers.up, ctx.execution());
+        apply_activation(buffers.gate, buffers.up, buffers.activated);
+        down_proj_->forward(buffers.activated, buffers.down, ctx.execution());
+    }
 }
 
 void LlamaMLP::validate_forward_inputs(const Tensor& hidden_states,
@@ -299,12 +315,18 @@ void LlamaDecoderLayer::forward(Tensor& hidden_states,
     validate_forward_inputs(hidden_states, positions, buffers);
 
     copy_tensor(hidden_states, buffers.residual);
-    input_layernorm_->forward(hidden_states, buffers.norm_output, ctx.execution());
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::norm_ms);
+        input_layernorm_->forward(hidden_states, buffers.norm_output, ctx.execution());
+    }
     self_attn_->forward(buffers.norm_output, positions, buffers.attention, ctx);
     add_inplace(buffers.residual, buffers.attention.proj_output, hidden_states);
 
     copy_tensor(hidden_states, buffers.residual);
-    post_attention_layernorm_->forward(hidden_states, buffers.norm_output, ctx.execution());
+    {
+        ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::norm_ms);
+        post_attention_layernorm_->forward(hidden_states, buffers.norm_output, ctx.execution());
+    }
     mlp_->forward(buffers.norm_output, buffers.mlp, ctx);
     add_inplace(buffers.residual, buffers.mlp.down, hidden_states);
 }

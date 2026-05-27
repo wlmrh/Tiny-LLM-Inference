@@ -150,6 +150,63 @@ ctest --test-dir build-cuda --output-on-failure \
 ```
 
 
+Performance optimization benchmark workflow:
+
+- Do not run the full industrial benchmark after every small mechanism change. Full Qwen2.5 CUDA workloads can take a long time, especially batch/decode-heavy scenarios.
+- Use the shortest gate that matches the risk of the change:
+  - Correctness gate after scheduler/KV/model-runner/attention changes:
+
+    ```bash
+    cmake --build build-cuda -j
+    ctest --test-dir build-cuda --output-on-failure \
+      -R 'Scheduler|KVCache|ModelRunner|EngineCore|PagedAttention|test_llama_generation_cuda_smoke'
+    ```
+
+  - Focus performance gate for tight inner-loop optimization:
+
+    ```bash
+    python3 benchmark/industrial_benchmark.py --preset focus
+    ```
+
+    This runs TinyLLM only on `interactive` with warmup 0 and repeat 1, and is intended to catch directionally obvious changes in TTFT, `decode_ms_per_token`, `prefill_ms`, and `prepare_inputs_ms`.
+
+  - Regression performance gate after a coherent optimization step:
+
+    ```bash
+    python3 benchmark/industrial_benchmark.py --preset regression
+    ```
+
+    This runs TinyLLM on `interactive,chat_serving` with warmup 1 and repeat 1. Use it before claiming an optimization helped batch/decode behavior.
+
+  - Full performance gate only at phase boundaries or before reporting headline numbers:
+
+    ```bash
+    python3 benchmark/industrial_benchmark.py --preset full
+    ```
+
+    This runs the full TinyLLM workload matrix with warmup 1 and repeat 3. Do not use it as the default edit-test loop.
+
+  - Quick comparison sanity check when touching benchmark harnesses or baseline wiring:
+
+    ```bash
+    python3 benchmark/industrial_benchmark.py --preset quick
+    ```
+
+    This runs two tiny scenarios with TinyLLM and Transformers. It is for harness validation, not optimization claims.
+
+  - Detailed prefill profiling for bottleneck diagnosis only:
+
+    ```bash
+    python3 benchmark/industrial_benchmark.py --preset profile_prefill --profile-detail
+    ```
+
+    `--profile-detail` enables `TINYLLM_PROFILE_DETAIL=1` for TinyLLM and inserts CUDA synchronizations around model subcomponents. Use the resulting `embedding_ms`, `qkv_proj_ms`, `rope_ms`, `attention_ms`, `o_proj_ms`, `mlp_ms`, `norm_ms`, and `lm_head_ms` fields to choose the next mechanism to optimize, but do not use these synchronized numbers as headline throughput results.
+
+- For command plumbing checks, prefer `--dry-run` with any preset, for example `python3 benchmark/industrial_benchmark.py --preset focus --dry-run`.
+- `benchmark/llama_engine_benchmark.cpp` and `benchmark/transformers_generate_benchmark.py` load their model once per benchmark process; warmup/repeat measure steady-state generation, while `avg_load_init_ms` reports the one-time load cost.
+- `benchmark/results/` is intentionally kept small: `industrial_benchmark.py` deletes older `.json`/`.md` reports in that directory after writing the newest report. Copy a report elsewhere before running another benchmark only if the user explicitly asks to preserve it.
+
+
 # Debug Tools & Alignment Scripts (调试工具)
 
 The C++ files in `tools/` are standalone debugging runtimes built by `tests/CMakeLists.txt`; they are not themselves CTest test sources. The Python files in `scripts/` compare tool output against PyTorch/Transformers or inspect model files. The `benchmark/` directory contains manual performance tools and comparison wrappers; benchmark runs should not be registered as regular CTest tests.

@@ -129,22 +129,17 @@ def load_model(model_dir: Path, device: str, torch, auto_model, auto_tokenizer):
 
 
 def generate_once(
-    model_dir: Path,
+    tokenizer,
+    model,
     prompts: List[str],
     prompt_tokens: int,
+    load_ms: float,
     args: argparse.Namespace,
     device: str,
     torch,
-    auto_model,
-    auto_tokenizer,
     logits_processor_list,
     measure: bool,
 ) -> Optional[Dict[str, Any]]:
-    tokenizer, model, load_ms = load_model(model_dir, device, torch, auto_model, auto_tokenizer)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
-
     synchronize = make_synchronizer(device, torch)
     timer = FirstTokenTimer(synchronize)
 
@@ -178,10 +173,6 @@ def generate_once(
         first_token_ms = (timer.first_token_time - timer.start_time) * 1000.0
 
     total_ms = (generation_end - timer.start_time) * 1000.0
-
-    del model
-    if device.startswith("cuda"):
-        torch.cuda.empty_cache()
 
     if not measure:
         return None
@@ -278,15 +269,18 @@ def main() -> int:
     torch, auto_model, auto_tokenizer, logits_processor_list = import_deps()
     device = parse_device(args.device, torch)
 
-    tokenizer = auto_tokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)
+    tokenizer, model, load_ms = load_model(model_dir, device, torch, auto_model, auto_tokenizer)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
     prompt_tokens = count_prompt_tokens(tokenizer, prompts)
 
     for _ in range(args.warmup):
-        generate_once(model_dir, prompts, prompt_tokens, args, device, torch, auto_model, auto_tokenizer, logits_processor_list, False)
+        generate_once(tokenizer, model, prompts, prompt_tokens, load_ms, args, device, torch, logits_processor_list, False)
 
     repeats = []
     for _ in range(args.repeat):
-        metrics = generate_once(model_dir, prompts, prompt_tokens, args, device, torch, auto_model, auto_tokenizer, logits_processor_list, True)
+        metrics = generate_once(tokenizer, model, prompts, prompt_tokens, load_ms, args, device, torch, logits_processor_list, True)
         assert metrics is not None
         repeats.append(metrics)
 

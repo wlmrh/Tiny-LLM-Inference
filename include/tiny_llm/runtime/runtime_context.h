@@ -4,6 +4,7 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/operators/paged_attention.h"
+#include "tiny_llm/runtime/scheduler.h"
 
 namespace tiny_llm {
 
@@ -16,8 +17,13 @@ namespace tiny_llm {
 class RuntimeContext {
 public:
     RuntimeContext(ExecutionContext& execution,
-                   ops::PagedAttentionRuntimeMetadata attention_metadata)
-        : execution_(execution), attention_metadata_(attention_metadata) {}
+                   ops::PagedAttentionRuntimeMetadata attention_metadata,
+                   RuntimeProfilingStats* profiling_stats = nullptr,
+                   bool profile_detail_enabled = false)
+        : execution_(execution),
+          attention_metadata_(attention_metadata),
+          profiling_stats_(profiling_stats),
+          profile_detail_enabled_(profile_detail_enabled) {}
 
     ExecutionContext& execution() const { return execution_; }
     KVCache* kv() const { return execution_.kv(); }
@@ -29,9 +35,14 @@ public:
         return attention_metadata_;
     }
 
+    RuntimeProfilingStats* profiling_stats() const { return profiling_stats_; }
+    bool profile_detail_enabled() const { return profile_detail_enabled_ && profiling_stats_ != nullptr; }
+
 private:
     ExecutionContext& execution_;
     ops::PagedAttentionRuntimeMetadata attention_metadata_{};
+    RuntimeProfilingStats* profiling_stats_ = nullptr;
+    bool profile_detail_enabled_ = false;
 };
 
 } // namespace tiny_llm

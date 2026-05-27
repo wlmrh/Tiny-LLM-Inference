@@ -26,6 +26,7 @@ struct Options {
     int32_t repeat = 3;
     int32_t max_new_tokens = 8;
     bool json = false;
+    bool profile_detail = false;
     std::vector<std::string> prompts;
     std::filesystem::path model_dir;
     int64_t prompt_tokens = -1;
@@ -39,6 +40,14 @@ struct RepeatMetrics {
     double prefill_ms = 0.0;
     double decode_ms_total = 0.0;
     double sampling_ms = 0.0;
+    double embedding_ms = 0.0;
+    double qkv_proj_ms = 0.0;
+    double rope_ms = 0.0;
+    double attention_ms = 0.0;
+    double o_proj_ms = 0.0;
+    double mlp_ms = 0.0;
+    double norm_ms = 0.0;
+    double lm_head_ms = 0.0;
     int64_t prompt_tokens = 0;
     int64_t generated_tokens = 0;
     int64_t prefill_tokens = 0;
@@ -170,7 +179,7 @@ void print_usage(const char* argv0)
 {
     std::cerr << "usage: " << argv0
               << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
-              << " [--max-new-tokens N] [--prompt TEXT]... [--json] <model_dir>\n";
+              << " [--max-new-tokens N] [--prompt TEXT]... [--json] [--profile-detail] <model_dir>\n";
 }
 
 Options parse_args(int argc, char** argv)
@@ -211,6 +220,10 @@ Options parse_args(int argc, char** argv)
         else if (arg == "--json")
         {
             options.json = true;
+        }
+        else if (arg == "--profile-detail")
+        {
+            options.profile_detail = true;
         }
         else if (arg == "--help" || arg == "-h")
         {
@@ -255,6 +268,17 @@ double elapsed_ms(Clock::time_point start, Clock::time_point end)
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
+bool env_flag_enabled(const char* name)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr)
+    {
+        return false;
+    }
+    const std::string text(value);
+    return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+}
+
 double mean(const std::vector<double>& values)
 {
     if (values.empty())
@@ -275,14 +299,9 @@ int64_t count_prompt_tokens(const std::filesystem::path& model_dir, const std::v
     return total;
 }
 
-RepeatMetrics run_once(const Options& options, bool measure)
+RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_ms, bool measure)
 {
     RepeatMetrics metrics;
-    const auto load_start = Clock::now();
-    tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
-    llm_options.max_tokens = options.max_new_tokens;
-    tiny_llm::LLM llm(llm_options);
-    const auto load_end = Clock::now();
 
     tiny_llm::UserSamplingParams sampling_params;
     sampling_params.temperature = 0.0f;
@@ -308,7 +327,7 @@ RepeatMetrics run_once(const Options& options, bool measure)
         return metrics;
     }
 
-    metrics.load_ms = elapsed_ms(load_start, load_end);
+    metrics.load_ms = load_ms;
     metrics.total_ms = elapsed_ms(generation_start, generation_end);
     metrics.first_token_ms = saw_first_token ? elapsed_ms(generation_start, first_token_time) : 0.0;
     const tiny_llm::RuntimeProfilingStats& profile = llm.last_generation_profile();
@@ -316,6 +335,14 @@ RepeatMetrics run_once(const Options& options, bool measure)
     metrics.prefill_ms = profile.prefill_ms;
     metrics.decode_ms_total = profile.decode_ms_total;
     metrics.sampling_ms = profile.sampling_ms;
+    metrics.embedding_ms = profile.embedding_ms;
+    metrics.qkv_proj_ms = profile.qkv_proj_ms;
+    metrics.rope_ms = profile.rope_ms;
+    metrics.attention_ms = profile.attention_ms;
+    metrics.o_proj_ms = profile.o_proj_ms;
+    metrics.mlp_ms = profile.mlp_ms;
+    metrics.norm_ms = profile.norm_ms;
+    metrics.lm_head_ms = profile.lm_head_ms;
     metrics.prefill_tokens = profile.prefill_tokens;
     metrics.decode_tokens = profile.decode_tokens;
     metrics.prompt_tokens = options.prompt_tokens;
@@ -367,6 +394,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::vector<double> decode_ms_total;
     std::vector<double> decode_ms_per_token;
     std::vector<double> sampling_ms;
+    std::vector<double> embedding_ms;
+    std::vector<double> qkv_proj_ms;
+    std::vector<double> rope_ms;
+    std::vector<double> attention_ms;
+    std::vector<double> o_proj_ms;
+    std::vector<double> mlp_ms;
+    std::vector<double> norm_ms;
+    std::vector<double> lm_head_ms;
     load_ms.reserve(repeats.size());
     total_ms.reserve(repeats.size());
     first_token_ms.reserve(repeats.size());
@@ -375,6 +410,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     decode_ms_total.reserve(repeats.size());
     decode_ms_per_token.reserve(repeats.size());
     sampling_ms.reserve(repeats.size());
+    embedding_ms.reserve(repeats.size());
+    qkv_proj_ms.reserve(repeats.size());
+    rope_ms.reserve(repeats.size());
+    attention_ms.reserve(repeats.size());
+    o_proj_ms.reserve(repeats.size());
+    mlp_ms.reserve(repeats.size());
+    norm_ms.reserve(repeats.size());
+    lm_head_ms.reserve(repeats.size());
     int64_t generated_tokens = 0;
     int64_t prompt_tokens = -1;
     int64_t prefill_tokens = 0;
@@ -391,6 +434,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
             ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens)
             : 0.0);
         sampling_ms.push_back(metrics.sampling_ms);
+        embedding_ms.push_back(metrics.embedding_ms);
+        qkv_proj_ms.push_back(metrics.qkv_proj_ms);
+        rope_ms.push_back(metrics.rope_ms);
+        attention_ms.push_back(metrics.attention_ms);
+        o_proj_ms.push_back(metrics.o_proj_ms);
+        mlp_ms.push_back(metrics.mlp_ms);
+        norm_ms.push_back(metrics.norm_ms);
+        lm_head_ms.push_back(metrics.lm_head_ms);
         generated_tokens += metrics.generated_tokens;
         prefill_tokens += metrics.prefill_tokens;
         decode_tokens += metrics.decode_tokens;
@@ -405,6 +456,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     const double avg_decode_ms_total = mean(decode_ms_total);
     const double avg_decode_ms_per_token = mean(decode_ms_per_token);
     const double avg_sampling_ms = mean(sampling_ms);
+    const double avg_embedding_ms = mean(embedding_ms);
+    const double avg_qkv_proj_ms = mean(qkv_proj_ms);
+    const double avg_rope_ms = mean(rope_ms);
+    const double avg_attention_ms = mean(attention_ms);
+    const double avg_o_proj_ms = mean(o_proj_ms);
+    const double avg_mlp_ms = mean(mlp_ms);
+    const double avg_norm_ms = mean(norm_ms);
+    const double avg_lm_head_ms = mean(lm_head_ms);
     const double avg_generated_tokens = repeats.empty() ? 0.0 : static_cast<double>(generated_tokens) / repeats.size();
     const double e2e_tokens_per_s = avg_total_ms > 0.0 ? avg_generated_tokens / (avg_total_ms / 1000.0) : 0.0;
     const double decode_ms = std::max(0.0, avg_total_ms - avg_first_ms);
@@ -415,7 +474,8 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "  model: " << options.model_dir.string() << "\n";
     std::cout << "  device: " << options.device_text << "\n";
     std::cout << "  prompts: " << options.prompts.size() << ", warmup: " << options.warmup
-              << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens << "\n";
+              << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens
+              << ", profile_detail: " << (options.profile_detail ? "on" : "off") << "\n";
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "  avg_load_init_ms: " << avg_load_ms << "\n";
     std::cout << "  avg_total_latency_ms: " << avg_total_ms << "\n";
@@ -427,6 +487,17 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "  decode_ms_total: " << avg_decode_ms_total << "\n";
     std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
     std::cout << "  sampling_ms: " << avg_sampling_ms << "\n";
+    if (options.profile_detail)
+    {
+        std::cout << "  embedding_ms: " << avg_embedding_ms << "\n";
+        std::cout << "  qkv_proj_ms: " << avg_qkv_proj_ms << "\n";
+        std::cout << "  rope_ms: " << avg_rope_ms << "\n";
+        std::cout << "  attention_ms: " << avg_attention_ms << "\n";
+        std::cout << "  o_proj_ms: " << avg_o_proj_ms << "\n";
+        std::cout << "  mlp_ms: " << avg_mlp_ms << "\n";
+        std::cout << "  norm_ms: " << avg_norm_ms << "\n";
+        std::cout << "  lm_head_ms: " << avg_lm_head_ms << "\n";
+    }
     std::cout << "  avg_prefill_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << "\n";
     std::cout << "  avg_decode_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << "\n";
     if (prompt_tokens >= 0)
@@ -515,6 +586,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"warmup\":" << options.warmup << ",";
     std::cout << "\"repeat\":" << options.repeat << ",";
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
+    std::cout << "\"profile_detail\":" << (options.profile_detail ? "true" : "false") << ",";
     std::cout << "\"avg_load_init_ms\":" << avg_load_ms << ",";
     std::cout << "\"avg_total_latency_ms\":" << avg_total_ms << ",";
     std::cout << "\"avg_first_token_latency_ms\":" << avg_first_ms << ",";
@@ -525,6 +597,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"decode_ms_total\":" << avg_decode_ms_total << ",";
     std::cout << "\"decode_ms_per_token\":" << avg_decode_ms_per_token << ",";
     std::cout << "\"sampling_ms\":" << avg_sampling_ms << ",";
+    std::cout << "\"embedding_ms\":" << avg_embedding_ms << ",";
+    std::cout << "\"qkv_proj_ms\":" << avg_qkv_proj_ms << ",";
+    std::cout << "\"rope_ms\":" << avg_rope_ms << ",";
+    std::cout << "\"attention_ms\":" << avg_attention_ms << ",";
+    std::cout << "\"o_proj_ms\":" << avg_o_proj_ms << ",";
+    std::cout << "\"mlp_ms\":" << avg_mlp_ms << ",";
+    std::cout << "\"norm_ms\":" << avg_norm_ms << ",";
+    std::cout << "\"lm_head_ms\":" << avg_lm_head_ms << ",";
     std::cout << "\"avg_prefill_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << ",";
     std::cout << "\"avg_decode_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << ",";
     std::cout << "\"end_to_end_tokens_per_s\":" << e2e_tokens_per_s << ",";
@@ -598,17 +678,29 @@ int main(int argc, char** argv)
     try
     {
         Options options = parse_args(argc, argv);
+        options.profile_detail = options.profile_detail || env_flag_enabled("TINYLLM_PROFILE_DETAIL");
+        if (options.profile_detail)
+        {
+            setenv("TINYLLM_PROFILE_DETAIL", "1", 1);
+        }
         options.prompt_tokens = count_prompt_tokens(options.model_dir, options.prompts);
+
+        const auto load_start = Clock::now();
+        tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
+        llm_options.max_tokens = options.max_new_tokens;
+        tiny_llm::LLM llm(llm_options);
+        const double load_ms = elapsed_ms(load_start, Clock::now());
+
         for (int32_t i = 0; i < options.warmup; ++i)
         {
-            (void)run_once(options, false);
+            (void)run_once(options, llm, load_ms, false);
         }
 
         std::vector<RepeatMetrics> repeats;
         repeats.reserve(static_cast<size_t>(options.repeat));
         for (int32_t i = 0; i < options.repeat; ++i)
         {
-            repeats.push_back(run_once(options, true));
+            repeats.push_back(run_once(options, llm, load_ms, true));
         }
         print_summary(options, repeats);
     }

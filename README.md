@@ -154,9 +154,9 @@ python3 benchmark/run_benchmark_comparison.py \
   --tinyllm-binary build/benchmark/llama_engine_benchmark \
   --warmup 1 \
   --repeat 3 \
-  --max-new-tokens 8 \
+  --max-new-tokens 50 \
   --json \
-  /models/smollm2-135M
+  /models/Qwen2.5-1.5B-Instruct
 ```
 
 CUDA comparison:
@@ -173,6 +173,75 @@ python3 benchmark/run_benchmark_comparison.py \
 ```
 
 Benchmark output includes readable latency/token/throughput sections and a final JSON line when `--json` is used. TinyLLM additionally reports runtime breakdown fields such as `prepare_inputs_ms`, `prefill_ms`, `decode_ms_total`, `decode_ms_per_token`, and `sampling_ms`.
+
+
+### Industrial Offline Serving Benchmark
+
+`benchmark/industrial_benchmark.py` runs a reproducible offline-serving workload suite on top of the existing TinyLLM and Transformers benchmark entry points. It generates deterministic synthetic prompts with the Hugging Face tokenizer so each scenario targets real token counts instead of approximate character lengths.
+
+Default target on the remote RTX 4090 server:
+
+```bash
+python3 benchmark/industrial_benchmark.py \
+  --backend tinyllm \
+  --warmup 1 \
+  --repeat 3 \
+  --model-dir /models/Qwen2.5-1.5B-Instruct \
+  --tinyllm-binary build-cuda/benchmark/llama_engine_benchmark \
+  --device cuda:0
+```
+
+The standard suite contains these workloads:
+
+| scenario | batch | target input tokens per prompt | max new tokens |
+| --- | ---: | ---: | ---: |
+| `interactive` | 1 | 128 | 64 |
+| `chat_serving` | 8 | 128 | 128 |
+| `long_prefill` | 4 | 1024 | 64 |
+| `decode_heavy` | 4 | 256 | 256 |
+| `throughput` | 16 | 128 | 128 |
+
+Run a quick validation pass before a long benchmark:
+
+```bash
+python3 benchmark/industrial_benchmark.py \
+  --quick \
+  --backend all \
+  --warmup 0 \
+  --repeat 1 \
+  --model-dir /models/Qwen2.5-1.5B-Instruct \
+  --tinyllm-binary build-cuda/benchmark/llama_engine_benchmark \
+  --device cuda:0 \
+  --label quick_comparison
+```
+
+Run TinyLLM for the full workload matrix and only compare Transformers on selected representative scenarios:
+
+```bash
+python3 benchmark/industrial_benchmark.py \
+  --backend all \
+  --transformers-scenarios interactive,chat_serving,long_prefill \
+  --warmup 1 \
+  --repeat 3 \
+  --model-dir /models/Qwen2.5-1.5B-Instruct \
+  --tinyllm-binary build-cuda/benchmark/llama_engine_benchmark \
+  --device cuda:0 \
+  --label qwen25_1p5b_cuda4090
+```
+
+If Transformers is too slow for large batch or long decode scenarios, use `--backend tinyllm` for the full matrix and run a separate smaller `--backend all --scenarios interactive` comparison. Reports are written to `benchmark/results/` as both JSON and Markdown files. The Markdown report includes model, GPU, batch size, prompt tokens, generated tokens, TTFT, total latency, decode ms/token, end-to-end tokens/s, decode tokens/s, repeat data, and TinyLLM/Transformers ratios when both backends are present.
+
+Current validation status on the remote server:
+
+- `python3 -m py_compile benchmark/industrial_benchmark.py` passed.
+- `cmake --build build-cuda -j` passed.
+- Existing TinyLLM CUDA smoke benchmark passed for `/models/Qwen2.5-1.5B-Instruct`.
+- `--quick --backend tinyllm --warmup 0 --repeat 1` generated JSON and Markdown reports.
+- `--quick --backend all --warmup 0 --repeat 1` generated TinyLLM and Transformers comparison reports.
+- TinyLLM and Transformers benchmark entry points now load each model once per benchmark process; warmup/repeat iterations measure steady-state generation.
+- A previous full `--backend all` run was intentionally stopped during `chat_serving` before this steady-state benchmark fix.
+
+This benchmark is offline batched generation, not a request-rate serving benchmark. It does not report p50/p95/p99 request latency or QPS under arrival-rate control; those require a separate server/load-generator harness.
 
 ## Test
 
