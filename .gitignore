@@ -1,5 +1,4 @@
 build/
-build-mac/
 .vscode/
 .venv/
 .cache/
@@ -7,3 +6,5 @@ build-mac/
 Dockerfile
 .DS_Store
 build-cuda/
+__pycache__/
+results/
