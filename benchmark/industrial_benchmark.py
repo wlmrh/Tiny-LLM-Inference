@@ -299,6 +299,32 @@ def fmt_float(value: Any) -> str:
         return str(value)
 
 
+def markdown_fence(text: Any) -> str:
+    value = "" if text is None else str(text)
+    longest = 0
+    current = 0
+    for ch in value:
+        if ch == "`":
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}\n{value}\n{fence}"
+
+
+def samples_by_prompt(results: Sequence[Dict[str, Any]], prompt_index: int) -> List[Tuple[str, Dict[str, Any]]]:
+    samples = []
+    for result in results:
+        backend = str(result.get("backend", "unknown"))
+        backend_samples = result.get("samples", [])
+        if isinstance(backend_samples, list) and prompt_index < len(backend_samples):
+            sample = backend_samples[prompt_index]
+            if isinstance(sample, dict):
+                samples.append((backend, sample))
+    return samples
+
+
 def build_markdown(report: Dict[str, Any]) -> str:
     lines = []
     lines.append(f"# Industrial Benchmark Report: {report['label']}")
@@ -360,6 +386,31 @@ def build_markdown(report: Dict[str, Any]) -> str:
                 load=fmt_float(ratios.get("tinyllm_vs_transformers_load_init")),
             )
         )
+    lines.append("")
+    lines.append("## Prompts And Outputs")
+    lines.append("")
+    for scenario in report["scenarios"]:
+        meta = scenario["workload"]
+        lines.append(f"### {meta['name']}")
+        prompts = scenario.get("prompts", [])
+        per_prompt_tokens = scenario.get("per_prompt_tokens", [])
+        for prompt_index, prompt in enumerate(prompts):
+            token_count_text = ""
+            if prompt_index < len(per_prompt_tokens):
+                token_count_text = f" ({per_prompt_tokens[prompt_index]} tokens)"
+            lines.append("")
+            lines.append(f"#### Prompt {prompt_index}{token_count_text}")
+            lines.append(markdown_fence(prompt))
+            for backend, sample in samples_by_prompt(scenario.get("results", []), prompt_index):
+                finish_reason = sample.get("finish_reason", "")
+                token_ids = sample.get("token_ids", [])
+                token_count = len(token_ids) if isinstance(token_ids, list) else "-"
+                suffix = f", finish={finish_reason}" if finish_reason else ""
+                lines.append("")
+                lines.append(f"##### {backend} output ({token_count} tokens{suffix})")
+                lines.append(markdown_fence(sample.get("generated_text", sample.get("output_text", ""))))
+        lines.append("")
+
     if report.get("profile_detail"):
         lines.append("")
         lines.append("## TinyLLM Detailed Profile")
@@ -456,6 +507,7 @@ def main() -> int:
                 "actual_prompt_tokens": sum(per_prompt_tokens),
                 "per_prompt_tokens": per_prompt_tokens,
                 "command": command,
+                "prompts": list(prompts),
                 "results": flatten_results(comparison),
                 "ratios": comparison.get("ratios", {}),
                 "omitted_baselines": omitted,

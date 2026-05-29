@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -30,6 +31,15 @@ struct Options {
     std::vector<std::string> prompts;
     std::filesystem::path model_dir;
     int64_t prompt_tokens = -1;
+};
+
+struct SampleOutput {
+    std::string prompt;
+    std::string text;
+    std::string generated_text;
+    std::vector<int32_t> token_ids;
+    bool finished = false;
+    std::string finish_reason;
 };
 
 struct RepeatMetrics {
@@ -52,6 +62,7 @@ struct RepeatMetrics {
     int64_t generated_tokens = 0;
     int64_t prefill_tokens = 0;
     int64_t decode_tokens = 0;
+    std::vector<SampleOutput> samples;
 };
 
 std::filesystem::path expand_user_path(const std::string& path)
@@ -347,9 +358,22 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     metrics.decode_tokens = profile.decode_tokens;
     metrics.prompt_tokens = options.prompt_tokens;
     metrics.generated_tokens = 0;
+    metrics.samples.reserve(outputs.size());
     for (const tiny_llm::CompletionOutput& output : outputs)
     {
         metrics.generated_tokens += static_cast<int64_t>(output.token_ids.size());
+        SampleOutput sample;
+        sample.prompt = output.prompt;
+        sample.text = output.text;
+        sample.generated_text = output.text;
+        if (output.text.rfind(output.prompt, 0) == 0)
+        {
+            sample.generated_text = output.text.substr(output.prompt.size());
+        }
+        sample.token_ids = output.token_ids;
+        sample.finished = output.finished;
+        sample.finish_reason = output.finish_reason;
+        metrics.samples.push_back(std::move(sample));
     }
     return metrics;
 }
@@ -382,6 +406,44 @@ std::string json_escape(const std::string& text)
         }
     }
     return out.str();
+}
+
+
+void print_json_int_array(const std::vector<int32_t>& values)
+{
+    std::cout << "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        std::cout << values[i];
+    }
+    std::cout << "]";
+}
+
+void print_samples_json(const std::vector<SampleOutput>& samples)
+{
+    std::cout << "[";
+    for (size_t i = 0; i < samples.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        const SampleOutput& sample = samples[i];
+        std::cout << "{";
+        std::cout << "\"prompt\":\"" << json_escape(sample.prompt) << "\",";
+        std::cout << "\"output_text\":\"" << json_escape(sample.text) << "\",";
+        std::cout << "\"generated_text\":\"" << json_escape(sample.generated_text) << "\",";
+        std::cout << "\"token_ids\":";
+        print_json_int_array(sample.token_ids);
+        std::cout << ",\"finished\":" << (sample.finished ? "true" : "false") << ",";
+        std::cout << "\"finish_reason\":\"" << json_escape(sample.finish_reason) << "\"";
+        std::cout << "}";
+    }
+    std::cout << "]";
 }
 
 void print_summary(const Options& options, const std::vector<RepeatMetrics>& repeats)
@@ -570,6 +632,18 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << repeats[i].sampling_ms;
     }
     std::cout << "]\n";
+    if (!repeats.empty())
+    {
+        std::cout << "  samples:\n";
+        for (size_t i = 0; i < repeats.front().samples.size(); ++i)
+        {
+            const SampleOutput& sample = repeats.front().samples[i];
+            std::cout << "    [" << i << "] prompt: " << sample.prompt << "\n";
+            std::cout << "    [" << i << "] output_text: " << sample.text << "\n";
+            std::cout << "    [" << i << "] generated_text: " << sample.generated_text << "\n";
+            std::cout << "    [" << i << "] finish_reason: " << sample.finish_reason << "\n";
+        }
+    }
 
     if (!options.json)
     {
@@ -659,6 +733,16 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << repeats[i].decode_ms_total;
     }
     std::cout << "],";
+    std::cout << "\"samples\":";
+    if (!repeats.empty())
+    {
+        print_samples_json(repeats.front().samples);
+    }
+    else
+    {
+        std::cout << "[]";
+    }
+    std::cout << ",";
     std::cout << "\"repeat_sampling_ms\":[";
     for (size_t i = 0; i < repeats.size(); ++i)
     {

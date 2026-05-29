@@ -165,8 +165,23 @@ def generate_once(
 
     generated_tokens = 0
     input_width = int(input_ids.shape[1])
-    for row in output_ids:
-        generated_tokens += max(0, int(row.shape[0]) - input_width)
+    samples = []
+    for idx, row in enumerate(output_ids):
+        generated_ids = row[input_width:]
+        generated_token_ids = [int(token_id) for token_id in generated_ids.detach().cpu().tolist()]
+        generated_tokens += len(generated_token_ids)
+        samples.append(
+            {
+                "prompt": prompts[idx],
+                "output_text": tokenizer.decode(generated_token_ids, skip_special_tokens=True),
+                "generated_text": tokenizer.decode(generated_token_ids, skip_special_tokens=True),
+                "token_ids": generated_token_ids,
+                "finished": bool(
+                    tokenizer.eos_token_id is not None and tokenizer.eos_token_id in generated_token_ids
+                ),
+                "finish_reason": "length",
+            }
+        )
 
     first_token_ms = 0.0
     if timer.first_token_time is not None:
@@ -183,6 +198,7 @@ def generate_once(
         "first_token_ms": first_token_ms,
         "prompt_tokens": prompt_tokens,
         "generated_tokens": generated_tokens,
+        "samples": samples,
     }
 
 
@@ -228,6 +244,7 @@ def build_summary(args: argparse.Namespace, model_dir: Path, device_text: str, p
         "decode_tokens_per_s": decode_tokens_per_s,
         "repeat_total_latency_ms": total_ms,
         "repeat_load_init_ms": load_ms,
+        "samples": repeats[0].get("samples", []) if repeats else [],
     }
 
 
@@ -256,6 +273,13 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
     print("  repeats:")
     print(f"    repeat_total_latency_ms: {[round(x, 3) for x in summary['repeat_total_latency_ms']]}")
     print(f"    repeat_load_init_ms: {[round(x, 3) for x in summary['repeat_load_init_ms']]}")
+    if summary.get("samples"):
+        print("  samples:")
+        for idx, sample in enumerate(summary["samples"]):
+            print(f"    [{idx}] prompt: {sample['prompt']}")
+            print(f"    [{idx}] output_text: {sample['output_text']}")
+            print(f"    [{idx}] generated_text: {sample.get('generated_text', sample['output_text'])}")
+            print(f"    [{idx}] finish_reason: {sample['finish_reason']}")
     if emit_json:
         print("  json: see final machine-readable line below")
         print(json.dumps(summary, separators=(",", ":")))
