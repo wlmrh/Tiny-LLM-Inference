@@ -43,7 +43,34 @@ tiny_llm::Tensor int_cuda(std::vector<int32_t> values, std::vector<int64_t> shap
 tiny_llm::Tensor make_values(int64_t rows, int64_t cols, float offset)
 {
     tiny_llm::Tensor values = torch::arange(rows * cols, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-    return (values.reshape({rows, cols}) + offset) / 100.0f;
+    return torch::sin((values.reshape({rows, cols}) + offset) / 17.0f);
+}
+
+std::vector<int32_t> positions(int32_t start, int32_t count)
+{
+    std::vector<int32_t> values;
+    values.reserve(static_cast<size_t>(count));
+    for (int32_t i = 0; i < count; ++i)
+    {
+        values.push_back(start + i);
+    }
+    return values;
+}
+
+std::vector<int32_t> repeated(int32_t value, int32_t count)
+{
+    return std::vector<int32_t>(static_cast<size_t>(count), value);
+}
+
+std::vector<int32_t> block_table(int32_t block_count)
+{
+    std::vector<int32_t> values;
+    values.reserve(static_cast<size_t>(block_count));
+    for (int32_t i = 0; i < block_count; ++i)
+    {
+        values.push_back(i);
+    }
+    return values;
 }
 
 struct CaseResult {
@@ -54,7 +81,9 @@ struct CaseResult {
 CaseResult run_prefill_then_decode(bool optimized,
                                    int32_t num_attention_heads,
                                    int32_t num_key_value_heads,
-                                   int32_t head_dim)
+                                   int32_t head_dim,
+                                   int32_t block_size_tokens,
+                                   int32_t prefill_tokens)
 {
     if (optimized)
     {
@@ -62,38 +91,41 @@ CaseResult run_prefill_then_decode(bool optimized,
     }
     else
     {
-        unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
+        setenv("TINYLLM_PAGED_ATTENTION_BACKEND", "torch", 1);
     }
 
-    constexpr int32_t kBlockSizeTokens = 2;
-    constexpr int32_t kNumBlocks = 2;
+    const int32_t block_count = (prefill_tokens + 1 + block_size_tokens - 1) / block_size_tokens;
     const int32_t kv_size = num_key_value_heads * head_dim;
     const int32_t hidden_size = num_attention_heads * head_dim;
-    const size_t block_floats = 2 * static_cast<size_t>(kBlockSizeTokens) * static_cast<size_t>(kv_size);
+    const size_t block_floats = 2 * static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
     tiny_llm::Tensor pool = torch::zeros(
-        {static_cast<int64_t>(kNumBlocks * block_floats)},
+        {static_cast<int64_t>(block_count * block_floats)},
         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
-    tiny_llm::BlockAllocator blocks(kNumBlocks, block_floats * sizeof(float), pool.data_ptr<float>(), tiny_llm::ParallelConfig::cuda(0));
+    tiny_llm::BlockAllocator blocks(
+        block_count,
+        block_floats * sizeof(float),
+        pool.data_ptr<float>(),
+        tiny_llm::ParallelConfig::cuda(0));
     tiny_llm::KVCache::Config kv_cfg;
     kv_cfg.num_layers = 1;
-    kv_cfg.block_size_tokens = kBlockSizeTokens;
+    kv_cfg.block_size_tokens = block_size_tokens;
     tiny_llm::KVCache kv_cache(kv_cfg, &blocks);
     tiny_llm::ExecutionContext ctx(nullptr, nullptr, &kv_cache, tiny_llm::ParallelConfig::cuda(0));
 
-    tiny_llm::Tensor q_prefill = make_values(2, hidden_size, 1.0f);
-    tiny_llm::Tensor k_prefill = make_values(2, kv_size, 11.0f);
-    tiny_llm::Tensor v_prefill = make_values(2, kv_size, 21.0f);
+    tiny_llm::Tensor q_prefill = make_values(prefill_tokens, hidden_size, 1.0f);
+    tiny_llm::Tensor k_prefill = make_values(prefill_tokens, kv_size, 11.0f);
+    tiny_llm::Tensor v_prefill = make_values(prefill_tokens, kv_size, 21.0f);
     tiny_llm::Tensor out_prefill = torch::empty_like(q_prefill);
-    tiny_llm::Tensor positions_prefill = int_cuda({0, 1}, {2});
-    tiny_llm::Tensor seq_indices_prefill = int_cuda({0, 0}, {2});
-    tiny_llm::Tensor context_prefill = int_cuda({2}, {1});
-    tiny_llm::Tensor blocks_prefill = int_cuda({0, -1}, {1, 1, 2});
+    tiny_llm::Tensor positions_prefill = int_cuda(positions(0, prefill_tokens), {prefill_tokens});
+    tiny_llm::Tensor seq_indices_prefill = int_cuda(repeated(0, prefill_tokens), {prefill_tokens});
+    tiny_llm::Tensor context_prefill = int_cuda({prefill_tokens}, {1});
+    tiny_llm::Tensor blocks_prefill = int_cuda(block_table(block_count), {1, 1, block_count});
     tiny_llm::ops::PagedAttentionRuntimeMetadata prefill_metadata;
     prefill_metadata.seq_indices = &seq_indices_prefill;
     prefill_metadata.context_lens = &context_prefill;
     prefill_metadata.block_tables = &blocks_prefill;
-    prefill_metadata.block_size_tokens = kBlockSizeTokens;
+    prefill_metadata.block_size_tokens = block_size_tokens;
     prefill_metadata.enabled = true;
     tiny_llm::ops::LlamaAttentionParams prefill;
     prefill.positions = &positions_prefill;
@@ -114,15 +146,15 @@ CaseResult run_prefill_then_decode(bool optimized,
     tiny_llm::Tensor k_decode = make_values(1, kv_size, 41.0f);
     tiny_llm::Tensor v_decode = make_values(1, kv_size, 51.0f);
     tiny_llm::Tensor out_decode = torch::empty_like(q_decode);
-    tiny_llm::Tensor positions_decode = int_cuda({2}, {1});
+    tiny_llm::Tensor positions_decode = int_cuda({prefill_tokens}, {1});
     tiny_llm::Tensor seq_indices_decode = int_cuda({0}, {1});
-    tiny_llm::Tensor context_decode = int_cuda({3}, {1});
-    tiny_llm::Tensor blocks_decode = int_cuda({0, 1}, {1, 1, 2});
+    tiny_llm::Tensor context_decode = int_cuda({prefill_tokens + 1}, {1});
+    tiny_llm::Tensor blocks_decode = int_cuda(block_table(block_count), {1, 1, block_count});
     tiny_llm::ops::PagedAttentionRuntimeMetadata decode_metadata;
     decode_metadata.seq_indices = &seq_indices_decode;
     decode_metadata.context_lens = &context_decode;
     decode_metadata.block_tables = &blocks_decode;
-    decode_metadata.block_size_tokens = kBlockSizeTokens;
+    decode_metadata.block_size_tokens = block_size_tokens;
     decode_metadata.enabled = true;
     tiny_llm::ops::LlamaAttentionParams decode = prefill;
     decode.positions = &positions_decode;
@@ -137,6 +169,31 @@ CaseResult run_prefill_then_decode(bool optimized,
     unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
     return {out_prefill.detach().cpu(), out_decode.detach().cpu()};
 }
+
+void expect_optimized_matches_reference(int32_t num_attention_heads,
+                                        int32_t num_key_value_heads,
+                                        int32_t head_dim,
+                                        int32_t block_size_tokens,
+                                        int32_t prefill_tokens,
+                                        float tolerance)
+{
+    const CaseResult reference = run_prefill_then_decode(
+        false,
+        num_attention_heads,
+        num_key_value_heads,
+        head_dim,
+        block_size_tokens,
+        prefill_tokens);
+    const CaseResult optimized = run_prefill_then_decode(
+        true,
+        num_attention_heads,
+        num_key_value_heads,
+        head_dim,
+        block_size_tokens,
+        prefill_tokens);
+    expect_close(optimized.prefill, reference.prefill, tolerance);
+    expect_close(optimized.decode, reference.decode, tolerance);
+}
 }
 
 TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForPrefillAndDecode)
@@ -147,13 +204,21 @@ TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForPrefillAndDecode
         GTEST_SKIP() << "CUDA is not available.";
     }
 
-    const CaseResult reference_small = run_prefill_then_decode(false, 1, 1, 4);
-    const CaseResult optimized_small = run_prefill_then_decode(true, 1, 1, 4);
-    expect_close(optimized_small.prefill, reference_small.prefill, 1e-4f);
-    expect_close(optimized_small.decode, reference_small.decode, 1e-4f);
+    expect_optimized_matches_reference(1, 1, 4, 2, 2, 1e-4f);
+    expect_optimized_matches_reference(9, 3, 64, 2, 2, 1e-4f);
+}
 
-    const CaseResult reference_smol = run_prefill_then_decode(false, 9, 3, 64);
-    const CaseResult optimized_smol = run_prefill_then_decode(true, 9, 3, 64);
-    expect_close(optimized_smol.prefill, reference_smol.prefill, 1e-4f);
-    expect_close(optimized_smol.decode, reference_smol.decode, 1e-4f);
+TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForQwenShapeLongPrefill)
+{
+    check_cuda(cudaSetDevice(0), "set CUDA device");
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    for (int32_t prefill_tokens : {16, 24, 32, 64, 128})
+    {
+        SCOPED_TRACE(testing::Message() << "prefill_tokens=" << prefill_tokens);
+        expect_optimized_matches_reference(12, 2, 128, 16, prefill_tokens, 2e-4f);
+    }
 }

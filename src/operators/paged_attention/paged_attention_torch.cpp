@@ -232,33 +232,6 @@ bool try_run_cuda_optimized_attention(const LlamaAttentionParams& params)
     const Tensor& block_tables = *params.metadata->block_tables;
     const std::vector<int64_t> block_shape = tensor_shape(block_tables);
     const int64_t rows = params.q->size(0);
-    const int64_t max_context_slots = block_shape[2] * static_cast<int64_t>(params.metadata->block_size_tokens);
-    const bool use_prefill_kernel = rows > 1 && max_context_slots <= 4096;
-    if (use_prefill_kernel)
-    {
-        cuda::launch_paged_prefill_attention_f32(
-            static_cast<const float*>(tensor_data(*params.q)),
-            static_cast<const float*>(tensor_data(*params.k)),
-            static_cast<const float*>(tensor_data(*params.v)),
-            static_cast<float*>(tensor_data(*params.out)),
-            params.positions->data_ptr<int32_t>(),
-            params.metadata->seq_indices->data_ptr<int32_t>(),
-            params.metadata->context_lens->data_ptr<int32_t>(),
-            params.metadata->block_tables->data_ptr<int32_t>(),
-            static_cast<float*>(base),
-            rows,
-            block_shape[1],
-            block_shape[2],
-            static_cast<int64_t>(kv_cache.total_block_count()),
-            static_cast<int64_t>(kv_cache.block_size_bytes()),
-            params.metadata->block_size_tokens,
-            params.layer_id,
-            params.num_attention_heads,
-            params.num_key_value_heads,
-            params.head_dim,
-            params.ctx->stream());
-        return true;
-    }
 
     cuda::launch_paged_attention_f32(
         static_cast<const float*>(tensor_data(*params.q)),
