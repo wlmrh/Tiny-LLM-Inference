@@ -260,3 +260,76 @@ The CUDA test set reported `35/35` passing. Additional Qwen checks showed token-
 - Measure memory impact from stacked QKV caches before enabling it for larger models by default.
 - Run `focus`, `regression`, and eventually `full` benchmark presets with timeouts after the attention path is improved.
 - Keep `profile-detail` numbers separate from headline throughput because they include extra CUDA synchronizations.
+
+## Optimization 8: Decode Attention, RoPE Cache, and Memory Observability
+
+### Optimization Point
+
+After the QKV cache stage, profile-detail still showed `quick_batch attention_ms=81.673` and `rope_ms=85.681`. The stacked QKV cache also needed an explicit memory fallback path for larger models.
+
+### Strategy
+
+Add a non-atomic CUDA paged-attention branch for small-row decode batches while keeping the old atomic path for multi-token prefill. This avoids the correctness risk found when using the short path for long prefill rows. Extend RoPE from `inv_freq` caching to a shared per-device `cos/sin` cache used by the CUDA runtime path. Add `TINYLLM_QKV_STACKED_CACHE=0/1` to disable stacked QKV cache construction and add CUDA allocator memory fields to benchmark JSON.
+
+### Files
+
+- `src/operators/paged_attention/paged_attention_kernels.cu`
+- `src/models/modules/rotary_embedding.cpp`
+- `src/operators/llama_ops.cpp`
+- `src/models/modules/linear.cpp`
+- `benchmark/llama_engine_benchmark.cpp`
+
+### Before/After
+
+| Metric, quick_batch | After RoPE/QKV baseline | After attention/RoPE/memory |
+| --- | ---: | ---: |
+| `avg_total_latency_ms` | `395.097` | `331.383` |
+| `avg_first_token_latency_ms` | `205.867` | `203.586` |
+| `sampling_ms` | `30.393` | `27.655` |
+| `decode_ms_total` | `184.396` | `123.884` |
+| `cuda_memory_allocated_mb` | `not reported` | `6292.897` |
+| `cuda_memory_reserved_mb` | `not reported` | `6580.000` |
+| `cuda_memory_peak_allocated_mb` | `not reported` | `6441.275` |
+
+| Metric, profile-detail quick_batch | After RoPE/QKV baseline | After attention/RoPE/memory |
+| --- | ---: | ---: |
+| `attention_ms` | `81.673` | `22.831` |
+| `rope_ms` | `85.681` | `82.603` |
+| `qkv_proj_ms` | `84.372` | `79.041` |
+| `mlp_ms` | `67.935` | `67.552` |
+
+The current quick report is:
+
+```text
+benchmark/results/perf_after_attention_rope_memory_20260531_005009.json
+```
+
+The current profile-detail report is:
+
+```text
+/tmp/tinyllm_profile_results/profile_after_attention_rope_memory_20260531_005114.json
+```
+
+The QKV cache disabled smoke report is:
+
+```text
+/tmp/tinyllm_qkv_cache_off_results/qkv_cache_off_quick_20260531_005216.json
+```
+
+### Regression Gate
+
+The regression preset completed under the 900 second timeout:
+
+```text
+benchmark/results/regression_after_cuda_perf_20260531_005321.json
+```
+
+| Workload | `avg_total_latency_ms` | `avg_first_token_latency_ms` | `decode_ms_total` | `sampling_ms` |
+| --- | ---: | ---: | ---: | ---: |
+| `interactive` | `750.826` | `32.422` | `692.407` | `13.415` |
+| `chat_serving` | `2098.704` | `57.285` | `1641.915` | `135.575` |
+
+### Notes
+
+- The optimized attention branch is intentionally limited to `rows <= 8` to target decode and small batched decode. Long prefill remains on the older atomic fallback because the non-atomic branch did not match the torch reference for Qwen long prefill.
+- `TINYLLM_QKV_STACKED_CACHE=0` preserves token correctness and provides a lower-memory fallback, with expected latency regression.
