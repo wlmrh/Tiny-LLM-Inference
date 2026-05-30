@@ -71,6 +71,48 @@ TEST(LlamaOpsTest, AppliesLlama3RopeScaling)
     EXPECT_NEAR(k.data_ptr<float>()[3], 7.0f * c + 5.0f * s, 1e-5f);
 }
 
+#if TINYLLM_ENABLE_CUDA
+TEST(LlamaOpsTest, CudaRopeCacheMatchesInvFreqPath)
+{
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    tiny_llm::Tensor positions = torch::tensor(
+        {0, 1, 5},
+        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
+    tiny_llm::Tensor q_base = torch::arange(
+        24,
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).reshape({3, 8}) / 17.0f;
+    tiny_llm::Tensor k_base = torch::arange(
+        12,
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).reshape({3, 4}) / 19.0f;
+    tiny_llm::Tensor q_ref = q_base.clone();
+    tiny_llm::Tensor k_ref = k_base.clone();
+    tiny_llm::Tensor q_cached = q_base.clone();
+    tiny_llm::Tensor k_cached = k_base.clone();
+
+    tiny_llm::Tensor inv_freq = torch::tensor(
+        {1.0f, 0.01f},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor cache_positions = torch::arange(
+        8,
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).unsqueeze(1);
+    tiny_llm::Tensor theta = cache_positions * inv_freq.unsqueeze(0);
+    tiny_llm::Tensor cos_cache = torch::cos(theta).contiguous();
+    tiny_llm::Tensor sin_cache = torch::sin(theta).contiguous();
+
+    tiny_llm::ops::apply_rope(positions, q_ref, k_ref, 2, 1, 4, inv_freq);
+    tiny_llm::ops::apply_rope(positions, q_cached, k_cached, 2, 1, 4, cos_cache, sin_cache);
+
+    tiny_llm::Tensor q_diff = (q_ref - q_cached).abs().max().cpu();
+    tiny_llm::Tensor k_diff = (k_ref - k_cached).abs().max().cpu();
+    EXPECT_LT(q_diff.item<float>(), 1e-6f);
+    EXPECT_LT(k_diff.item<float>(), 1e-6f);
+}
+#endif
+
 TEST(LlamaOpsTest, ElementwiseHelpersMatchExpectedValues)
 {
     tiny_llm::Tensor gate = torch::tensor({{-1.0f, 0.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));

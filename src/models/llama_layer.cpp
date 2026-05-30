@@ -95,7 +95,8 @@ LlamaSelfAttention::LlamaSelfAttention(const LlamaConfig& config)
             config.rope_scaling_factor,
             config.rope_scaling_low_freq_factor,
             config.rope_scaling_high_freq_factor,
-            config.rope_scaling_original_max_position_embeddings));
+            config.rope_scaling_original_max_position_embeddings,
+            config.max_position_embeddings));
 }
 
 void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::string& prefix, int32_t layer_id)

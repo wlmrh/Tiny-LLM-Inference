@@ -163,6 +163,39 @@ void run_apply_rope_device_with_inv_freq(const Tensor& positions,
     k_second.copy_(k_second_old * cos_theta + k_first_old * sin_theta);
 }
 
+void run_apply_rope_device_with_cache(const Tensor& positions,
+                                      Tensor& q,
+                                      Tensor& k,
+                                      int32_t num_attention_heads,
+                                      int32_t num_key_value_heads,
+                                      int32_t head_dim,
+                                      const Tensor& cos_cache,
+                                      const Tensor& sin_cache)
+{
+    validate_same_device({std::cref(positions), std::cref(q), std::cref(k), std::cref(cos_cache), std::cref(sin_cache)}, "apply_rope");
+    const int64_t rows = q.size(0);
+    const int64_t rotary_half = head_dim / 2;
+    const Tensor positions_long = positions.to(torch::TensorOptions().dtype(torch::kInt64).device(positions.device()));
+    const Tensor cos_theta = cos_cache.index_select(0, positions_long).unsqueeze(1);
+    const Tensor sin_theta = sin_cache.index_select(0, positions_long).unsqueeze(1);
+
+    Tensor q_view = q.view({rows, num_attention_heads, head_dim});
+    Tensor q_first = q_view.narrow(2, 0, rotary_half);
+    Tensor q_second = q_view.narrow(2, rotary_half, rotary_half);
+    Tensor q_first_old = q_first.clone();
+    Tensor q_second_old = q_second.clone();
+    q_first.copy_(q_first_old * cos_theta - q_second_old * sin_theta);
+    q_second.copy_(q_second_old * cos_theta + q_first_old * sin_theta);
+
+    Tensor k_view = k.view({rows, num_key_value_heads, head_dim});
+    Tensor k_first = k_view.narrow(2, 0, rotary_half);
+    Tensor k_second = k_view.narrow(2, rotary_half, rotary_half);
+    Tensor k_first_old = k_first.clone();
+    Tensor k_second_old = k_second.clone();
+    k_first.copy_(k_first_old * cos_theta - k_second_old * sin_theta);
+    k_second.copy_(k_second_old * cos_theta + k_first_old * sin_theta);
+}
+
 void run_apply_rope_device(const Tensor& positions,
                            Tensor& q,
                            Tensor& k,
@@ -588,6 +621,111 @@ void apply_rope(const Tensor& positions,
                 const float kv1 = k_ptr[k1];
                 k_ptr[k0] = kv0 * cos_theta - kv1 * sin_theta;
                 k_ptr[k1] = kv1 * cos_theta + kv0 * sin_theta;
+            }
+        }
+    }
+}
+
+void apply_rope(const Tensor& positions,
+                Tensor& q,
+                Tensor& k,
+                int32_t num_attention_heads,
+                int32_t num_key_value_heads,
+                int32_t head_dim,
+                const Tensor& cos_cache,
+                const Tensor& sin_cache)
+{
+    const int64_t rows = q.size(0);
+    const int32_t hidden_size = num_attention_heads * head_dim;
+    const int32_t kv_hidden_size = num_key_value_heads * head_dim;
+    const int32_t rotary_half = head_dim / 2;
+    validate_float_tensor_2d(q, rows, hidden_size, "apply_rope::q");
+    validate_float_tensor_2d(k, rows, kv_hidden_size, "apply_rope::k");
+    validate_int_tensor_1d(positions, rows, "apply_rope::positions");
+    if (head_dim <= 0 || head_dim % 2 != 0)
+    {
+        throw std::runtime_error("apply_rope: head_dim must be a positive even number.");
+    }
+    if (!cos_cache.defined() || !sin_cache.defined()
+        || tensor_dtype(cos_cache) != DType::kFloat32
+        || tensor_dtype(sin_cache) != DType::kFloat32
+        || cos_cache.dim() != 2
+        || sin_cache.dim() != 2
+        || cos_cache.size(1) != rotary_half
+        || sin_cache.size(1) != rotary_half
+        || cos_cache.size(0) != sin_cache.size(0))
+    {
+        throw std::runtime_error("apply_rope: cos/sin cache shape mismatch.");
+    }
+
+    if (any_cuda({std::cref(positions), std::cref(q), std::cref(k), std::cref(cos_cache), std::cref(sin_cache)}))
+    {
+        run_apply_rope_device_with_cache(
+            positions,
+            q,
+            k,
+            num_attention_heads,
+            num_key_value_heads,
+            head_dim,
+            cos_cache,
+            sin_cache);
+        return;
+    }
+
+    validate_cpu_tensor(positions, "apply_rope");
+    validate_cpu_tensor(q, "apply_rope");
+    validate_cpu_tensor(k, "apply_rope");
+    validate_cpu_tensor(cos_cache, "apply_rope");
+    validate_cpu_tensor(sin_cache, "apply_rope");
+
+    const Tensor cos_contiguous = cos_cache.contiguous();
+    const Tensor sin_contiguous = sin_cache.contiguous();
+    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
+    const float* cos_ptr = static_cast<const float*>(tensor_data(cos_contiguous));
+    const float* sin_ptr = static_cast<const float*>(tensor_data(sin_contiguous));
+    float* q_ptr = static_cast<float*>(tensor_data(q));
+    float* k_ptr = static_cast<float*>(tensor_data(k));
+
+    for (int64_t row = 0; row < rows; ++row)
+    {
+        const int32_t position = positions_ptr[row];
+        if (position < 0 || position >= cos_cache.size(0))
+        {
+            throw std::runtime_error("apply_rope: position exceeds cos/sin cache length.");
+        }
+        const float* cos_row = cos_ptr + static_cast<size_t>(position) * static_cast<size_t>(rotary_half);
+        const float* sin_row = sin_ptr + static_cast<size_t>(position) * static_cast<size_t>(rotary_half);
+        const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(hidden_size);
+        for (int32_t head = 0; head < num_attention_heads; ++head)
+        {
+            const int32_t head_offset = head * head_dim;
+            for (int32_t dim = 0; dim < rotary_half; ++dim)
+            {
+                const int32_t idx0 = head_offset + dim;
+                const int32_t idx1 = head_offset + rotary_half + dim;
+                const size_t q0 = row_offset + static_cast<size_t>(idx0);
+                const size_t q1 = row_offset + static_cast<size_t>(idx1);
+                const float qv0 = q_ptr[q0];
+                const float qv1 = q_ptr[q1];
+                q_ptr[q0] = qv0 * cos_row[dim] - qv1 * sin_row[dim];
+                q_ptr[q1] = qv1 * cos_row[dim] + qv0 * sin_row[dim];
+            }
+        }
+
+        const size_t kv_row_offset = static_cast<size_t>(row) * static_cast<size_t>(kv_hidden_size);
+        for (int32_t head = 0; head < num_key_value_heads; ++head)
+        {
+            const int32_t head_offset = head * head_dim;
+            for (int32_t dim = 0; dim < rotary_half; ++dim)
+            {
+                const int32_t idx0 = head_offset + dim;
+                const int32_t idx1 = head_offset + rotary_half + dim;
+                const size_t k0 = kv_row_offset + static_cast<size_t>(idx0);
+                const size_t k1 = kv_row_offset + static_cast<size_t>(idx1);
+                const float kv0 = k_ptr[k0];
+                const float kv1 = k_ptr[k1];
+                k_ptr[k0] = kv0 * cos_row[dim] - kv1 * sin_row[dim];
+                k_ptr[k1] = kv1 * cos_row[dim] + kv0 * sin_row[dim];
             }
         }
     }
