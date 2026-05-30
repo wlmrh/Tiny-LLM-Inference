@@ -196,7 +196,10 @@ LlamaModelBuffers LlamaModel::make_batch_buffers(int batch_size) const
 
 Tensor LlamaModel::make_batch_view_2d(const Tensor& backing, int batch_size, int width) const
 {
-    return make_tensor_from_blob(tensor_data(backing), {batch_size, width}, DType::kFloat32);
+    return torch::from_blob(
+        tensor_data(backing),
+        {batch_size, width},
+        torch::TensorOptions().dtype(torch::kFloat32).device(backing.device()));
 }
 
 LlamaForCausalLM::LlamaForCausalLM(LlamaConfig config, WeightMap weight_map)
