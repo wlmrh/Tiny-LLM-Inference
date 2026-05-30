@@ -4,6 +4,7 @@
 #include "tiny_llm/operators/matmul.h"
 
 #include <array>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -40,6 +41,17 @@ Tensor make_weight_tensor(const StackedWeightDesc& desc)
         desc.data,
         static_cast<int64_t>(desc.out_features),
         static_cast<int64_t>(desc.in_features));
+}
+
+bool stacked_weight_cache_enabled()
+{
+    const char* value = std::getenv("TINYLLM_QKV_STACKED_CACHE");
+    if (value == nullptr)
+    {
+        return true;
+    }
+    const std::string text(value);
+    return !(text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "OFF");
 }
 
 bool needs_torch_matmul_path(const Tensor& input, const Tensor& output, const Tensor& weight)
@@ -416,7 +428,7 @@ void Linear::build_stacked_weight_cache()
 {
     stacked_weight_cache_ = Tensor{};
     stacked_bias_cache_ = Tensor{};
-    if (stacked_weights_.empty())
+    if (stacked_weights_.empty() || !stacked_weight_cache_enabled())
     {
         return;
     }

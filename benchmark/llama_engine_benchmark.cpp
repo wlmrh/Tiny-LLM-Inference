@@ -17,6 +17,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#if TINYLLM_ENABLE_CUDA
+#include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 namespace {
 
@@ -72,7 +75,20 @@ struct RepeatMetrics {
     int64_t generated_tokens = 0;
     int64_t prefill_tokens = 0;
     int64_t decode_tokens = 0;
+    bool cuda_memory_available = false;
+    double cuda_memory_allocated_mb = 0.0;
+    double cuda_memory_reserved_mb = 0.0;
+    double cuda_memory_peak_allocated_mb = 0.0;
+    double cuda_memory_peak_reserved_mb = 0.0;
     std::vector<SampleOutput> samples;
+};
+
+struct CudaMemoryMetrics {
+    bool available = false;
+    double allocated_mb = 0.0;
+    double reserved_mb = 0.0;
+    double peak_allocated_mb = 0.0;
+    double peak_reserved_mb = 0.0;
 };
 
 std::filesystem::path expand_user_path(const std::string& path)
@@ -290,6 +306,46 @@ Options parse_args(int argc, char** argv)
     return options;
 }
 
+double bytes_to_mb(int64_t bytes)
+{
+    return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+CudaMemoryMetrics current_cuda_memory(const tiny_llm::ParallelConfig& parallel_config)
+{
+    CudaMemoryMetrics metrics;
+#if TINYLLM_ENABLE_CUDA
+    if (!parallel_config.is_cuda())
+    {
+        return metrics;
+    }
+    const auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(
+        static_cast<c10::DeviceIndex>(parallel_config.device_id()));
+    constexpr size_t kAggregate = static_cast<size_t>(c10::CachingAllocator::StatType::AGGREGATE);
+    metrics.available = true;
+    metrics.allocated_mb = bytes_to_mb(stats.allocated_bytes[kAggregate].current);
+    metrics.reserved_mb = bytes_to_mb(stats.reserved_bytes[kAggregate].current);
+    metrics.peak_allocated_mb = bytes_to_mb(stats.allocated_bytes[kAggregate].peak);
+    metrics.peak_reserved_mb = bytes_to_mb(stats.reserved_bytes[kAggregate].peak);
+#else
+    (void)parallel_config;
+#endif
+    return metrics;
+}
+
+void reset_cuda_peak_memory(const tiny_llm::ParallelConfig& parallel_config)
+{
+#if TINYLLM_ENABLE_CUDA
+    if (parallel_config.is_cuda())
+    {
+        c10::cuda::CUDACachingAllocator::resetPeakStats(
+            static_cast<c10::DeviceIndex>(parallel_config.device_id()));
+    }
+#else
+    (void)parallel_config;
+#endif
+}
+
 double elapsed_ms(Clock::time_point start, Clock::time_point end)
 {
     return std::chrono::duration<double, std::milli>(end - start).count();
@@ -365,6 +421,10 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
 
     bool saw_first_token = false;
     Clock::time_point first_token_time{};
+    if (measure)
+    {
+        reset_cuda_peak_memory(options.parallel_config);
+    }
     const auto generation_start = Clock::now();
     const std::vector<tiny_llm::CompletionOutput> outputs =
         llm.generate_stream(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput&) {
@@ -397,6 +457,12 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     metrics.mlp_ms = profile.mlp_ms;
     metrics.norm_ms = profile.norm_ms;
     metrics.lm_head_ms = profile.lm_head_ms;
+    const CudaMemoryMetrics memory = current_cuda_memory(options.parallel_config);
+    metrics.cuda_memory_available = memory.available;
+    metrics.cuda_memory_allocated_mb = memory.allocated_mb;
+    metrics.cuda_memory_reserved_mb = memory.reserved_mb;
+    metrics.cuda_memory_peak_allocated_mb = memory.peak_allocated_mb;
+    metrics.cuda_memory_peak_reserved_mb = memory.peak_reserved_mb;
     metrics.prefill_tokens = profile.prefill_tokens;
     metrics.decode_tokens = profile.decode_tokens;
     metrics.prompt_tokens = options.prompt_tokens;
@@ -507,6 +573,10 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::vector<double> mlp_ms;
     std::vector<double> norm_ms;
     std::vector<double> lm_head_ms;
+    std::vector<double> cuda_memory_allocated_mb;
+    std::vector<double> cuda_memory_reserved_mb;
+    std::vector<double> cuda_memory_peak_allocated_mb;
+    std::vector<double> cuda_memory_peak_reserved_mb;
     load_ms.reserve(repeats.size());
     total_ms.reserve(repeats.size());
     first_token_ms.reserve(repeats.size());
@@ -523,6 +593,10 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     mlp_ms.reserve(repeats.size());
     norm_ms.reserve(repeats.size());
     lm_head_ms.reserve(repeats.size());
+    cuda_memory_allocated_mb.reserve(repeats.size());
+    cuda_memory_reserved_mb.reserve(repeats.size());
+    cuda_memory_peak_allocated_mb.reserve(repeats.size());
+    cuda_memory_peak_reserved_mb.reserve(repeats.size());
     int64_t generated_tokens = 0;
     int64_t prompt_tokens = -1;
     int64_t prefill_tokens = 0;
@@ -547,6 +621,13 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         mlp_ms.push_back(metrics.mlp_ms);
         norm_ms.push_back(metrics.norm_ms);
         lm_head_ms.push_back(metrics.lm_head_ms);
+        if (metrics.cuda_memory_available)
+        {
+            cuda_memory_allocated_mb.push_back(metrics.cuda_memory_allocated_mb);
+            cuda_memory_reserved_mb.push_back(metrics.cuda_memory_reserved_mb);
+            cuda_memory_peak_allocated_mb.push_back(metrics.cuda_memory_peak_allocated_mb);
+            cuda_memory_peak_reserved_mb.push_back(metrics.cuda_memory_peak_reserved_mb);
+        }
         generated_tokens += metrics.generated_tokens;
         prefill_tokens += metrics.prefill_tokens;
         decode_tokens += metrics.decode_tokens;
@@ -569,6 +650,11 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     const double avg_mlp_ms = mean(mlp_ms);
     const double avg_norm_ms = mean(norm_ms);
     const double avg_lm_head_ms = mean(lm_head_ms);
+    const double avg_cuda_memory_allocated_mb = mean(cuda_memory_allocated_mb);
+    const double avg_cuda_memory_reserved_mb = mean(cuda_memory_reserved_mb);
+    const double avg_cuda_memory_peak_allocated_mb = mean(cuda_memory_peak_allocated_mb);
+    const double avg_cuda_memory_peak_reserved_mb = mean(cuda_memory_peak_reserved_mb);
+    const bool has_cuda_memory = !cuda_memory_allocated_mb.empty();
     const double avg_generated_tokens = repeats.empty() ? 0.0 : static_cast<double>(generated_tokens) / repeats.size();
     const double e2e_tokens_per_s = avg_total_ms > 0.0 ? avg_generated_tokens / (avg_total_ms / 1000.0) : 0.0;
     const double decode_ms = std::max(0.0, avg_total_ms - avg_first_ms);
@@ -593,6 +679,13 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "  decode_ms_total: " << avg_decode_ms_total << "\n";
     std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
     std::cout << "  sampling_ms: " << avg_sampling_ms << "\n";
+    if (has_cuda_memory)
+    {
+        std::cout << "  cuda_memory_allocated_mb: " << avg_cuda_memory_allocated_mb << "\n";
+        std::cout << "  cuda_memory_reserved_mb: " << avg_cuda_memory_reserved_mb << "\n";
+        std::cout << "  cuda_memory_peak_allocated_mb: " << avg_cuda_memory_peak_allocated_mb << "\n";
+        std::cout << "  cuda_memory_peak_reserved_mb: " << avg_cuda_memory_peak_reserved_mb << "\n";
+    }
     if (options.profile_detail)
     {
         std::cout << "  embedding_ms: " << avg_embedding_ms << "\n";
@@ -724,6 +817,10 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"mlp_ms\":" << avg_mlp_ms << ",";
     std::cout << "\"norm_ms\":" << avg_norm_ms << ",";
     std::cout << "\"lm_head_ms\":" << avg_lm_head_ms << ",";
+    std::cout << "\"cuda_memory_allocated_mb\":" << avg_cuda_memory_allocated_mb << ",";
+    std::cout << "\"cuda_memory_reserved_mb\":" << avg_cuda_memory_reserved_mb << ",";
+    std::cout << "\"cuda_memory_peak_allocated_mb\":" << avg_cuda_memory_peak_allocated_mb << ",";
+    std::cout << "\"cuda_memory_peak_reserved_mb\":" << avg_cuda_memory_peak_reserved_mb << ",";
     std::cout << "\"avg_prefill_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << ",";
     std::cout << "\"avg_decode_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << ",";
     std::cout << "\"end_to_end_tokens_per_s\":" << e2e_tokens_per_s << ",";

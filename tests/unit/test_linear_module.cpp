@@ -2,6 +2,7 @@
 #include "tiny_llm/models/modules/linear.h"
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 
 TEST(LinearModuleTest, ComputesOutInProjection)
 {
@@ -109,4 +110,48 @@ TEST(LinearModuleTest, CudaStackedWeightsUseCombinedMatmulPath)
     EXPECT_NEAR(ptr[4], 15.0f, 1e-5f);
     EXPECT_NEAR(ptr[5], 26.0f, 1e-5f);
 }
+TEST(LinearModuleTest, CudaStackedWeightsCanDisableCombinedCache)
+{
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    setenv("TINYLLM_QKV_STACKED_CACHE", "0", 1);
+    tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
+    tiny_llm::Tensor input = torch::tensor(
+        {{1.0f, 2.0f, 3.0f},
+         {4.0f, 5.0f, 6.0f}},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor w0 = torch::tensor(
+        {{1.0f, 1.0f, 0.0f}},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor w1 = torch::tensor(
+        {{0.0f, 1.0f, 0.0f},
+         {0.0f, 0.0f, 1.0f}},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor b1 = torch::tensor(
+        {10.0f, 20.0f},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::modules::StackedWeightDesc descs[2] = {
+        {nullptr, 1, 3, 0, tiny_llm::modules::WeightLayout::kOutIn, w0},
+        {nullptr, 2, 3, 1, tiny_llm::modules::WeightLayout::kOutIn, w1, b1},
+    };
+
+    tiny_llm::modules::Linear stacked_linear(3, 3);
+    stacked_linear.bind_stacked_weights(descs, 2);
+    tiny_llm::Tensor output = torch::empty({2, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    stacked_linear.forward(input, output, ctx);
+    unsetenv("TINYLLM_QKV_STACKED_CACHE");
+    tiny_llm::Tensor output_cpu = output.to(torch::kCPU).contiguous();
+
+    const float* ptr = output_cpu.data_ptr<float>();
+    EXPECT_NEAR(ptr[0], 3.0f, 1e-5f);
+    EXPECT_NEAR(ptr[1], 12.0f, 1e-5f);
+    EXPECT_NEAR(ptr[2], 23.0f, 1e-5f);
+    EXPECT_NEAR(ptr[3], 9.0f, 1e-5f);
+    EXPECT_NEAR(ptr[4], 15.0f, 1e-5f);
+    EXPECT_NEAR(ptr[5], 26.0f, 1e-5f);
+}
+
 #endif
