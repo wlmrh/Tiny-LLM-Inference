@@ -414,6 +414,37 @@ benchmark/results/regression_after_next_perf_20260531_015332.json
 | `interactive` | `750.826` | `649.746` | `587.789` | `9.330` |
 | `chat_serving` | `2098.704` | `1889.914` | `1446.261` | `1.423` |
 
+### Transformers Baseline Comparison
+
+The regression preset is TinyLLM-only by design, so a separate baseline run was added for the same `interactive` and `chat_serving` workloads with `backend=all`, `warmup=0`, and `repeat=1`.
+
+```text
+benchmark/results_baseline_compare/regression_with_transformers_after_next_perf_20260531_020309.json
+```
+
+| Workload | TinyLLM total | Transformers total | TinyLLM first token | Transformers first token | Token match |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `interactive` | `819.813` | `1843.825` | `167.904` | `478.115` | yes |
+| `chat_serving` | `2294.498` | `3334.441` | `285.564` | `509.504` | yes |
+
+| Workload | TinyLLM decode/token | Transformers decode/token | TinyLLM decode total | Transformers decode total |
+| --- | ---: | ---: | ---: | ---: |
+| `interactive` | `9.986` | `21.678` | `629.138` | `1365.711` |
+| `chat_serving` | `1.503` | `2.780` | `1527.091` | `2824.937` |
+
+Benchmark command:
+
+```bash
+timeout 900s python3 benchmark/industrial_benchmark.py \
+  --backend all \
+  --scenarios interactive,chat_serving \
+  --transformers-scenarios all \
+  --warmup 0 \
+  --repeat 1 \
+  --output-dir benchmark/results_baseline_compare \
+  --label regression_with_transformers_after_next_perf
+```
+
 ### Decode-Heavy Profile
 
 The TinyLLM-only `decode_heavy` profile confirms that long decode is now attention-bound:
