@@ -114,6 +114,7 @@ SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingPa
     params.temperature = user_params.temperature;
     params.top_p = user_params.top_p;
     params.top_k = user_params.top_k;
+    params.repetition_penalty = user_params.repetition_penalty;
     params.max_tokens = user_params.max_tokens > 0 ? user_params.max_tokens : default_max_tokens_;
     params.stop_token_ids = user_params.stop_token_ids;
 
@@ -160,6 +161,10 @@ void InputPreprocessor::validate_sampling_params(const SamplingParams& sampling_
     if (sampling_params.top_k < 0)
     {
         throw std::runtime_error("InputPreprocessor::validate_sampling_params: top_k must be >= 0.");
+    }
+    if (sampling_params.repetition_penalty <= 0.0f)
+    {
+        throw std::runtime_error("InputPreprocessor::validate_sampling_params: repetition_penalty must be positive.");
     }
     if (sampling_params.max_tokens <= 0)
     {

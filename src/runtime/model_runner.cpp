@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -62,6 +63,24 @@ bool runtime_detail_profile_enabled()
     }
     const std::string text(value);
     return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+}
+
+int32_t debug_logits_top_k()
+{
+    const char* value = std::getenv("TINYLLM_DEBUG_LOGITS_TOP_K");
+    if (value == nullptr)
+    {
+        return 0;
+    }
+    try
+    {
+        const int parsed = std::stoi(value);
+        return parsed > 0 ? parsed : 0;
+    }
+    catch (const std::exception&)
+    {
+        return 0;
+    }
 }
 
 int64_t checked_numel(const std::vector<int64_t>& shape, const char* caller)
@@ -118,6 +137,36 @@ Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
         return tensor.contiguous();
     }
     return tensor.to(c10::kCPU, /*non_blocking=*/false, /*copy=*/true).contiguous();
+}
+
+std::vector<int32_t> top_k_token_ids(const float* logits, int32_t vocab_size, int32_t k)
+{
+    std::vector<int32_t> top_tokens;
+    top_tokens.reserve(static_cast<size_t>(std::min(k, vocab_size)));
+    for (int32_t token = 0; token < vocab_size; ++token)
+    {
+        const float value = logits[token];
+        auto insert_pos = top_tokens.begin();
+        while (insert_pos != top_tokens.end() && logits[*insert_pos] >= value)
+        {
+            ++insert_pos;
+        }
+        if (static_cast<int32_t>(top_tokens.size()) < k)
+        {
+            top_tokens.insert(insert_pos, token);
+        }
+        else if (insert_pos != top_tokens.end())
+        {
+            top_tokens.insert(insert_pos, token);
+            top_tokens.pop_back();
+        }
+    }
+    return top_tokens;
+}
+
+bool token_in_history(int32_t token_id, const std::vector<int32_t>& history)
+{
+    return std::find(history.begin(), history.end(), token_id) != history.end();
 }
 
 std::vector<std::filesystem::path> resolve_hf_safetensor_paths(const EngineArgs& args)
@@ -399,6 +448,8 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
 
     PreparedInputs prepared;
     prepared_req_ids_.clear();
+    prepared_sampling_params_.clear();
+    prepared_token_histories_.clear();
 
     const int64_t request_count = static_cast<int64_t>(output.scheduled_reqs.size());
     const int64_t total_tokens = static_cast<int64_t>(std::max(0, output.total_num_scheduled_tokens));
@@ -467,6 +518,8 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
     int64_t seq_index = 0;
     prepared.sample_row_offsets.reserve(static_cast<size_t>(request_count));
     prepared_req_ids_.reserve(static_cast<size_t>(request_count));
+    prepared_sampling_params_.reserve(static_cast<size_t>(request_count));
+    prepared_token_histories_.reserve(static_cast<size_t>(request_count));
 
     for (const RequestData& req_data : output.scheduled_reqs)
     {
@@ -509,6 +562,8 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
 
         prepared.sample_row_offsets.push_back(static_cast<int32_t>(flat_token_index - 1));
         prepared_req_ids_.push_back(req_data.req_id);
+        prepared_sampling_params_.push_back(req_data.sampling_params);
+        prepared_token_histories_.push_back(req_data.all_token_ids);
         ++seq_index;
     }
 
@@ -595,6 +650,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     output.req_id_to_index.reserve(prepared_req_ids_.size());
     if (inputs.input_ids.numel() == 0)
     {
+        debug_step_index_ = 0;
         return output;
     }
 
@@ -603,6 +659,83 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     Tensor logits = run_model(inputs, &output.profiling);
     synchronize_for_profile(runtime_device);
     const auto model_end = ProfileClock::now();
+
+    const int32_t debug_top_k = debug_logits_top_k();
+    if (debug_top_k > 0)
+    {
+        Tensor logits_cpu = tensor_to_cpu_contiguous(logits);
+        Tensor positions_cpu = tensor_to_cpu_contiguous(inputs.positions);
+        Tensor slot_mapping_cpu = tensor_to_cpu_contiguous(inputs.slot_mapping);
+        Tensor seq_indices_cpu = tensor_to_cpu_contiguous(inputs.seq_indices);
+        Tensor context_lens_cpu = tensor_to_cpu_contiguous(inputs.context_lens);
+        Tensor block_tables_cpu = tensor_to_cpu_contiguous(inputs.block_tables);
+        const float* logits_ptr = logits_cpu.data_ptr<float>();
+        const int32_t* position_ptr = positions_cpu.data_ptr<int32_t>();
+        const int32_t* slot_ptr = slot_mapping_cpu.data_ptr<int32_t>();
+        const int32_t* seq_index_ptr = seq_indices_cpu.data_ptr<int32_t>();
+        const int32_t* context_ptr = context_lens_cpu.data_ptr<int32_t>();
+        const int32_t* block_ptr = block_tables_cpu.data_ptr<int32_t>();
+        const std::vector<int64_t> block_shape = tensor_shape(block_tables_cpu);
+        const int64_t num_seqs = block_shape.size() == 3 ? block_shape[1] : 0;
+        const int64_t max_blocks_per_seq = block_shape.size() == 3 ? block_shape[2] : 0;
+
+        for (size_t i = 0; i < prepared_req_ids_.size(); ++i)
+        {
+            const int32_t row = inputs.sample_row_offsets[i];
+            const int32_t seq_index = seq_index_ptr[row];
+            const std::vector<int32_t> top_tokens = top_k_token_ids(
+                logits_ptr + static_cast<size_t>(row) * static_cast<size_t>(model_->vocab_size()),
+                model_->vocab_size(),
+                debug_top_k);
+
+            std::cerr << "{\"event\":\"tinyllm_model_runner_logits\",";
+            std::cerr << "\"step\":" << debug_step_index_ << ",";
+            std::cerr << "\"req_id\":" << prepared_req_ids_[i] << ",";
+            std::cerr << "\"sample_index\":" << i << ",";
+            std::cerr << "\"sample_row\":" << row << ",";
+            std::cerr << "\"position\":" << position_ptr[row] << ",";
+            std::cerr << "\"slot\":" << slot_ptr[row] << ",";
+            std::cerr << "\"seq_index\":" << seq_index << ",";
+            std::cerr << "\"context_len\":"
+                      << ((seq_index >= 0 && seq_index < context_lens_cpu.numel()) ? context_ptr[seq_index] : -1)
+                      << ",";
+            std::cerr << "\"repetition_penalty\":" << prepared_sampling_params_[i].repetition_penalty << ",";
+            std::cerr << "\"top_tokens\":[";
+            for (size_t j = 0; j < top_tokens.size(); ++j)
+            {
+                if (j != 0) std::cerr << ",";
+                std::cerr << top_tokens[j];
+            }
+            std::cerr << "],\"top_logits\":[";
+            for (size_t j = 0; j < top_tokens.size(); ++j)
+            {
+                if (j != 0) std::cerr << ",";
+                std::cerr << logits_ptr[static_cast<size_t>(row) * static_cast<size_t>(model_->vocab_size()) + static_cast<size_t>(top_tokens[j])];
+            }
+            std::cerr << "],\"top_in_history\":[";
+            for (size_t j = 0; j < top_tokens.size(); ++j)
+            {
+                if (j != 0) std::cerr << ",";
+                std::cerr << (token_in_history(top_tokens[j], prepared_token_histories_[i]) ? "true" : "false");
+            }
+            std::cerr << "],\"layer0_blocks\":[";
+            if (seq_index >= 0 && seq_index < num_seqs)
+            {
+                const int64_t block_limit = std::min<int64_t>(max_blocks_per_seq, 8);
+                bool first = true;
+                for (int64_t col = 0; col < block_limit; ++col)
+                {
+                    const int32_t block_id = block_ptr[static_cast<int64_t>(seq_index) * max_blocks_per_seq + col];
+                    if (block_id < 0) break;
+                    if (!first) std::cerr << ",";
+                    first = false;
+                    std::cerr << block_id;
+                }
+            }
+            std::cerr << "]}\n";
+        }
+        ++debug_step_index_;
+    }
 
     const double model_ms = elapsed_profile_ms(model_start, model_end);
     const int64_t model_tokens = prefill_tokens + decode_tokens;
@@ -625,7 +758,9 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     std::vector<int32_t> sampled_rows = sample_greedy_rows(
         logits,
         inputs.sample_row_offsets,
-        model_->vocab_size());
+        model_->vocab_size(),
+        &prepared_token_histories_,
+        &prepared_sampling_params_);
     synchronize_for_profile(runtime_device);
     const auto sampling_end = ProfileClock::now();
     output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);

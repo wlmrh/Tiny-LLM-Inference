@@ -1,3 +1,4 @@
+#include "tiny_llm/runtime/generation_config.h"
 #include "tiny_llm/runtime/llm.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
@@ -314,10 +315,13 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
 {
     RepeatMetrics metrics;
 
+    const tiny_llm::GenerationConfig generation_config =
+        tiny_llm::load_generation_config_from_dir(options.model_dir.string());
     tiny_llm::UserSamplingParams sampling_params;
     sampling_params.temperature = 0.0f;
     sampling_params.top_p = 1.0f;
     sampling_params.top_k = 0;
+    sampling_params.repetition_penalty = generation_config.repetition_penalty;
     sampling_params.max_tokens = options.max_new_tokens;
 
     bool saw_first_token = false;

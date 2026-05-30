@@ -21,6 +21,7 @@ struct UserSamplingParams {
     float temperature = 0.0f;
     float top_p = 1.0f;
     int32_t top_k = 0;
+    float repetition_penalty = 1.0f;
     int32_t max_tokens = 32;
     std::vector<int32_t> stop_token_ids;
 };
@@ -32,6 +33,7 @@ struct SamplingParams {
     float temperature = 0.0f;
     float top_p = 1.0f;
     int32_t top_k = 0;
+    float repetition_penalty = 1.0f;
     int32_t max_tokens = 32;
     std::vector<int32_t> stop_token_ids;
 };

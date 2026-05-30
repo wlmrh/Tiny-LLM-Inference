@@ -55,6 +55,9 @@ if (TINYLLM_ENABLE_CUDA)
         "${TINYLLM_TEST_UNIT_DIR}/test_paged_attention_cuda.cpp")
 endif()
 
+tinyllm_add_gtest(test_sampler
+    "${TINYLLM_TEST_UNIT_DIR}/test_sampler.cpp")
+
 tinyllm_add_gtest(test_model_runner_prepared_inputs
     "${TINYLLM_TEST_UNIT_DIR}/test_model_runner_prepared_inputs.cpp")
 

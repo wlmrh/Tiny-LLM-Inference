@@ -45,6 +45,9 @@ private:
     int32_t kv_block_size_tokens_ = 16;
 
     std::vector<uint64_t> prepared_req_ids_;
+    std::vector<SamplingParams> prepared_sampling_params_;
+    std::vector<std::vector<int32_t>> prepared_token_histories_;
+    int64_t debug_step_index_ = 0;
 };
 
 } // namespace tiny_llm

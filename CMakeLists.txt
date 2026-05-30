@@ -104,6 +104,7 @@ add_library(tiny_llm STATIC
     src/runtime/engine_core.cpp
     src/runtime/engine.cpp
     src/runtime/llm.cpp
+    src/runtime/generation_config.cpp
     
     # --- Operators 模块 ---
     src/operators/rmsnorm/rmsnorm.cpp

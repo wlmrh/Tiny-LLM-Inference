@@ -40,6 +40,8 @@ struct RequestData {
     bool is_prefill = false; // Whether this scheduled chunk is still processing prompt tokens.
     std::vector<int32_t> block_ids; // 该请求的映射表，将逻辑上的 block id 映射到物理块编号
     std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id
+    SamplingParams sampling_params;
+    std::vector<int32_t> all_token_ids;
 };
 
 /**

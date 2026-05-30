@@ -10,6 +10,7 @@
 #include "tiny_llm/core/allocator.h"
 #include "tiny_llm/models/hf_llama_config_loader.h"
 #include "tiny_llm/runtime/engine.h"
+#include "tiny_llm/runtime/generation_config.h"
 #include "tiny_llm/runtime/parallel_config.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
@@ -270,9 +271,12 @@ int main(int argc, char** argv)
 
         tiny_llm::LLMEngine engine(engine_args);
         tiny_llm::UserSamplingParams sampling_params;
+        const tiny_llm::GenerationConfig generation_config =
+            tiny_llm::load_generation_config_from_dir(model_dir.string());
         sampling_params.temperature = 0.0f;
         sampling_params.top_p = 1.0f;
         sampling_params.top_k = 0;
+        sampling_params.repetition_penalty = generation_config.repetition_penalty;
         sampling_params.max_tokens = max_new_tokens;
 
         struct PendingPrompt {
