@@ -34,6 +34,14 @@ void apply_rope(const Tensor& positions,
                 float rope_scaling_high_freq_factor = 1.0f,
                 int32_t rope_scaling_original_max_position_embeddings = 0);
 
+void apply_rope(const Tensor& positions,
+                Tensor& q,
+                Tensor& k,
+                int32_t num_attention_heads,
+                int32_t num_key_value_heads,
+                int32_t head_dim,
+                const Tensor& inv_freq);
+
 void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out);
 
 void copy_tensor(const Tensor& src, Tensor& dst);

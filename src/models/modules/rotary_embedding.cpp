@@ -2,6 +2,7 @@
 
 #include "tiny_llm/operators/llama_ops.h"
 
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -34,6 +35,46 @@ RotaryEmbedding::RotaryEmbedding(int32_t num_attention_heads,
     }
 }
 
+Tensor RotaryEmbedding::inv_freq_for_device(const c10::Device& device) const
+{
+    if (cached_inv_freq_.defined() && cached_inv_freq_.device() == device)
+    {
+        return cached_inv_freq_;
+    }
+
+    const int64_t rotary_half = head_dim_ / 2;
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+    const Tensor dim = torch::arange(rotary_half, options);
+    const Tensor exponent = dim * (2.0f / static_cast<float>(head_dim_));
+    const Tensor base = torch::full({rotary_half}, rope_theta_, options);
+    Tensor inv_freq = 1.0f / torch::pow(base, exponent);
+    if (rope_scaling_type_ == "llama3")
+    {
+        const float low_freq_wavelen =
+            static_cast<float>(rope_scaling_original_max_position_embeddings_) / rope_scaling_low_freq_factor_;
+        const float high_freq_wavelen =
+            static_cast<float>(rope_scaling_original_max_position_embeddings_) / rope_scaling_high_freq_factor_;
+        const Tensor wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
+        const Tensor smooth_factor =
+            (static_cast<float>(rope_scaling_original_max_position_embeddings_) / wavelen
+             - rope_scaling_low_freq_factor_)
+            / (rope_scaling_high_freq_factor_ - rope_scaling_low_freq_factor_);
+        const Tensor medium_freq =
+            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor_) + smooth_factor * inv_freq;
+        inv_freq = torch::where(
+            wavelen > low_freq_wavelen,
+            inv_freq / rope_scaling_factor_,
+            torch::where(wavelen < high_freq_wavelen, inv_freq, medium_freq));
+    }
+    else if (!rope_scaling_type_.empty())
+    {
+        inv_freq = inv_freq / rope_scaling_factor_;
+    }
+
+    cached_inv_freq_ = inv_freq.contiguous();
+    return cached_inv_freq_;
+}
+
 void RotaryEmbedding::forward(const Tensor& positions, Tensor& q, Tensor& k) const
 {
     ops::apply_rope(
@@ -43,12 +84,7 @@ void RotaryEmbedding::forward(const Tensor& positions, Tensor& q, Tensor& k) con
         num_attention_heads_,
         num_key_value_heads_,
         head_dim_,
-        rope_theta_,
-        rope_scaling_type_.c_str(),
-        rope_scaling_factor_,
-        rope_scaling_low_freq_factor_,
-        rope_scaling_high_freq_factor_,
-        rope_scaling_original_max_position_embeddings_);
+        inv_freq_for_device(q.device()));
 }
 
 } // namespace modules

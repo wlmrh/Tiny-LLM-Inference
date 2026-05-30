@@ -46,9 +46,13 @@ public:
 private:
     void validate_forward_inputs(const Tensor& input, const Tensor& output) const;
     void validate_descs(const StackedWeightDesc* descs, int32_t count) const;
+    void build_stacked_weight_cache();
 
     StackedWeightDesc single_weight_{};
     std::vector<StackedWeightDesc> stacked_weights_;
+    Tensor stacked_weight_cache_;
+    Tensor stacked_bias_cache_;
+    WeightLayout stacked_weight_cache_layout_ = WeightLayout::kInOut;
     bool use_stacked_weights_ = false;
     int32_t in_features_ = 0;
     int32_t out_features_total_ = 0;

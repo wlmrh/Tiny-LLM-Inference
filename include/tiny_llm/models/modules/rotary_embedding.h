@@ -23,6 +23,8 @@ public:
     void forward(const Tensor& positions, Tensor& q, Tensor& k) const;
 
 private:
+    Tensor inv_freq_for_device(const c10::Device& device) const;
+
     int32_t num_attention_heads_ = 0;
     int32_t num_key_value_heads_ = 0;
     int32_t head_dim_ = 0;
@@ -32,6 +34,7 @@ private:
     float rope_scaling_low_freq_factor_ = 1.0f;
     float rope_scaling_high_freq_factor_ = 1.0f;
     int32_t rope_scaling_original_max_position_embeddings_ = 0;
+    mutable Tensor cached_inv_freq_;
 };
 
 } // namespace modules

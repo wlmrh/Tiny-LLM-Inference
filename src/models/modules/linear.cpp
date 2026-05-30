@@ -157,6 +157,8 @@ void Linear::bind_weight(const Tensor& weight, WeightLayout layout)
         Tensor{},
     };
     stacked_weights_.clear();
+    stacked_weight_cache_ = Tensor{};
+    stacked_bias_cache_ = Tensor{};
     use_stacked_weights_ = false;
 }
 
@@ -191,6 +193,8 @@ void Linear::bind_weight(float* weight,
         Tensor{},
     };
     stacked_weights_.clear();
+    stacked_weight_cache_ = Tensor{};
+    stacked_bias_cache_ = Tensor{};
     use_stacked_weights_ = false;
 }
 
@@ -221,6 +225,7 @@ void Linear::bind_stacked_weights(const StackedWeightDesc* descs, int32_t count)
         stacked_weights_.push_back(std::move(desc));
     }
     use_stacked_weights_ = true;
+    build_stacked_weight_cache();
 }
 
 Tensor Linear::forward(const Tensor& input, ExecutionContext& ctx) const
@@ -281,6 +286,28 @@ void Linear::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx)
                     out_col,
                     single_weight_.layout);
             }
+        }
+        return;
+    }
+
+    if (stacked_weight_cache_.defined()
+        && needs_torch_matmul_path(input, output, stacked_weight_cache_))
+    {
+        if (stacked_weight_cache_layout_ == WeightLayout::kInOut)
+        {
+            ops::gemm(input, stacked_weight_cache_, output, ctx);
+        }
+        else
+        {
+            run_out_in_matmul(input, stacked_weight_cache_, output);
+        }
+        if (stacked_bias_cache_.defined())
+        {
+            if (output.device() != stacked_bias_cache_.device())
+            {
+                throw std::runtime_error("modules::Linear::forward: output and stacked bias devices must match.");
+            }
+            output.add_(stacked_bias_cache_);
         }
         return;
     }
@@ -382,6 +409,56 @@ void Linear::validate_forward_inputs(const Tensor& input, const Tensor& output) 
     if (use_stacked_weights_ && stacked_weights_.empty())
     {
         throw std::runtime_error("modules::Linear::forward: stacked weights are not bound.");
+    }
+}
+
+void Linear::build_stacked_weight_cache()
+{
+    stacked_weight_cache_ = Tensor{};
+    stacked_bias_cache_ = Tensor{};
+    if (stacked_weights_.empty())
+    {
+        return;
+    }
+
+    const WeightLayout layout = stacked_weights_.front().layout;
+    std::vector<Tensor> weights;
+    weights.reserve(stacked_weights_.size());
+    std::vector<Tensor> biases;
+    biases.reserve(stacked_weights_.size());
+    bool has_any_bias = false;
+    for (const StackedWeightDesc& desc : stacked_weights_)
+    {
+        if (desc.layout != layout || !desc.weight.defined())
+        {
+            return;
+        }
+        weights.push_back(desc.weight);
+        if (desc.bias.defined())
+        {
+            has_any_bias = true;
+            biases.push_back(desc.bias);
+        }
+        else
+        {
+            biases.push_back(torch::zeros(
+                {desc.out_features},
+                torch::TensorOptions().dtype(torch::kFloat32).device(desc.weight.device())));
+        }
+    }
+
+    const int64_t cat_dim = layout == WeightLayout::kInOut ? 1 : 0;
+    stacked_weight_cache_ = register_parameter(
+        "stacked_weight_cache",
+        torch::cat(weights, cat_dim).contiguous(),
+        /*requires_grad=*/false);
+    stacked_weight_cache_layout_ = layout;
+    if (has_any_bias)
+    {
+        stacked_bias_cache_ = register_parameter(
+            "stacked_bias_cache",
+            torch::cat(biases, 0).contiguous(),
+            /*requires_grad=*/false);
     }
 }
 
