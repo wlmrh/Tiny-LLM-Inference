@@ -228,12 +228,9 @@ LlamaMLP::LlamaMLP(const LlamaConfig& config)
     {
         throw std::runtime_error("LlamaMLP: only silu hidden_act is supported in Phase 3.");
     }
-    gate_proj_ = register_module(
-        "gate_proj",
-        std::make_shared<modules::Linear>(config.hidden_size, config.intermediate_size));
-    up_proj_ = register_module(
-        "up_proj",
-        std::make_shared<modules::Linear>(config.hidden_size, config.intermediate_size));
+    gate_up_proj_ = register_module(
+        "gate_up_proj",
+        std::make_shared<modules::Linear>(config.hidden_size, 2 * config.intermediate_size));
     down_proj_ = register_module(
         "down_proj",
         std::make_shared<modules::Linear>(config.intermediate_size, config.hidden_size));
@@ -241,8 +238,27 @@ LlamaMLP::LlamaMLP(const LlamaConfig& config)
 
 void LlamaMLP::load_weights(const WeightMap& weight_map, const std::string& prefix)
 {
-    gate_proj_->bind_weight(weight_map.get_tensor_view(prefix + "mlp.gate_proj.weight"), modules::WeightLayout::kOutIn);
-    up_proj_->bind_weight(weight_map.get_tensor_view(prefix + "mlp.up_proj.weight"), modules::WeightLayout::kOutIn);
+    gate_up_descs_[0] = {
+        nullptr,
+        config_.intermediate_size,
+        config_.hidden_size,
+        0,
+        modules::WeightLayout::kOutIn,
+        weight_map.get_tensor_view(prefix + "mlp.gate_proj.weight"),
+        Tensor{},
+    };
+    gate_up_descs_[1] = {
+        nullptr,
+        config_.intermediate_size,
+        config_.hidden_size,
+        config_.intermediate_size,
+        modules::WeightLayout::kOutIn,
+        weight_map.get_tensor_view(prefix + "mlp.up_proj.weight"),
+        Tensor{},
+    };
+    gate_up_proj_->bind_stacked_weights(
+        gate_up_descs_.data(),
+        static_cast<int32_t>(gate_up_descs_.size()));
     down_proj_->bind_weight(weight_map.get_tensor_view(prefix + "mlp.down_proj.weight"), modules::WeightLayout::kOutIn);
 }
 
@@ -253,9 +269,10 @@ void LlamaMLP::forward(const Tensor& hidden_states,
     validate_forward_inputs(hidden_states, buffers);
     {
         ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::mlp_ms);
-        gate_proj_->forward(hidden_states, buffers.gate, ctx.execution());
-        up_proj_->forward(hidden_states, buffers.up, ctx.execution());
-        apply_activation(buffers.gate, buffers.up, buffers.activated);
+        gate_up_proj_->forward(hidden_states, buffers.gate_up, ctx.execution());
+        Tensor gate = buffers.gate_up.narrow(1, 0, config_.intermediate_size);
+        Tensor up = buffers.gate_up.narrow(1, config_.intermediate_size, config_.intermediate_size);
+        apply_activation(gate, up, buffers.activated);
         down_proj_->forward(buffers.activated, buffers.down, ctx.execution());
     }
 }
@@ -265,6 +282,7 @@ void LlamaMLP::validate_forward_inputs(const Tensor& hidden_states,
 {
     const int64_t rows = hidden_states.size(0);
     validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaMLP::hidden_states");
+    validate_float_tensor_2d(buffers.gate_up, rows, 2 * config_.intermediate_size, "LlamaMLP::gate_up");
     validate_float_tensor_2d(buffers.gate, rows, config_.intermediate_size, "LlamaMLP::gate");
     validate_float_tensor_2d(buffers.up, rows, config_.intermediate_size, "LlamaMLP::up");
     validate_float_tensor_2d(buffers.activated, rows, config_.intermediate_size, "LlamaMLP::activated");

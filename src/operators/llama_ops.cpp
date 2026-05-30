@@ -5,8 +5,35 @@
 #include <stdexcept>
 #include <string>
 
+#if TINYLLM_ENABLE_CUDA
+#include <ATen/cuda/CUDAContext.h>
+#endif
+
 namespace tiny_llm {
 namespace ops {
+
+#if TINYLLM_ENABLE_CUDA
+namespace cuda {
+void launch_apply_rope_cached_f32(const int32_t* positions,
+                                  float* q,
+                                  float* k,
+                                  const float* cos_cache,
+                                  const float* sin_cache,
+                                  int64_t rows,
+                                  int32_t num_attention_heads,
+                                  int32_t num_key_value_heads,
+                                  int32_t head_dim,
+                                  int64_t cache_rows,
+                                  int64_t q_stride,
+                                  int64_t k_stride,
+                                  cudaStream_t stream);
+void launch_silu_multiply_f32(const float* gate,
+                              const float* up,
+                              float* out,
+                              int64_t numel,
+                              cudaStream_t stream);
+}
+#endif
 
 namespace {
 
@@ -173,6 +200,35 @@ void run_apply_rope_device_with_cache(const Tensor& positions,
                                       const Tensor& sin_cache)
 {
     validate_same_device({std::cref(positions), std::cref(q), std::cref(k), std::cref(cos_cache), std::cref(sin_cache)}, "apply_rope");
+#if TINYLLM_ENABLE_CUDA
+    if (positions.device().is_cuda()
+        && q.device().is_cuda()
+        && k.device().is_cuda()
+        && cos_cache.device().is_cuda()
+        && sin_cache.device().is_cuda()
+        && positions.is_contiguous()
+        && q.is_contiguous()
+        && k.is_contiguous()
+        && cos_cache.is_contiguous()
+        && sin_cache.is_contiguous())
+    {
+        cuda::launch_apply_rope_cached_f32(
+            positions.data_ptr<int32_t>(),
+            q.data_ptr<float>(),
+            k.data_ptr<float>(),
+            cos_cache.data_ptr<float>(),
+            sin_cache.data_ptr<float>(),
+            q.size(0),
+            num_attention_heads,
+            num_key_value_heads,
+            head_dim,
+            cos_cache.size(0),
+            q.stride(0),
+            k.stride(0),
+            at::cuda::getCurrentCUDAStream(q.device().index()));
+        return;
+    }
+#endif
     const int64_t rows = q.size(0);
     const int64_t rotary_half = head_dim / 2;
     const Tensor positions_long = positions.to(torch::TensorOptions().dtype(torch::kInt64).device(positions.device()));
@@ -745,6 +801,21 @@ void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out)
     if (any_cuda({std::cref(gate), std::cref(up), std::cref(out)}))
     {
         validate_same_device({std::cref(gate), std::cref(up), std::cref(out)}, "silu_multiply");
+#if TINYLLM_ENABLE_CUDA
+        if (gate.device().is_cuda()
+            && gate.is_contiguous()
+            && up.is_contiguous()
+            && out.is_contiguous())
+        {
+            cuda::launch_silu_multiply_f32(
+                gate.data_ptr<float>(),
+                up.data_ptr<float>(),
+                out.data_ptr<float>(),
+                static_cast<int64_t>(tensor_numel(gate)),
+                at::cuda::getCurrentCUDAStream(gate.device().index()));
+            return;
+        }
+#endif
         out.copy_((gate / (1.0f + torch::exp(-gate))) * up);
         return;
     }

@@ -97,6 +97,7 @@ void LlamaModel::allocate_buffers(int max_batch_size, const ParallelConfig& para
     buffers_.layer.attention.attn_input = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
     buffers_.layer.attention.attn_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
     buffers_.layer.attention.proj_output = make_owned_tensor({max_batch_size, config_.hidden_size}, DType::kFloat32, device);
+    buffers_.layer.mlp.gate_up = make_owned_tensor({max_batch_size, 2 * config_.intermediate_size}, DType::kFloat32, device);
     buffers_.layer.mlp.gate = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32, device);
     buffers_.layer.mlp.up = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32, device);
     buffers_.layer.mlp.activated = make_owned_tensor({max_batch_size, config_.intermediate_size}, DType::kFloat32, device);
@@ -187,6 +188,7 @@ LlamaModelBuffers LlamaModel::make_batch_buffers(int batch_size) const
     out.layer.attention.attn_input = make_batch_view_2d(buffers_.layer.attention.attn_input, batch_size, config_.hidden_size);
     out.layer.attention.attn_output = make_batch_view_2d(buffers_.layer.attention.attn_output, batch_size, config_.hidden_size);
     out.layer.attention.proj_output = make_batch_view_2d(buffers_.layer.attention.proj_output, batch_size, config_.hidden_size);
+    out.layer.mlp.gate_up = make_batch_view_2d(buffers_.layer.mlp.gate_up, batch_size, 2 * config_.intermediate_size);
     out.layer.mlp.gate = make_batch_view_2d(buffers_.layer.mlp.gate, batch_size, config_.intermediate_size);
     out.layer.mlp.up = make_batch_view_2d(buffers_.layer.mlp.up, batch_size, config_.intermediate_size);
     out.layer.mlp.activated = make_batch_view_2d(buffers_.layer.mlp.activated, batch_size, config_.intermediate_size);

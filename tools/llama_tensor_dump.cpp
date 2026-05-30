@@ -179,8 +179,17 @@ int main(int argc, char** argv)
             layer->copy_tensor(buffers.hidden_states, buffers.layer.residual);
             layer->post_attention_layernorm_->forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "post_attn_norm"), buffers.layer.norm_output);
-            layer->mlp_->gate_proj_->forward(buffers.layer.norm_output, buffers.layer.mlp.gate, ctx);
-            layer->mlp_->up_proj_->forward(buffers.layer.norm_output, buffers.layer.mlp.up, ctx);
+            layer->mlp_->gate_up_proj_->forward(buffers.layer.norm_output, buffers.layer.mlp.gate_up, ctx);
+            buffers.layer.mlp.gate.copy_(
+                buffers.layer.mlp.gate_up.narrow(
+                    1,
+                    0,
+                    model.config().intermediate_size));
+            buffers.layer.mlp.up.copy_(
+                buffers.layer.mlp.gate_up.narrow(
+                    1,
+                    model.config().intermediate_size,
+                    model.config().intermediate_size));
             layer->mlp_->apply_activation(buffers.layer.mlp.gate, buffers.layer.mlp.up, buffers.layer.mlp.activated);
             layer->mlp_->down_proj_->forward(buffers.layer.mlp.activated, buffers.layer.mlp.down, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "mlp_gate"), buffers.layer.mlp.gate);

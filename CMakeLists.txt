@@ -136,6 +136,7 @@ if (TINYLLM_ENABLE_CUDA)
         src/core/cuda/cuda_allocator.cpp
         src/operators/rmsnorm/rmsnorm.cu
         src/operators/matmul/gemm_kernels.cu
+        src/operators/llama_ops_kernels.cu
         src/operators/paged_attention/paged_attention_kernels.cu
     )
     target_compile_definitions(tiny_llm PUBLIC TINYLLM_ENABLE_CUDA=1)

@@ -26,6 +26,7 @@ struct LlamaAttentionBuffers {
 };
 
 struct LlamaMLPBuffers {
+    Tensor gate_up;
     Tensor gate;
     Tensor up;
     Tensor activated;
@@ -85,8 +86,8 @@ private:
     void apply_activation(const Tensor& gate, const Tensor& up, Tensor& activated) const;
 
     LlamaConfig config_;
-    std::shared_ptr<modules::Linear> gate_proj_;
-    std::shared_ptr<modules::Linear> up_proj_;
+    std::array<modules::StackedWeightDesc, 2> gate_up_descs_{};
+    std::shared_ptr<modules::Linear> gate_up_proj_;
     std::shared_ptr<modules::Linear> down_proj_;
 };
 
