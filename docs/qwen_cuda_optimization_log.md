@@ -340,3 +340,95 @@ benchmark/results/regression_after_cuda_perf_20260531_005321.json
 - `754b2aa perf: cache rope cos sin tables`
 - `e29328e perf: add qkv cache control and cuda memory metrics`
 - `cb883a8 docs: update qwen cuda optimization results`
+
+## Optimization 9: RoPE Apply Kernel and MLP Projection Fusion
+
+### Optimization Point
+
+The previous stage proved that the short attention fast path helped quick decode, but quick was too small to represent steady serving behavior. A follow-up `regression --profile-detail` and a TinyLLM-only `decode_heavy` profile showed two different regimes:
+
+- `chat_serving`: MLP and attention dominate; RoPE is no longer the largest bucket after cached cos/sin.
+- `decode_heavy`: attention dominates long decode, followed by MLP; RoPE is a smaller but still measurable cost.
+
+### Strategy
+
+Replace the cached RoPE CUDA application path with a dedicated kernel. The old cache avoided rebuilding `cos/sin`, but still used libtorch `index_select`, narrow views, clones, and `copy_`. The new kernel rotates q/k in place from `positions`, `cos_cache`, and `sin_cache`.
+
+Fuse the MLP gate/up projections through the existing stacked `Linear` path. This turns gate and up into one combined projection output, then applies a dedicated CUDA `silu_multiply` kernel before the down projection. The public model API is unchanged, and `llama_tensor_dump` was updated to keep dumping `mlp_gate` and `mlp_up`.
+
+### Files
+
+- `src/operators/llama_ops_kernels.cu`
+- `src/operators/llama_ops.cpp`
+- `include/tiny_llm/models/llama_decoder_layer.h`
+- `src/models/llama_layer.cpp`
+- `src/models/llama_model.cpp`
+- `tools/llama_tensor_dump.cpp`
+- `tests/unit/test_llama_ops.cpp`
+
+### Before/After
+
+| Metric, quick_batch | After attention/RoPE/memory | After RoPE kernel + MLP fuse |
+| --- | ---: | ---: |
+| `avg_total_latency_ms` | `331.383` | `311.352` |
+| `avg_first_token_latency_ms` | `203.586` | `186.749` |
+| `sampling_ms` | `27.655` | `28.725` |
+| `decode_ms_total` | `123.884` | `119.895` |
+
+| Metric, profile-detail quick_batch | After attention/RoPE/memory | After RoPE kernel |
+| --- | ---: | ---: |
+| `attention_ms` | `22.831` | `22.618` |
+| `rope_ms` | `82.603` | `45.154` |
+| `qkv_proj_ms` | `79.041` | `83.349` |
+| `mlp_ms` | `67.552` | `78.818` |
+
+The quick profile after MLP fusion was not preserved because later profile runs reused the same output directory. The preserved quick correctness report is:
+
+```text
+benchmark/results/quick_after_mlp_fuse_20260531_014536.json
+```
+
+### Serving-Like Profile
+
+| Workload, profile-detail | Before MLP fuse `mlp_ms` | After MLP fuse `mlp_ms` | After total latency |
+| --- | ---: | ---: | ---: |
+| `interactive` | `402.905` | `370.906` | `828.972` |
+| `chat_serving` | `911.199` | `891.667` | `2262.529` |
+
+The preserved regression profile is:
+
+```text
+/tmp/tinyllm_regression_profile_mlp/regression_profile_after_mlp_fuse_20260531_014934.json
+```
+
+### Regression Gate
+
+The non-profile regression gate completed under the 900 second timeout:
+
+```text
+benchmark/results/regression_after_next_perf_20260531_015332.json
+```
+
+| Workload | Previous regression total | After RoPE kernel + MLP fuse total | `decode_ms_total` | `decode_ms_per_token` |
+| --- | ---: | ---: | ---: | ---: |
+| `interactive` | `750.826` | `649.746` | `587.789` | `9.330` |
+| `chat_serving` | `2098.704` | `1889.914` | `1446.261` | `1.423` |
+
+### Decode-Heavy Profile
+
+The TinyLLM-only `decode_heavy` profile confirms that long decode is now attention-bound:
+
+| Workload | `avg_total_latency_ms` | `attention_ms` | `mlp_ms` | `rope_ms` | `qkv_proj_ms` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `decode_heavy` | `7751.625` | `3979.134` | `1716.856` | `104.928` | `429.916` |
+
+The preserved decode-heavy profile is:
+
+```text
+/tmp/tinyllm_profile_results/decode_heavy_profile_after_mlp_fuse_20260531_014821.json
+```
+
+### Notes
+
+- The RoPE kernel is the clearer win in this stage; it cuts quick profile `rope_ms` from `82.603` to `45.154`.
+- MLP fusion is modest in serving-like profile and not the next primary target. Long decode remains dominated by paged attention.
