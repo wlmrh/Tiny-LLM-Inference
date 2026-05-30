@@ -138,3 +138,30 @@ TEST(SchedulerTest, StopsByStopTokenAndCleansFinishedRequest)
     EXPECT_TRUE(empty.scheduled_reqs.empty());
     EXPECT_EQ(empty.total_num_scheduled_tokens, 0);
 }
+
+
+TEST(SchedulerTest, PreemptedRequestRecomputesPromptAndGeneratedContext)
+{
+    SchedulerFixture fixture(8, 2);
+    fixture.add_request(1, {10, 11}, 2);
+    fixture.add_request(2, {20, 21}, 3);
+
+    tiny_llm::SchedulerOutput prefill = fixture.scheduler.schedule();
+    ASSERT_EQ(prefill.scheduled_reqs.size(), 2u);
+    auto prefill_outputs = fixture.scheduler.update_from_output(prefill, sampled({{1, 100}, {2, 200}}));
+    ASSERT_EQ(prefill_outputs.size(), 2u);
+
+    tiny_llm::SchedulerOutput decode_first = fixture.scheduler.schedule();
+    ASSERT_EQ(decode_first.scheduled_reqs.size(), 1u);
+    EXPECT_EQ(decode_first.scheduled_reqs[0].req_id, 1u);
+    auto decode_outputs = fixture.scheduler.update_from_output(decode_first, sampled({{1, 101}}));
+    ASSERT_EQ(decode_outputs.size(), 1u);
+    EXPECT_TRUE(fixture.scheduler.has_unfinished_requests());
+
+    tiny_llm::SchedulerOutput recompute = fixture.scheduler.schedule();
+    ASSERT_EQ(recompute.scheduled_reqs.size(), 1u);
+    EXPECT_EQ(recompute.scheduled_reqs[0].req_id, 2u);
+    EXPECT_TRUE(recompute.scheduled_reqs[0].is_prefill);
+    EXPECT_EQ(recompute.scheduled_reqs[0].num_computed_tokens, 0);
+    EXPECT_EQ(recompute.scheduled_reqs[0].new_token_ids, std::vector<int32_t>({20, 21, 200}));
+}

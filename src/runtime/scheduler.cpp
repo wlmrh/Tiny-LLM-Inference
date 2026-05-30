@@ -20,9 +20,9 @@ int to_output_key(uint64_t request_id)
     return static_cast<int>(request_id);
 }
 
-int32_t prompt_token_count(const Request& request)
+int32_t context_token_count(const Request& request)
 {
-    return static_cast<int32_t>(request.prompt_token_ids.size());
+    return static_cast<int32_t>(request._all_token_ids.size());
 }
 
 Request* find_request(std::map<int64_t, Request>& requests, uint64_t request_id)
@@ -604,11 +604,11 @@ SchedulerOutput Scheduler::schedule()
         }
 
         const int32_t core_seq_id = static_cast<int32_t>(request_id);
-        const int32_t prompt_tokens = prompt_token_count(*req);
+        const int32_t context_tokens = context_token_count(*req);
 
-        if (req->num_computed < prompt_tokens)
+        if (req->num_computed < context_tokens)
         {// 处于 prefilling 阶段
-            const int32_t remaining_prefill = prompt_tokens - req->num_computed;
+            const int32_t remaining_prefill = context_tokens - req->num_computed;
             const int32_t chunk = std::min(remaining_prefill, static_cast<int32_t>(remaining_token_budget)); // 本轮调度的 token 数量
             if (!try_allocate_with_tail_preempt(*req, chunk, true))
             {
@@ -633,7 +633,7 @@ SchedulerOutput Scheduler::schedule()
             for (int32_t i = 0; i < chunk; ++i)
             {
                 const int32_t prompt_index = req->num_computed + i;
-                req_data.new_token_ids.push_back(req->prompt_token_ids[static_cast<size_t>(prompt_index)]);
+                req_data.new_token_ids.push_back(req->_all_token_ids[static_cast<size_t>(prompt_index)]);
             }
 
             scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
@@ -696,8 +696,8 @@ SchedulerOutput Scheduler::schedule()
             }
 
             const int32_t core_seq_id = static_cast<int32_t>(request_id);
-            const int32_t prompt_tokens = prompt_token_count(*req);
-            const int32_t remaining_prefill = prompt_tokens - req->num_computed;
+            const int32_t context_tokens = context_token_count(*req);
+            const int32_t remaining_prefill = context_tokens - req->num_computed;
 
             if (remaining_prefill <= 0)
             {
@@ -758,7 +758,7 @@ SchedulerOutput Scheduler::schedule()
             for (int32_t i = 0; i < chunk; ++i)
             {
                 const int32_t prompt_index = req->num_computed + i;
-                req_data.new_token_ids.push_back(req->prompt_token_ids[static_cast<size_t>(prompt_index)]);
+                req_data.new_token_ids.push_back(req->_all_token_ids[static_cast<size_t>(prompt_index)]);
             }
 
             scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
@@ -849,15 +849,15 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
             continue;
         }
 
-        const int32_t prompt_tokens = prompt_token_count(*req);
+        const int32_t context_tokens = context_token_count(*req);
         mark_running(*req);
 
-        const bool was_prefilling = req->num_computed < prompt_tokens;
+        const bool was_prefilling = req->num_computed < context_tokens;
         if (was_prefilling)
         {
-            const int32_t target_computed = std::min(prompt_tokens, req->num_computed + processed_tokens);
+            const int32_t target_computed = std::min(context_tokens, req->num_computed + processed_tokens);
             req->num_computed = target_computed;
-            if (req->num_computed < prompt_tokens)
+            if (req->num_computed < context_tokens)
             {
                 continue;
             }
