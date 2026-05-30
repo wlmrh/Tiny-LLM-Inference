@@ -621,6 +621,7 @@ SchedulerOutput Scheduler::schedule()
             RequestData req_data;
             req_data.req_id = request_id;
             req_data.num_computed_tokens = req->num_computed;
+            req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
             req_data.is_prefill = true;
             req_data.sampling_params = req->sampling_params;
             req_data.all_token_ids = req->_all_token_ids;
@@ -659,6 +660,7 @@ SchedulerOutput Scheduler::schedule()
         RequestData req_data;
         req_data.req_id = request_id;
         req_data.num_computed_tokens = req->num_computed;
+        req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
         req_data.is_prefill = false;
         req_data.sampling_params = req->sampling_params;
         req_data.all_token_ids = req->_all_token_ids;
@@ -718,6 +720,7 @@ SchedulerOutput Scheduler::schedule()
                 RequestData req_data;
                 req_data.req_id = request_id;
                 req_data.num_computed_tokens = req->num_computed;
+                req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
                 req_data.is_prefill = false;
                 req_data.sampling_params = req->sampling_params;
                 req_data.all_token_ids = req->_all_token_ids;
@@ -746,6 +749,7 @@ SchedulerOutput Scheduler::schedule()
             RequestData req_data;
             req_data.req_id = request_id;
             req_data.num_computed_tokens = req->num_computed;
+            req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
             req_data.is_prefill = true;
             req_data.sampling_params = req->sampling_params;
             req_data.all_token_ids = req->_all_token_ids;

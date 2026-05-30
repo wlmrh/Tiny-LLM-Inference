@@ -43,6 +43,114 @@ bool has_active_repetition_penalty(const std::vector<int32_t>& sample_rows,
     return false;
 }
 
+std::vector<int64_t> unique_valid_history_tokens(const std::vector<int32_t>& history, int32_t vocab_size)
+{
+    std::unordered_set<int32_t> seen_tokens;
+    seen_tokens.reserve(history.size());
+    std::vector<int64_t> unique_tokens;
+    unique_tokens.reserve(history.size());
+    for (int32_t token_id : history)
+    {
+        if (token_id < 0 || token_id >= vocab_size)
+        {
+            throw std::runtime_error("sample_greedy_rows: token history id is out of vocabulary range.");
+        }
+        if (seen_tokens.insert(token_id).second)
+        {
+            unique_tokens.push_back(static_cast<int64_t>(token_id));
+        }
+    }
+    return unique_tokens;
+}
+
+std::vector<int32_t> sample_cuda_rows_without_repetition_penalty(const Tensor& logits,
+                                                                 const std::vector<int32_t>& sample_rows)
+{
+    bool sample_rows_are_dense_prefix = static_cast<int64_t>(sample_rows.size()) == logits.size(0);
+    for (size_t i = 0; i < sample_rows.size() && sample_rows_are_dense_prefix; ++i)
+    {
+        sample_rows_are_dense_prefix = sample_rows[i] == static_cast<int32_t>(i);
+    }
+
+    Tensor sampled_tokens;
+    if (sample_rows_are_dense_prefix)
+    {
+        sampled_tokens = logits.argmax(/*dim=*/1);
+    }
+    else if (sample_rows.size() == 1)
+    {
+        sampled_tokens = logits.narrow(0, sample_rows.front(), 1).argmax(/*dim=*/1);
+    }
+    else
+    {
+        std::vector<int64_t> row_indices;
+        row_indices.reserve(sample_rows.size());
+        for (int32_t row : sample_rows)
+        {
+            row_indices.push_back(static_cast<int64_t>(row));
+        }
+        Tensor row_tensor = torch::tensor(
+            row_indices,
+            torch::TensorOptions().dtype(torch::kInt64).device(logits.device()));
+        sampled_tokens = logits.index_select(0, row_tensor).argmax(/*dim=*/1);
+    }
+
+    Tensor sampled_cpu = sampled_tokens.to(
+        torch::TensorOptions().dtype(torch::kInt32).device(c10::kCPU),
+        /*non_blocking=*/false,
+        /*copy=*/true).contiguous();
+    const int32_t* token_ptr = sampled_cpu.data_ptr<int32_t>();
+    return std::vector<int32_t>(token_ptr, token_ptr + sample_rows.size());
+}
+
+std::vector<int32_t> sample_cuda_rows_with_repetition_penalty(
+    const Tensor& logits,
+    const std::vector<int32_t>& sample_rows,
+    int32_t vocab_size,
+    const std::vector<std::vector<int32_t>>& token_histories,
+    const std::vector<SamplingParams>& sampling_params)
+{
+    std::vector<Tensor> sampled_per_row;
+    sampled_per_row.reserve(sample_rows.size());
+    const auto long_options = torch::TensorOptions().dtype(torch::kInt64).device(logits.device());
+    for (size_t sample_index = 0; sample_index < sample_rows.size(); ++sample_index)
+    {
+        const int32_t row = sample_rows[sample_index];
+        const float penalty = sampling_params[sample_index].repetition_penalty;
+        if (penalty <= 0.0f)
+        {
+            throw std::runtime_error("sample_greedy_rows: repetition penalty must be positive.");
+        }
+
+        Tensor row_logits = logits.narrow(0, row, 1).squeeze(0);
+        if (penalty != 1.0f && !token_histories[sample_index].empty())
+        {
+            row_logits = row_logits.clone();
+            const std::vector<int64_t> history_tokens =
+                unique_valid_history_tokens(token_histories[sample_index], vocab_size);
+            if (!history_tokens.empty())
+            {
+                Tensor token_indices = torch::tensor(history_tokens, long_options);
+                Tensor history_logits = row_logits.index_select(0, token_indices);
+                Tensor adjusted = torch::where(
+                    history_logits > 0.0f,
+                    history_logits / static_cast<double>(penalty),
+                    history_logits * static_cast<double>(penalty));
+                row_logits.index_put_({token_indices}, adjusted);
+            }
+        }
+        sampled_per_row.push_back(row_logits.argmax(/*dim=*/0).reshape({1}));
+    }
+
+    Tensor sampled_tokens = torch::cat(sampled_per_row, /*dim=*/0);
+    Tensor sampled_cpu = sampled_tokens.to(
+        torch::TensorOptions().dtype(torch::kInt32).device(c10::kCPU),
+        /*non_blocking=*/false,
+        /*copy=*/true).contiguous();
+    const int32_t* token_ptr = sampled_cpu.data_ptr<int32_t>();
+    return std::vector<int32_t>(token_ptr, token_ptr + sample_rows.size());
+}
+
 } // namespace
 
 float apply_repetition_penalty_to_logit(float logit, float penalty)
@@ -127,45 +235,19 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
 
     const bool apply_repetition_penalty =
         has_active_repetition_penalty(sample_rows, token_histories, sampling_params);
-    if (logits.device().is_cuda() && !apply_repetition_penalty)
+    if (logits.device().is_cuda())
     {
-        bool sample_rows_are_dense_prefix = static_cast<int64_t>(sample_rows.size()) == logits.size(0);
-        for (size_t i = 0; i < sample_rows.size() && sample_rows_are_dense_prefix; ++i)
-        {
-            sample_rows_are_dense_prefix = sample_rows[i] == static_cast<int32_t>(i);
-        }
-
-        Tensor sampled_tokens;
-        if (sample_rows_are_dense_prefix)
-        {
-            sampled_tokens = logits.argmax(/*dim=*/1);
-        }
-        else if (sample_rows.size() == 1)
-        {
-            sampled_tokens = logits.narrow(0, sample_rows.front(), 1).argmax(/*dim=*/1);
-        }
-        else
-        {
-            std::vector<int64_t> row_indices;
-            row_indices.reserve(sample_rows.size());
-            for (int32_t row : sample_rows)
-            {
-                row_indices.push_back(static_cast<int64_t>(row));
-            }
-            Tensor row_tensor = torch::tensor(
-                row_indices,
-                torch::TensorOptions().dtype(torch::kInt64).device(logits.device()));
-            sampled_tokens = logits.index_select(0, row_tensor).argmax(/*dim=*/1);
-        }
-
-        Tensor sampled_cpu = sampled_tokens.to(
-            torch::TensorOptions().dtype(torch::kInt32).device(c10::kCPU),
-            /*non_blocking=*/false,
-            /*copy=*/true).contiguous();
-        const int32_t* token_ptr = sampled_cpu.data_ptr<int32_t>();
+        const std::vector<int32_t> sampled_tokens = apply_repetition_penalty
+            ? sample_cuda_rows_with_repetition_penalty(
+                logits,
+                sample_rows,
+                vocab_size,
+                *token_histories,
+                *sampling_params)
+            : sample_cuda_rows_without_repetition_penalty(logits, sample_rows);
         for (size_t i = 0; i < sample_rows.size(); ++i)
         {
-            sampled[static_cast<size_t>(sample_rows[i])] = token_ptr[i];
+            sampled[static_cast<size_t>(sample_rows[i])] = sampled_tokens[i];
         }
         return sampled;
     }

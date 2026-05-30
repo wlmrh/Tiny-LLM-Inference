@@ -96,3 +96,33 @@ TEST(SamplerTest, RejectsHistoryTokenOutsideVocabulary)
 
     EXPECT_THROW(tiny_llm::sample_greedy_rows(logits, rows, 2, &histories, &params), std::runtime_error);
 }
+
+
+#if TINYLLM_ENABLE_CUDA
+TEST(SamplerTest, CudaRepetitionPenaltyMatchesCpuForNonDenseRows)
+{
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    tiny_llm::Tensor logits_cpu = torch::tensor(
+        {{0.0f, 5.0f, 4.6f, -1.0f},
+         {9.0f, 1.0f, 0.0f, 2.0f},
+         {3.0f, 2.0f, 4.0f, 3.8f}},
+        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits_cuda = logits_cpu.to(torch::kCUDA);
+    std::vector<int32_t> rows = {0, 2};
+    std::vector<std::vector<int32_t>> histories = {{1, 1}, {2}};
+    std::vector<tiny_llm::SamplingParams> params(2);
+    params[0].repetition_penalty = 2.0f;
+    params[1].repetition_penalty = 0.5f;
+
+    const std::vector<int32_t> cpu_sampled =
+        tiny_llm::sample_greedy_rows(logits_cpu, rows, 4, &histories, &params);
+    const std::vector<int32_t> cuda_sampled =
+        tiny_llm::sample_greedy_rows(logits_cuda, rows, 4, &histories, &params);
+
+    EXPECT_EQ(cuda_sampled, cpu_sampled);
+}
+#endif

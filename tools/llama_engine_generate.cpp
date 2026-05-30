@@ -93,6 +93,27 @@ size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig& config, int32_t block_s
     return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size * sizeof(float);
 }
 
+size_t estimate_kv_num_blocks(tiny_llm::HFLlamaTokenizer& tokenizer,
+                              const tiny_llm::LlamaConfig& config,
+                              int32_t block_size_tokens,
+                              int32_t max_new_tokens,
+                              int prompt_begin,
+                              int prompt_end,
+                              char** argv)
+{
+    size_t required = 0;
+    for (int arg = prompt_begin; arg < prompt_end; ++arg)
+    {
+        const int64_t prompt_tokens = static_cast<int64_t>(tokenizer.encode(argv[arg]).size());
+        const int64_t total_tokens = prompt_tokens + max_new_tokens;
+        const int64_t blocks_per_layer =
+            (total_tokens + block_size_tokens - 1) / block_size_tokens;
+        required += static_cast<size_t>(blocks_per_layer) * static_cast<size_t>(config.num_hidden_layers);
+    }
+    const size_t with_slack = (required * 6 + 4) / 5;
+    return with_slack < 256 ? 256 : with_slack;
+}
+
 bool has_safetensors_weight(const std::filesystem::path& model_dir)
 {
     if (std::filesystem::exists(model_dir / "model.safetensors"))
@@ -180,21 +201,51 @@ void print_json_result(const std::string& prompt, const tiny_llm::UserOutput& ou
 int main(int argc, char** argv)
 {
     int arg_index = 1;
+    size_t kv_num_blocks = 0;
     tiny_llm::ParallelConfig parallel_config = tiny_llm::ParallelConfig::cpu();
-    if (argc > arg_index && std::string(argv[arg_index]) == "--device")
+    const auto print_usage = [&]() {
+        std::cerr << "usage: " << argv[0]
+                  << " [--device cpu|cuda[:id]] [--kv-num-blocks N]"
+                  << " <model_dir> <max_new_tokens> <prompt> [prompt...]\n";
+    };
+    while (argc > arg_index && std::string(argv[arg_index]).rfind("--", 0) == 0)
     {
-        if (argc <= arg_index + 1)
+        const std::string arg(argv[arg_index]);
+        if (arg == "--device")
         {
-            std::cerr << "usage: " << argv[0] << " [--device cpu|cuda[:id]] <model_dir> <max_new_tokens> <prompt> [prompt...]\n";
+            if (argc <= arg_index + 1)
+            {
+                print_usage();
+                return 2;
+            }
+            parallel_config = parse_device(argv[arg_index + 1]);
+            arg_index += 2;
+        }
+        else if (arg == "--kv-num-blocks")
+        {
+            if (argc <= arg_index + 1)
+            {
+                print_usage();
+                return 2;
+            }
+            const int32_t parsed = parse_int32(argv[arg_index + 1], "kv_num_blocks");
+            if (parsed <= 0)
+            {
+                throw std::runtime_error("kv_num_blocks must be positive.");
+            }
+            kv_num_blocks = static_cast<size_t>(parsed);
+            arg_index += 2;
+        }
+        else
+        {
+            print_usage();
             return 2;
         }
-        parallel_config = parse_device(argv[arg_index + 1]);
-        arg_index += 2;
     }
 
     if (argc - arg_index < 3)
     {
-        std::cerr << "usage: " << argv[0] << " [--device cpu|cuda[:id]] <model_dir> <max_new_tokens> <prompt> [prompt...]\n";
+        print_usage();
         return 2;
     }
 
@@ -232,7 +283,17 @@ int main(int argc, char** argv)
 
         tiny_llm::StackAllocator allocator(16 * 1024 * 1024, parallel_config);
         constexpr int32_t kBlockSizeTokens = 16;
-        constexpr size_t kNumBlocks = 256;
+        if (kv_num_blocks == 0)
+        {
+            kv_num_blocks = estimate_kv_num_blocks(
+                tokenizer,
+                hf_config,
+                kBlockSizeTokens,
+                max_new_tokens,
+                arg_index + 2,
+                argc,
+                argv);
+        }
         const size_t kBlockBytes = llama_kv_block_bytes(hf_config, kBlockSizeTokens);
         void* kv_pool = nullptr;
         cudaStream_t stream = nullptr;
@@ -240,13 +301,13 @@ int main(int argc, char** argv)
         {
 #if TINYLLM_ENABLE_CUDA
             CHECK_CUDA(cudaSetDevice(parallel_config.device_id()));
-            CHECK_CUDA(cudaMalloc(&kv_pool, kNumBlocks * kBlockBytes));
+            CHECK_CUDA(cudaMalloc(&kv_pool, kv_num_blocks * kBlockBytes));
             CHECK_CUDA(cudaStreamCreate(&stream));
 #endif
         }
         else
         {
-            kv_pool = std::malloc(kNumBlocks * kBlockBytes);
+            kv_pool = std::malloc(kv_num_blocks * kBlockBytes);
         }
         if (kv_pool == nullptr)
         {
@@ -264,7 +325,7 @@ int main(int argc, char** argv)
         engine_args.max_batch_size = 16;
         engine_args.kv_num_layers = hf_config.num_hidden_layers;
         engine_args.kv_block_size_tokens = kBlockSizeTokens;
-        engine_args.kv_num_blocks = kNumBlocks;
+        engine_args.kv_num_blocks = kv_num_blocks;
         engine_args.kv_block_size_bytes = kBlockBytes;
         engine_args.kv_memory_pool = kv_pool;
         engine_args.max_generated_tokens = max_new_tokens;

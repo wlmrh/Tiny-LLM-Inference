@@ -1,3 +1,4 @@
+#include "tiny_llm/models/hf_llama_config_loader.h"
 #include "tiny_llm/runtime/generation_config.h"
 #include "tiny_llm/runtime/llm.h"
 #include "tiny_llm/runtime/tokenizer.h"
@@ -32,6 +33,14 @@ struct Options {
     std::vector<std::string> prompts;
     std::filesystem::path model_dir;
     int64_t prompt_tokens = -1;
+    std::vector<int64_t> prompt_token_counts;
+    size_t kv_num_blocks = 0;
+    bool kv_num_blocks_explicit = false;
+};
+
+struct PromptTokenStats {
+    int64_t total = 0;
+    std::vector<int64_t> per_prompt;
 };
 
 struct SampleOutput {
@@ -191,7 +200,8 @@ void print_usage(const char* argv0)
 {
     std::cerr << "usage: " << argv0
               << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
-              << " [--max-new-tokens N] [--prompt TEXT]... [--json] [--profile-detail] <model_dir>\n";
+              << " [--max-new-tokens N] [--kv-num-blocks N] [--prompt TEXT]..."
+              << " [--json] [--profile-detail] <model_dir>\n";
 }
 
 Options parse_args(int argc, char** argv)
@@ -224,6 +234,11 @@ Options parse_args(int argc, char** argv)
         else if (arg == "--max-new-tokens")
         {
             options.max_new_tokens = parse_positive_int(require_value("--max-new-tokens"), "max-new-tokens");
+        }
+        else if (arg == "--kv-num-blocks")
+        {
+            options.kv_num_blocks = static_cast<size_t>(parse_positive_int(require_value("--kv-num-blocks"), "kv-num-blocks"));
+            options.kv_num_blocks_explicit = true;
         }
         else if (arg == "--prompt")
         {
@@ -300,15 +315,39 @@ double mean(const std::vector<double>& values)
     return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
 }
 
-int64_t count_prompt_tokens(const std::filesystem::path& model_dir, const std::vector<std::string>& prompts)
+PromptTokenStats count_prompt_tokens(const std::filesystem::path& model_dir, const std::vector<std::string>& prompts)
 {
     tiny_llm::HFLlamaTokenizer tokenizer = tiny_llm::HFLlamaTokenizer::from_model_dir(model_dir.string());
-    int64_t total = 0;
+    PromptTokenStats stats;
+    stats.per_prompt.reserve(prompts.size());
     for (const std::string& prompt : prompts)
     {
-        total += static_cast<int64_t>(tokenizer.encode(prompt).size());
+        const int64_t count = static_cast<int64_t>(tokenizer.encode(prompt).size());
+        stats.total += count;
+        stats.per_prompt.push_back(count);
     }
-    return total;
+    return stats;
+}
+
+size_t estimate_kv_num_blocks(const std::vector<int64_t>& prompt_token_counts,
+                              int32_t max_new_tokens,
+                              int32_t block_size_tokens,
+                              int32_t num_layers)
+{
+    if (block_size_tokens <= 0 || num_layers <= 0)
+    {
+        throw std::runtime_error("invalid dimensions for KV block estimate.");
+    }
+    size_t required = 0;
+    for (int64_t prompt_tokens : prompt_token_counts)
+    {
+        const int64_t total_tokens = prompt_tokens + max_new_tokens;
+        const int64_t blocks_per_layer =
+            (total_tokens + block_size_tokens - 1) / block_size_tokens;
+        required += static_cast<size_t>(blocks_per_layer) * static_cast<size_t>(num_layers);
+    }
+    const size_t with_slack = (required * 6 + 4) / 5;
+    return std::max<size_t>(256, with_slack);
 }
 
 RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_ms, bool measure)
@@ -541,7 +580,8 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "  device: " << options.device_text << "\n";
     std::cout << "  prompts: " << options.prompts.size() << ", warmup: " << options.warmup
               << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens
-              << ", profile_detail: " << (options.profile_detail ? "on" : "off") << "\n";
+              << ", profile_detail: " << (options.profile_detail ? "on" : "off")
+              << ", kv_num_blocks: " << options.kv_num_blocks << "\n";
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "  avg_load_init_ms: " << avg_load_ms << "\n";
     std::cout << "  avg_total_latency_ms: " << avg_total_ms << "\n";
@@ -665,6 +705,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"repeat\":" << options.repeat << ",";
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
     std::cout << "\"profile_detail\":" << (options.profile_detail ? "true" : "false") << ",";
+    std::cout << "\"kv_num_blocks\":" << options.kv_num_blocks << ",";
     std::cout << "\"avg_load_init_ms\":" << avg_load_ms << ",";
     std::cout << "\"avg_total_latency_ms\":" << avg_total_ms << ",";
     std::cout << "\"avg_first_token_latency_ms\":" << avg_first_ms << ",";
@@ -771,11 +812,26 @@ int main(int argc, char** argv)
         {
             setenv("TINYLLM_PROFILE_DETAIL", "1", 1);
         }
-        options.prompt_tokens = count_prompt_tokens(options.model_dir, options.prompts);
+        const PromptTokenStats token_stats = count_prompt_tokens(options.model_dir, options.prompts);
+        options.prompt_tokens = token_stats.total;
+        options.prompt_token_counts = token_stats.per_prompt;
+        const tiny_llm::LlamaConfig hf_config =
+            tiny_llm::HFLlamaConfigLoader::load_from_dir(options.model_dir.string());
+        constexpr int32_t kBlockSizeTokens = 16;
+        if (!options.kv_num_blocks_explicit)
+        {
+            options.kv_num_blocks = estimate_kv_num_blocks(
+                options.prompt_token_counts,
+                options.max_new_tokens,
+                kBlockSizeTokens,
+                hf_config.num_hidden_layers);
+        }
 
         const auto load_start = Clock::now();
         tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
         llm_options.max_tokens = options.max_new_tokens;
+        llm_options.block_size_tokens = kBlockSizeTokens;
+        llm_options.kv_num_blocks = options.kv_num_blocks;
         tiny_llm::LLM llm(llm_options);
         const double load_ms = elapsed_ms(load_start, Clock::now());
 

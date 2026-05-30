@@ -37,6 +37,7 @@ struct RequestData {
     uint64_t req_id = 0; // 请求 id
     std::vector<int32_t> new_token_ids; // 本轮要计算的新 token 集合
     int32_t num_computed_tokens = 0; // 已经计算过 kvcache 的 token 长度
+    int32_t prompt_token_count = 0;
     bool is_prefill = false; // Whether this scheduled chunk is still processing prompt tokens.
     std::vector<int32_t> block_ids; // 该请求的映射表，将逻辑上的 block id 映射到物理块编号
     std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id

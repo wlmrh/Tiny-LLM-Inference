@@ -625,13 +625,17 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         {
             continue;
         }
-        if (req_data.is_prefill)
+        for (int32_t i = 0; i < count_it->second; ++i)
         {
-            prefill_tokens += count_it->second;
-        }
-        else
-        {
-            decode_tokens += count_it->second;
+            const int32_t position = req_data.num_computed_tokens + i;
+            if (position < req_data.prompt_token_count)
+            {
+                ++prefill_tokens;
+            }
+            else
+            {
+                ++decode_tokens;
+            }
         }
     }
 
