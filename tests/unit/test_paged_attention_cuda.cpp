@@ -170,6 +170,120 @@ CaseResult run_prefill_then_decode(bool optimized,
     return {out_prefill.detach().cpu(), out_decode.detach().cpu()};
 }
 
+tiny_llm::Tensor run_two_sequence_prefill_then_decode(bool optimized)
+{
+    if (optimized)
+    {
+        setenv("TINYLLM_PAGED_ATTENTION_BACKEND", "cuda", 1);
+    }
+    else
+    {
+        setenv("TINYLLM_PAGED_ATTENTION_BACKEND", "torch", 1);
+    }
+
+    constexpr int32_t num_attention_heads = 12;
+    constexpr int32_t num_key_value_heads = 2;
+    constexpr int32_t head_dim = 128;
+    constexpr int32_t block_size_tokens = 16;
+    constexpr int32_t prefill_tokens_per_seq = 32;
+    constexpr int32_t num_seqs = 2;
+    constexpr int32_t blocks_per_seq = 3;
+    constexpr int32_t total_blocks = num_seqs * blocks_per_seq;
+    const int32_t kv_size = num_key_value_heads * head_dim;
+    const int32_t hidden_size = num_attention_heads * head_dim;
+    const size_t block_floats = 2 * static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
+    tiny_llm::Tensor pool = torch::zeros(
+        {static_cast<int64_t>(total_blocks * block_floats)},
+        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    tiny_llm::BlockAllocator blocks(
+        total_blocks,
+        block_floats * sizeof(float),
+        pool.data_ptr<float>(),
+        tiny_llm::ParallelConfig::cuda(0));
+    tiny_llm::KVCache::Config kv_cfg;
+    kv_cfg.num_layers = 1;
+    kv_cfg.block_size_tokens = block_size_tokens;
+    tiny_llm::KVCache kv_cache(kv_cfg, &blocks);
+    tiny_llm::ExecutionContext ctx(nullptr, nullptr, &kv_cache, tiny_llm::ParallelConfig::cuda(0));
+
+    std::vector<int32_t> prefill_positions;
+    std::vector<int32_t> prefill_seq_indices;
+    for (int32_t seq = 0; seq < num_seqs; ++seq)
+    {
+        for (int32_t pos = 0; pos < prefill_tokens_per_seq; ++pos)
+        {
+            prefill_positions.push_back(pos);
+            prefill_seq_indices.push_back(seq);
+        }
+    }
+    std::vector<int32_t> block_table_values;
+    for (int32_t seq = 0; seq < num_seqs; ++seq)
+    {
+        for (int32_t block = 0; block < blocks_per_seq; ++block)
+        {
+            block_table_values.push_back(seq * blocks_per_seq + block);
+        }
+    }
+
+    const int32_t prefill_rows = prefill_tokens_per_seq * num_seqs;
+    tiny_llm::Tensor q_prefill = make_values(prefill_rows, hidden_size, 101.0f);
+    tiny_llm::Tensor k_prefill = make_values(prefill_rows, kv_size, 111.0f);
+    tiny_llm::Tensor v_prefill = make_values(prefill_rows, kv_size, 121.0f);
+    tiny_llm::Tensor out_prefill = torch::empty_like(q_prefill);
+    tiny_llm::Tensor positions_prefill = int_cuda(prefill_positions, {prefill_rows});
+    tiny_llm::Tensor seq_indices_prefill = int_cuda(prefill_seq_indices, {prefill_rows});
+    tiny_llm::Tensor context_prefill = int_cuda({prefill_tokens_per_seq, prefill_tokens_per_seq}, {num_seqs});
+    tiny_llm::Tensor blocks_prefill = int_cuda(block_table_values, {1, num_seqs, blocks_per_seq});
+    tiny_llm::ops::PagedAttentionRuntimeMetadata prefill_metadata;
+    prefill_metadata.seq_indices = &seq_indices_prefill;
+    prefill_metadata.context_lens = &context_prefill;
+    prefill_metadata.block_tables = &blocks_prefill;
+    prefill_metadata.block_size_tokens = block_size_tokens;
+    prefill_metadata.enabled = true;
+    tiny_llm::ops::LlamaAttentionParams prefill;
+    prefill.positions = &positions_prefill;
+    prefill.q = &q_prefill;
+    prefill.k = &k_prefill;
+    prefill.v = &v_prefill;
+    prefill.out = &out_prefill;
+    prefill.ctx = &ctx;
+    prefill.metadata = &prefill_metadata;
+    prefill.layer_id = 0;
+    prefill.num_attention_heads = num_attention_heads;
+    prefill.num_key_value_heads = num_key_value_heads;
+    prefill.head_dim = head_dim;
+    tiny_llm::ops::llama_attention_forward(prefill);
+    check_cuda(cudaDeviceSynchronize(), "two sequence prefill synchronize");
+
+    tiny_llm::Tensor q_decode = make_values(num_seqs, hidden_size, 131.0f);
+    tiny_llm::Tensor k_decode = make_values(num_seqs, kv_size, 141.0f);
+    tiny_llm::Tensor v_decode = make_values(num_seqs, kv_size, 151.0f);
+    tiny_llm::Tensor out_decode = torch::empty_like(q_decode);
+    tiny_llm::Tensor positions_decode = int_cuda({prefill_tokens_per_seq, prefill_tokens_per_seq}, {num_seqs});
+    tiny_llm::Tensor seq_indices_decode = int_cuda({0, 1}, {num_seqs});
+    tiny_llm::Tensor context_decode = int_cuda({prefill_tokens_per_seq + 1, prefill_tokens_per_seq + 1}, {num_seqs});
+    tiny_llm::Tensor blocks_decode = int_cuda(block_table_values, {1, num_seqs, blocks_per_seq});
+    tiny_llm::ops::PagedAttentionRuntimeMetadata decode_metadata;
+    decode_metadata.seq_indices = &seq_indices_decode;
+    decode_metadata.context_lens = &context_decode;
+    decode_metadata.block_tables = &blocks_decode;
+    decode_metadata.block_size_tokens = block_size_tokens;
+    decode_metadata.enabled = true;
+    tiny_llm::ops::LlamaAttentionParams decode = prefill;
+    decode.positions = &positions_decode;
+    decode.q = &q_decode;
+    decode.k = &k_decode;
+    decode.v = &v_decode;
+    decode.out = &out_decode;
+    decode.metadata = &decode_metadata;
+    tiny_llm::ops::llama_attention_forward(decode);
+    check_cuda(cudaDeviceSynchronize(), "two sequence decode synchronize");
+
+    unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
+    return out_decode.detach().cpu();
+}
+
 void expect_optimized_matches_reference(int32_t num_attention_heads,
                                         int32_t num_key_value_heads,
                                         int32_t head_dim,
@@ -206,6 +320,19 @@ TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForPrefillAndDecode
 
     expect_optimized_matches_reference(1, 1, 4, 2, 2, 1e-4f);
     expect_optimized_matches_reference(9, 3, 64, 2, 2, 1e-4f);
+}
+
+TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForBatchedMultiBlockDecode)
+{
+    check_cuda(cudaSetDevice(0), "set CUDA device");
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    const tiny_llm::Tensor reference = run_two_sequence_prefill_then_decode(false);
+    const tiny_llm::Tensor optimized = run_two_sequence_prefill_then_decode(true);
+    expect_close(optimized, reference, 2e-4f);
 }
 
 TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForQwenShapeLongPrefill)

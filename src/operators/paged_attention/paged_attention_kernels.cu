@@ -133,7 +133,7 @@ __global__ void paged_attention_f32_kernel(const float* q,
 {
     extern __shared__ float shared[];
     float* reduce = shared;
-    float* head_accum = shared + blockDim.x;
+    float* aux = shared + blockDim.x;
 
     const int64_t row = static_cast<int64_t>(blockIdx.x);
     const int32_t q_head = static_cast<int32_t>(blockIdx.y);
@@ -156,6 +156,95 @@ __global__ void paged_attention_f32_kernel(const float* q,
     const float scale = rsqrtf(static_cast<float>(head_dim));
     const int64_t q_row_offset = row * static_cast<int64_t>(num_attention_heads) * head_dim;
     const int64_t q_head_offset = q_row_offset + static_cast<int64_t>(q_head) * head_dim;
+    const int32_t context_tokens = position + 1;
+    if (rows <= 8 && context_tokens <= static_cast<int32_t>(blockDim.x) && head_dim <= static_cast<int32_t>(blockDim.x))
+    {
+        float local_score = -FLT_MAX;
+        if (tid < context_tokens)
+        {
+            const int32_t src_pos = tid;
+            const int32_t block_id = block_id_for_position(
+                block_tables,
+                num_seqs,
+                max_blocks_per_seq,
+                block_size_tokens,
+                layer_id,
+                seq_index,
+                src_pos);
+            if (block_id >= 0 && block_id < num_blocks)
+            {
+                const int32_t src_offset = src_pos % block_size_tokens;
+                const float* key_base = reinterpret_cast<const float*>(reinterpret_cast<const char*>(kv_pool_base)
+                    + static_cast<int64_t>(block_id) * block_size_bytes)
+                    + static_cast<int64_t>(src_offset) * kv_size
+                    + static_cast<int64_t>(kv_head) * head_dim;
+                float score = 0.0f;
+                for (int32_t dim = 0; dim < head_dim; ++dim)
+                {
+                    score += q[q_head_offset + dim] * key_base[dim];
+                }
+                local_score = score * scale;
+            }
+        }
+        aux[tid] = local_score;
+        reduce[tid] = local_score;
+        __syncthreads();
+        for (int32_t stride = static_cast<int32_t>(blockDim.x) / 2; stride > 0; stride >>= 1)
+        {
+            if (tid < stride)
+            {
+                reduce[tid] = fmaxf(reduce[tid], reduce[tid + stride]);
+            }
+            __syncthreads();
+        }
+        const float max_score = reduce[0];
+
+        const float local_weight = tid < context_tokens ? expf(aux[tid] - max_score) : 0.0f;
+        reduce[tid] = local_weight;
+        __syncthreads();
+        for (int32_t stride = static_cast<int32_t>(blockDim.x) / 2; stride > 0; stride >>= 1)
+        {
+            if (tid < stride)
+            {
+                reduce[tid] += reduce[tid + stride];
+            }
+            __syncthreads();
+        }
+        const float score_sum = reduce[0];
+        if (score_sum <= 0.0f)
+        {
+            return;
+        }
+
+        if (tid < head_dim)
+        {
+            float accum = 0.0f;
+            for (int32_t src_pos = 0; src_pos < context_tokens; ++src_pos)
+            {
+                const int32_t block_id = block_id_for_position(
+                    block_tables,
+                    num_seqs,
+                    max_blocks_per_seq,
+                    block_size_tokens,
+                    layer_id,
+                    seq_index,
+                    src_pos);
+                if (block_id < 0 || block_id >= num_blocks)
+                {
+                    continue;
+                }
+                const int32_t src_offset = src_pos % block_size_tokens;
+                const float* value_base = reinterpret_cast<const float*>(reinterpret_cast<const char*>(kv_pool_base)
+                    + static_cast<int64_t>(block_id) * block_size_bytes)
+                    + static_cast<int64_t>(block_size_tokens) * kv_size
+                    + static_cast<int64_t>(src_offset) * kv_size
+                    + static_cast<int64_t>(kv_head) * head_dim;
+                accum += expf(aux[src_pos] - max_score) * value_base[tid];
+            }
+            out[q_head_offset + tid] = accum / score_sum;
+        }
+        return;
+    }
 
     float local_max = -FLT_MAX;
     for (int32_t src_pos = tid; src_pos <= position; src_pos += static_cast<int32_t>(blockDim.x))
@@ -199,7 +288,7 @@ __global__ void paged_attention_f32_kernel(const float* q,
 
     for (int32_t dim = tid; dim < head_dim; dim += static_cast<int32_t>(blockDim.x))
     {
-        head_accum[dim] = 0.0f;
+        aux[dim] = 0.0f;
     }
     __syncthreads();
 
@@ -238,7 +327,7 @@ __global__ void paged_attention_f32_kernel(const float* q,
         local_sum += weight;
         for (int32_t dim = 0; dim < head_dim; ++dim)
         {
-            atomicAdd(&head_accum[dim], weight * value_base[dim]);
+            atomicAdd(&aux[dim], weight * value_base[dim]);
         }
     }
 
@@ -260,7 +349,7 @@ __global__ void paged_attention_f32_kernel(const float* q,
 
     for (int32_t dim = tid; dim < head_dim; dim += static_cast<int32_t>(blockDim.x))
     {
-        out[q_head_offset + dim] = head_accum[dim] / score_sum;
+        out[q_head_offset + dim] = aux[dim] / score_sum;
     }
 }
 
@@ -308,7 +397,10 @@ void launch_paged_attention_f32(const float* q,
     CHECK_CUDA(cudaGetLastError());
 
     const dim3 grid(static_cast<unsigned int>(rows), static_cast<unsigned int>(num_attention_heads));
-    const size_t shared_bytes = (static_cast<size_t>(kThreadsPerBlock) + static_cast<size_t>(head_dim)) * sizeof(float);
+    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kThreadsPerBlock)
+        ? static_cast<size_t>(head_dim)
+        : static_cast<size_t>(kThreadsPerBlock);
+    const size_t shared_bytes = (static_cast<size_t>(kThreadsPerBlock) + aux_floats) * sizeof(float);
     paged_attention_f32_kernel<<<grid, kThreadsPerBlock, shared_bytes, stream>>>(
         q,
         out,
