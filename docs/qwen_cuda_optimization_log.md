@@ -333,3 +333,10 @@ benchmark/results/regression_after_cuda_perf_20260531_005321.json
 
 - The optimized attention branch is intentionally limited to `rows <= 8` to target decode and small batched decode. Long prefill remains on the older atomic fallback because the non-atomic branch did not match the torch reference for Qwen long prefill.
 - `TINYLLM_QKV_STACKED_CACHE=0` preserves token correctness and provides a lower-memory fallback, with expected latency regression.
+
+### Commit References
+
+- `d5608ab perf: optimize short cuda paged attention`
+- `754b2aa perf: cache rope cos sin tables`
+- `e29328e perf: add qkv cache control and cuda memory metrics`
+- `cb883a8 docs: update qwen cuda optimization results`
