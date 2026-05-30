@@ -1,6 +1,6 @@
 #include "tiny_llm/models/hf_llama_config_loader.h"
 
-#include "hf_json.h"
+#include "../common/hf_json.h"
 
 #include <filesystem>
 #include <fstream>

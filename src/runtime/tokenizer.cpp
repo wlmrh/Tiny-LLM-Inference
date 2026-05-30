@@ -1,6 +1,6 @@
 #include "tiny_llm/runtime/tokenizer.h"
 
-#include "../models/hf_json.h"
+#include "../common/hf_json.h"
 #include "tiny_llm/models/hf_llama_config_loader.h"
 #if defined(__has_include)
 #if __has_include(<tokenizers_cpp.h>)

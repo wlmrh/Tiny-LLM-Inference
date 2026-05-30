@@ -1,6 +1,6 @@
 #include "tiny_llm/models/hf_safetensors_loader.h"
 
-#include "hf_json.h"
+#include "../common/hf_json.h"
 
 #include <algorithm>
 #include <cstring>
