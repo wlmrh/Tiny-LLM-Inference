@@ -2,6 +2,8 @@
 
 Tiny-LLM-Inference is a small vLLM-inspired single-process inference engine with a frontend/core split: `LLMEngine` handles text/tokenizer I/O, while `EngineCore` runs scheduler + model execution over token IDs. The HF runtime now covers LLaMA/SmolLM2-compatible models and Qwen2-family checkpoints such as Qwen2.5-1.5B-Instruct. The runtime uses FCFS continuous batching semantics across `running` and `waiting` queues, supports chunked prefill, one-token decode steps, simplified tail preemption, and paged KV-cache metadata through `SchedulerOutput`.
 
+Operational rule: for this project, perform code modifications, builds, tests, benchmarks, and other project command execution on the remote server only. Each session provides the current SSH login command and password at the beginning; use those session-provided credentials instead of assuming a persistent host alias or local execution.
+
 # Tech Stack & Tooling (技术栈与工具)
 
 - Language standard: C++17, configured in the root `CMakeLists.txt` via `set(CMAKE_CXX_STANDARD 17)`.
