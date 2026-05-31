@@ -615,3 +615,123 @@ Hardware:
 - Qwen exposes larger-model bottlenecks that were hidden by the earlier small-model smoke baseline: `long_prefill`, `decode_heavy`, and `throughput` now trail Transformers.
 - The most severe gap is `long_prefill`, where TinyLLM reaches only `0.277x` Transformers e2e throughput and has `1263.815ms` TTFT. This confirms that long-context prefill attention is the primary next optimization target.
 - The decode-heavy and throughput regressions show that the current CUDA paged-attention bridge is not yet competitive enough for larger Qwen batch/decode workloads, even though token-level outputs match Transformers.
+
+## Optimization 11: Qwen Long Prefill and Decode Fast Paths
+
+### Motivation
+
+The Qwen2.5-1.5B baseline above showed that TinyLLM was strong on short interactive workloads but weak on larger prefill/decode workloads:
+
+| Scenario | Before TinyLLM e2e tok/s | Before TinyLLM / Transformers |
+| --- | ---: | ---: |
+| `long_prefill` | `30.086` | `0.277x` |
+| `decode_heavy` | `120.222` | `0.813x` |
+| `throughput` | `472.566` | `0.846x` |
+
+The two concrete issues found in code were:
+
+- `LLMOptions.max_num_batched_tokens` was set by the benchmark but did not override the default scheduler prefill budget, so Qwen long prefill still ran in `256`-token chunks.
+- The CUDA paged-attention fast path only covered `rows <= 8` and short context, so Qwen batch decode and most long-prefill rows used the slower atomic fallback.
+
+### Changes
+
+- Added benchmark controls for `--max-num-batched-tokens` and `--max-num-batched-token-cap`; the benchmark now auto-sets the batch token budget from prompt token count up to a default cap of `4096`.
+- Added runtime profile counters for scheduled requests/tokens, prefill/decode request counts, profiled steps, and max context length.
+- Changed scheduler prefill admission to spread token budget across eligible prefill requests instead of letting the first request consume the entire step.
+- Fixed the `LLMOptions.max_num_batched_tokens` to scheduler-config mapping so the high-level option actually controls default prefill budget.
+- Expanded the CUDA paged-attention non-atomic path to use `1024` attention threads and cover Qwen contexts up to `1024` tokens without the previous `rows <= 8` gate.
+- Added a full-prefill CUDA SDPA fast path: paged KV is still written into the KV cache, while complete position-0 causal prefill segments use `at::scaled_dot_product_attention`.
+- Bound the SDPA fast path to `ExecutionContext`'s CUDA stream with a `CUDAStreamGuard`, so external streams remain ordered with paged KV writes.
+
+### Files Changed
+
+- `benchmark/industrial_benchmark.py`
+- `benchmark/llama_engine_benchmark.cpp`
+- `benchmark/run_benchmark_comparison.py`
+- `include/tiny_llm/runtime/scheduler.h`
+- `src/operators/paged_attention/paged_attention_internal.h`
+- `src/operators/paged_attention/paged_attention_kernels.cu`
+- `src/operators/paged_attention/paged_attention_torch.cpp`
+- `src/runtime/llm.cpp`
+- `src/runtime/model_runner.cpp`
+- `src/runtime/scheduler.cpp`
+- `tests/unit/test_scheduler.cpp`
+
+### Verification
+
+The following checks passed on the remote RTX 3090 server:
+
+| Check | Result |
+| --- | --- |
+| `git diff --check` | passed |
+| CPU build | passed |
+| CPU full `ctest` | `54/54` passed, `6` skipped |
+| CUDA build | passed |
+| CUDA full `ctest` | `64/64` passed, `7` skipped |
+| Final focused CUDA attention tests | `11/11` passed for `PagedAttention|LlamaOps` |
+| Qwen CUDA smoke generation | passed |
+| Qwen full TinyLLM vs Transformers benchmark | passed |
+| Token IDs vs Transformers | matched in all five scenarios |
+
+Qwen CUDA smoke output after the final stream-guard update:
+
+```json
+{"prompt":"hello","output":"hello = \"Hello World\"\nprint(hello","finish_reason":"length","generated_token_ids":[284,330,9707,4337,698,1350,3203,4791]}
+```
+
+### Report
+
+The generated report is:
+
+```text
+benchmark/results_qwen_baseline_compare/qwen25_after_prefill_decode_optimization_20260531_173015.json
+benchmark/results_qwen_baseline_compare/qwen25_after_prefill_decode_optimization_20260531_173015.md
+```
+
+Benchmark command:
+
+```bash
+python3 benchmark/industrial_benchmark.py \
+  --model-dir /models/Qwen2.5-1.5B-Instruct \
+  --tinyllm-binary build-cuda/benchmark/llama_engine_benchmark \
+  --device cuda:0 \
+  --backend all \
+  --scenarios all \
+  --transformers-scenarios all \
+  --warmup 1 \
+  --repeat 3 \
+  --output-dir benchmark/results_qwen_baseline_compare \
+  --label qwen25_after_prefill_decode_optimization
+```
+
+### Results After Optimization
+
+| Scenario | Batch | ISL | OSL | TinyLLM latency ms | Transformers latency ms | TinyLLM e2e tok/s | Transformers e2e tok/s | TinyLLM / Transformers e2e |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `interactive` | `1` | `128` | `64` | `758.967` | `1681.441` | `84.325` | `38.063` | `2.215x` |
+| `chat_serving` | `8` | `128` | `128` | `2559.946` | `3532.366` | `400.008` | `289.891` | `1.380x` |
+| `long_prefill` | `4` | `1024` | `64` | `3170.205` | `2362.083` | `80.752` | `108.379` | `0.745x` |
+| `decode_heavy` | `4` | `256` | `256` | `4564.957` | `6944.935` | `224.318` | `147.446` | `1.521x` |
+| `throughput` | `16` | `128` | `128` | `3380.926` | `3688.622` | `605.751` | `555.221` | `1.091x` |
+
+| Scenario | TinyLLM TTFT ms | Transformers TTFT ms | TinyLLM decode tok/s | Transformers decode tok/s | Token IDs match |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `interactive` | `41.540` | `33.053` | `87.814` | `38.219` | yes |
+| `chat_serving` | `258.063` | `161.949` | `441.378` | `301.446` | yes |
+| `long_prefill` | `887.946` | `701.360` | `110.417` | `151.741` | yes |
+| `decode_heavy` | `223.926` | `165.196` | `234.967` | `150.448` | yes |
+| `throughput` | `492.702` | `321.970` | `703.547` | `603.567` | yes |
+
+### Improvement Summary
+
+| Scenario | Before e2e tok/s | After e2e tok/s | TinyLLM improvement |
+| --- | ---: | ---: | ---: |
+| `long_prefill` | `30.086` | `80.752` | `2.684x` |
+| `decode_heavy` | `120.222` | `224.318` | `1.866x` |
+| `throughput` | `472.566` | `605.751` | `1.282x` |
+
+### Interpretation
+
+- The main long-prefill issue was a combination of an ineffective prefill budget option and the lack of a full-prefill attention path. After the fix, Qwen long-prefill throughput improved from `0.277x` to `0.745x` of Transformers.
+- Decode-heavy and throughput workloads now exceed Transformers e2e throughput on this RTX 3090 run.
+- Remaining prefill gap is mostly first-token latency: TinyLLM is still `887.946ms` vs Transformers `701.360ms` on `long_prefill`. The next target should be reducing prefill metadata checks/copies and replacing the temporary SDPA bridge with a native tiled prefill kernel.
