@@ -12,7 +12,82 @@ option(TINYLLM_ENABLE_CUDA "Enable CUDA backend" OFF)
 # ==============================================================================
 
 # -------- 第一步：寻找 PyTorch --------
-find_package(Torch QUIET)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+
+macro(tinyllm_clear_torch_package_cache)
+    foreach(_torch_cache_var IN ITEMS
+        TORCH_LIBRARY
+        c10_LIBRARY
+        kineto_LIBRARY
+        Caffe2_DIR
+    )
+        unset(${_torch_cache_var})
+        unset(${_torch_cache_var} CACHE)
+    endforeach()
+endmacro()
+
+function(tinyllm_get_torch_candidate_prefix out_var)
+    if (Torch_DIR AND EXISTS "${Torch_DIR}/TorchConfig.cmake")
+        get_filename_component(_torch_prefix "${Torch_DIR}/../../.." ABSOLUTE)
+        set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+        return()
+    endif()
+
+    foreach(_cmake_prefix IN LISTS CMAKE_PREFIX_PATH)
+        if (EXISTS "${_cmake_prefix}/Torch/TorchConfig.cmake")
+            get_filename_component(_torch_prefix "${_cmake_prefix}/../.." ABSOLUTE)
+            set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+            return()
+        elseif (EXISTS "${_cmake_prefix}/share/cmake/Torch/TorchConfig.cmake")
+            get_filename_component(_torch_prefix "${_cmake_prefix}" ABSOLUTE)
+            set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+
+    set(${out_var} "" PARENT_SCOPE)
+endfunction()
+
+function(tinyllm_prepare_missing_torch_optional_libraries)
+    tinyllm_get_torch_candidate_prefix(_torch_prefix)
+
+    if (NOT _torch_prefix OR EXISTS "${_torch_prefix}/lib/libkineto.a")
+        return()
+    endif()
+
+    if (CMAKE_AR AND (EXISTS "${_torch_prefix}/lib/libtorch${CMAKE_SHARED_LIBRARY_SUFFIX}" OR EXISTS "${_torch_prefix}/lib/libtorch.dylib" OR EXISTS "${_torch_prefix}/lib/libtorch.so"))
+        set(_kineto_stub_dir "${CMAKE_BINARY_DIR}/tinyllm_torch_optional_stubs")
+        set(_kineto_stub_source "${_kineto_stub_dir}/kineto_stub.cpp")
+        set(_kineto_stub_object "${_kineto_stub_dir}/kineto_stub.o")
+        set(_kineto_stub "${_kineto_stub_dir}/libkineto.a")
+        file(MAKE_DIRECTORY "${_kineto_stub_dir}")
+        if (NOT EXISTS "${_kineto_stub}")
+            file(WRITE "${_kineto_stub_source}" "int tinyllm_kineto_stub = 0;\n")
+            execute_process(
+                COMMAND "${CMAKE_CXX_COMPILER}" -c "${_kineto_stub_source}" -o "${_kineto_stub_object}"
+                RESULT_VARIABLE _kineto_stub_compile_result
+                ERROR_QUIET
+            )
+            if (_kineto_stub_compile_result EQUAL 0)
+                execute_process(COMMAND "${CMAKE_AR}" qc "${_kineto_stub}" "${_kineto_stub_object}" RESULT_VARIABLE _kineto_stub_result)
+                if (_kineto_stub_result EQUAL 0 AND CMAKE_RANLIB)
+                    execute_process(COMMAND "${CMAKE_RANLIB}" "${_kineto_stub}" ERROR_QUIET)
+                endif()
+            endif()
+        endif()
+        if (EXISTS "${_kineto_stub}")
+            set(kineto_LIBRARY "${_kineto_stub}" CACHE FILEPATH "Empty optional kineto archive for Torch packages that do not ship libkineto.a." FORCE)
+        endif()
+    endif()
+endfunction()
+
+macro(tinyllm_find_torch)
+    tinyllm_clear_torch_package_cache()
+    tinyllm_prepare_missing_torch_optional_libraries()
+    find_package(Torch QUIET)
+endmacro()
+
+tinyllm_find_torch()
 if (NOT Torch_FOUND)
     # 尝试从 Python 虚拟环境提取 Torch CMake 路径
     if (Python3_Interpreter_FOUND)
@@ -25,7 +100,7 @@ if (NOT Torch_FOUND)
         )
         if (_torch_prefix_result EQUAL 0 AND _torch_cmake_prefix)
             list(PREPEND CMAKE_PREFIX_PATH "${_torch_cmake_prefix}")
-            find_package(Torch QUIET)
+            tinyllm_find_torch()
         endif()
     endif()
 endif()
@@ -36,14 +111,14 @@ if (NOT Torch_FOUND AND DEFINED ENV{HOME})
     set(_torch_home_default "${_torch_home}/libtorch")
     if (EXISTS "${_torch_home_default}/share/cmake/Torch/TorchConfig.cmake")
         list(PREPEND CMAKE_PREFIX_PATH "${_torch_home_default}")
-        find_package(Torch QUIET)
+        tinyllm_find_torch()
     endif()
     if (NOT Torch_FOUND)
         file(GLOB _torch_home_candidates "${_torch_home}/libtorch*")
         foreach(_torch_candidate IN LISTS _torch_home_candidates)
             if (EXISTS "${_torch_candidate}/share/cmake/Torch/TorchConfig.cmake")
                 list(PREPEND CMAKE_PREFIX_PATH "${_torch_candidate}")
-                find_package(Torch QUIET)
+                tinyllm_find_torch()
                 if (Torch_FOUND)
                     break()
                 endif()
