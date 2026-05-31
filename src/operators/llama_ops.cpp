@@ -32,7 +32,12 @@ void launch_silu_multiply_f32(const float* gate,
                               float* out,
                               int64_t numel,
                               cudaStream_t stream);
-}
+void launch_add_f32(const float* lhs,
+                    const float* rhs,
+                    float* out,
+                    int64_t numel,
+                    cudaStream_t stream);
+} // namespace cuda
 #endif
 
 namespace {
@@ -879,6 +884,21 @@ void add_tensors(const Tensor& lhs, const Tensor& rhs, Tensor& out)
     if (any_cuda({std::cref(lhs), std::cref(rhs), std::cref(out)}))
     {
         validate_same_device({std::cref(lhs), std::cref(rhs), std::cref(out)}, "add_tensors");
+#if TINYLLM_ENABLE_CUDA
+        if (lhs.device().is_cuda()
+            && lhs.is_contiguous()
+            && rhs.is_contiguous()
+            && out.is_contiguous())
+        {
+            cuda::launch_add_f32(
+                lhs.data_ptr<float>(),
+                rhs.data_ptr<float>(),
+                out.data_ptr<float>(),
+                static_cast<int64_t>(tensor_numel(lhs)),
+                at::cuda::getCurrentCUDAStream(lhs.device().index()));
+            return;
+        }
+#endif
         out.copy_(lhs + rhs);
         return;
     }

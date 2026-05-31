@@ -229,6 +229,20 @@ void LlamaForCausalLM::allocate_buffers(int max_batch_size, const ParallelConfig
 Tensor LlamaForCausalLM::forward(const PreparedInputs& inputs, RuntimeContext& ctx)
 {
     Tensor hidden_states = model_->forward_hidden(inputs, ctx);
+    if (!inputs.sample_row_offsets.empty()
+        && static_cast<int64_t>(inputs.sample_row_offsets.size()) < hidden_states.size(0))
+    {
+        std::vector<int64_t> row_indices;
+        row_indices.reserve(inputs.sample_row_offsets.size());
+        for (int32_t row : inputs.sample_row_offsets)
+        {
+            row_indices.push_back(static_cast<int64_t>(row));
+        }
+        Tensor row_tensor = torch::tensor(
+            row_indices,
+            torch::TensorOptions().dtype(torch::kInt64).device(hidden_states.device()));
+        hidden_states = hidden_states.index_select(0, row_tensor);
+    }
     return compute_logits(hidden_states, ctx);
 }
 

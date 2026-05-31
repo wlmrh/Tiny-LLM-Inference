@@ -30,6 +30,31 @@ public:
     }
 };
 
+class CompactLogitsModel final : public tiny_llm::Model {
+public:
+    int32_t num_layers() const override { return 2; }
+    int32_t vocab_size() const override { return 128; }
+
+    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs& inputs,
+                             tiny_llm::RuntimeContext& ctx) override
+    {
+        tiny_llm::Tensor input_cpu = inputs.input_ids.cpu().contiguous();
+        tiny_llm::Tensor logits = torch::full(
+            {static_cast<int64_t>(inputs.sample_row_offsets.size()), vocab_size()},
+            -1000.0f,
+            torch::TensorOptions().dtype(torch::kFloat32).device(ctx.device()));
+        tiny_llm::Tensor logits_cpu = logits.cpu();
+        const int32_t* input = input_cpu.data_ptr<int32_t>();
+        float* out = logits_cpu.data_ptr<float>();
+        for (size_t sample_index = 0; sample_index < inputs.sample_row_offsets.size(); ++sample_index)
+        {
+            const int32_t input_row = inputs.sample_row_offsets[sample_index];
+            out[sample_index * vocab_size() + ((input[input_row] + 1) % vocab_size())] = 1000.0f;
+        }
+        return logits_cpu.to(ctx.device());
+    }
+};
+
 void expect_tensor_values(const tiny_llm::Tensor& tensor, const std::vector<int32_t>& expected)
 {
     tiny_llm::Tensor cpu = tensor.cpu().contiguous();
@@ -88,6 +113,20 @@ TEST(ModelRunnerPreparedInputsTest, FlattensSchedulerOutputIntoRuntimeTensors)
 TEST(ModelRunnerPreparedInputsTest, SamplesOnlyFinalRowForEachRequest)
 {
     FakeModel model;
+    tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
+    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+
+    tiny_llm::ModelRunnerOutput output = runner.run(make_valid_output());
+    EXPECT_EQ(output.req_ids, std::vector<uint64_t>({7, 9}));
+    EXPECT_EQ(output.sampled_token_ids, std::vector<int32_t>({14, 22}));
+    ASSERT_EQ(output.req_id_to_index.size(), 2u);
+    EXPECT_EQ(output.req_id_to_index.at(7), 0);
+    EXPECT_EQ(output.req_id_to_index.at(9), 1);
+}
+
+TEST(ModelRunnerPreparedInputsTest, AcceptsCompactSampleRowLogits)
+{
+    CompactLogitsModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
     tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
 

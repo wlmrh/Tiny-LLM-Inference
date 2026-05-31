@@ -349,3 +349,14 @@ TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForQwenShapeLongPre
         expect_optimized_matches_reference(12, 2, 128, 16, prefill_tokens, 2e-4f);
     }
 }
+
+TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceAboveSingleBlockThreadLimit)
+{
+    check_cuda(cudaSetDevice(0), "set CUDA device");
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    expect_optimized_matches_reference(1, 1, 8, 16, 1032, 2e-4f);
+}

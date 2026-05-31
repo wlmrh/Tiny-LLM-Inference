@@ -88,8 +88,7 @@ void run_out_in_matmul(const Tensor& input,
     {
         throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
     }
-    const Tensor projected = torch::matmul(input, weight_out_in.transpose(0, 1));
-    output.copy_(projected);
+    at::mm_out(output, input, weight_out_in.transpose(0, 1));
 }
 
 float compute_linear_sum(const float* input_ptr,

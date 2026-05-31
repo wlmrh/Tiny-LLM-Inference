@@ -83,6 +83,17 @@ __global__ void silu_multiply_f32_kernel(const float* gate,
     out[idx] = (gate_value / (1.0f + expf(-gate_value))) * up[idx];
 }
 
+__global__ void add_f32_kernel(const float* lhs, const float* rhs, float* out, int64_t numel)
+{
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * static_cast<int64_t>(blockDim.x)
+        + static_cast<int64_t>(threadIdx.x);
+    if (idx >= numel)
+    {
+        return;
+    }
+    out[idx] = lhs[idx] + rhs[idx];
+}
+
 } // namespace
 
 void launch_apply_rope_cached_f32(const int32_t* positions,
@@ -142,6 +153,25 @@ void launch_silu_multiply_f32(const float* gate,
     silu_multiply_f32_kernel<<<static_cast<unsigned int>(blocks), kThreadsPerBlock, 0, stream>>>(
         gate,
         up,
+        out,
+        numel);
+    CHECK_CUDA(cudaGetLastError());
+}
+
+void launch_add_f32(const float* lhs,
+                    const float* rhs,
+                    float* out,
+                    int64_t numel,
+                    cudaStream_t stream)
+{
+    if (numel <= 0)
+    {
+        return;
+    }
+    const int64_t blocks = (numel + kThreadsPerBlock - 1) / kThreadsPerBlock;
+    add_f32_kernel<<<static_cast<unsigned int>(blocks), kThreadsPerBlock, 0, stream>>>(
+        lhs,
+        rhs,
         out,
         numel);
     CHECK_CUDA(cudaGetLastError());

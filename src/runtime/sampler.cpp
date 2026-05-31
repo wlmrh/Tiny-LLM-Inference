@@ -12,11 +12,110 @@
 #include <unordered_set>
 #include <vector>
 
+#if TINYLLM_ENABLE_CUDA
+#include <ATen/cuda/CUDAContext.h>
+#include <cuda_runtime.h>
+#endif
+
 namespace tiny_llm {
 
 float apply_repetition_penalty_to_logit(float logit, float penalty);
 
+#if TINYLLM_ENABLE_CUDA
+namespace cuda {
+void launch_mark_repetition_history_mask(const int64_t* history_tokens,
+                                         const int32_t* history_offsets,
+                                         uint8_t* history_mask,
+                                         int32_t sample_count,
+                                         int32_t vocab_size,
+                                         cudaStream_t stream);
+void launch_argmax_repetition_penalty_f32(const float* logits,
+                                          const int32_t* sample_rows,
+                                          const uint8_t* history_mask,
+                                          const float* penalties,
+                                          int32_t* sampled_tokens,
+                                          int32_t sample_count,
+                                          int32_t vocab_size,
+                                          cudaStream_t stream);
+} // namespace cuda
+#endif
+
 namespace {
+
+#if TINYLLM_ENABLE_CUDA
+struct CudaSamplerScratch {
+    bool initialized = false;
+    c10::Device device = c10::Device(c10::kCPU);
+    int32_t sample_capacity = 0;
+    int32_t history_capacity = 0;
+    int32_t vocab_size = 0;
+    Tensor sample_rows;
+    Tensor history_offsets;
+    Tensor history_tokens;
+    Tensor penalties;
+    Tensor history_mask;
+    Tensor sampled_tokens;
+};
+
+thread_local CudaSamplerScratch g_cuda_sampler_scratch;
+
+int32_t grow_capacity(int32_t current, int32_t required)
+{
+    int32_t capacity = std::max(current, 1);
+    while (capacity < required)
+    {
+        capacity *= 2;
+    }
+    return capacity;
+}
+
+CudaSamplerScratch& get_cuda_sampler_scratch(c10::Device device,
+                                             int32_t sample_count,
+                                             int32_t vocab_size,
+                                             int32_t history_count)
+{
+    CudaSamplerScratch& scratch = g_cuda_sampler_scratch;
+    const bool needs_reallocate =
+        !scratch.initialized
+        || scratch.device != device
+        || scratch.sample_capacity < sample_count
+        || scratch.vocab_size != vocab_size;
+    if (needs_reallocate)
+    {
+        scratch.initialized = true;
+        scratch.device = device;
+        scratch.sample_capacity = grow_capacity(scratch.sample_capacity, sample_count);
+        scratch.vocab_size = vocab_size;
+        const auto int32_options = torch::TensorOptions().dtype(torch::kInt32).device(device);
+        const auto float_options = torch::TensorOptions().dtype(torch::kFloat32).device(device);
+        scratch.sample_rows = torch::empty({scratch.sample_capacity}, int32_options);
+        scratch.history_offsets = torch::empty({scratch.sample_capacity + 1}, int32_options);
+        scratch.penalties = torch::empty({scratch.sample_capacity}, float_options);
+        scratch.history_mask = torch::empty(
+            {scratch.sample_capacity, vocab_size},
+            torch::TensorOptions().dtype(torch::kUInt8).device(device));
+        scratch.sampled_tokens = torch::empty({scratch.sample_capacity}, int32_options);
+    }
+
+    if (scratch.history_capacity < history_count)
+    {
+        scratch.history_capacity = grow_capacity(scratch.history_capacity, history_count);
+        scratch.history_tokens = torch::empty(
+            {scratch.history_capacity},
+            torch::TensorOptions().dtype(torch::kInt64).device(device));
+    }
+    return scratch;
+}
+
+template <typename T>
+Tensor vector_cpu_view(const std::vector<T>& values, c10::ScalarType dtype)
+{
+    return torch::from_blob(
+        const_cast<T*>(values.data()),
+        {static_cast<int64_t>(values.size())},
+        torch::TensorOptions().dtype(dtype).device(c10::kCPU));
+}
+#endif
 
 Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
 {
@@ -430,6 +529,80 @@ std::vector<int32_t> sample_cuda_rows_with_repetition_penalty(
     const std::vector<std::vector<int32_t>>& token_histories,
     const std::vector<SamplingParams>& sampling_params)
 {
+#if TINYLLM_ENABLE_CUDA
+    const int32_t sample_count = static_cast<int32_t>(sample_rows.size());
+    std::vector<int32_t> history_offsets;
+    std::vector<int64_t> history_tokens;
+    std::vector<float> penalties;
+    history_offsets.reserve(sample_rows.size() + 1);
+    penalties.reserve(sample_rows.size());
+    history_offsets.push_back(0);
+    for (size_t sample_index = 0; sample_index < sample_rows.size(); ++sample_index)
+    {
+        const float penalty = sampling_params[sample_index].repetition_penalty;
+        if (penalty <= 0.0f)
+        {
+            throw std::runtime_error("sample_greedy_rows: repetition penalty must be positive.");
+        }
+        penalties.push_back(penalty);
+        if (penalty != 1.0f && !token_histories[sample_index].empty())
+        {
+            const std::vector<int64_t> unique_tokens =
+                unique_valid_history_tokens(token_histories[sample_index], vocab_size);
+            history_tokens.insert(history_tokens.end(), unique_tokens.begin(), unique_tokens.end());
+        }
+        history_offsets.push_back(static_cast<int32_t>(history_tokens.size()));
+    }
+
+    const auto device = logits.device();
+    CudaSamplerScratch& scratch = get_cuda_sampler_scratch(
+        device,
+        sample_count,
+        vocab_size,
+        static_cast<int32_t>(history_tokens.size()));
+    Tensor sample_rows_tensor = scratch.sample_rows.narrow(0, 0, sample_count);
+    Tensor history_offsets_tensor = scratch.history_offsets.narrow(0, 0, sample_count + 1);
+    Tensor penalties_tensor = scratch.penalties.narrow(0, 0, sample_count);
+    Tensor history_mask = scratch.history_mask.narrow(0, 0, sample_count);
+    Tensor sampled_tokens = scratch.sampled_tokens.narrow(0, 0, sample_count);
+
+    sample_rows_tensor.copy_(vector_cpu_view(sample_rows, torch::kInt32), false);
+    history_offsets_tensor.copy_(vector_cpu_view(history_offsets, torch::kInt32), false);
+    penalties_tensor.copy_(vector_cpu_view(penalties, torch::kFloat32), false);
+    history_mask.zero_();
+    if (!history_tokens.empty())
+    {
+        Tensor history_tokens_tensor = scratch.history_tokens.narrow(
+            0,
+            0,
+            static_cast<int64_t>(history_tokens.size()));
+        history_tokens_tensor.copy_(vector_cpu_view(history_tokens, torch::kInt64), false);
+        cuda::launch_mark_repetition_history_mask(
+            history_tokens_tensor.data_ptr<int64_t>(),
+            history_offsets_tensor.data_ptr<int32_t>(),
+            history_mask.data_ptr<uint8_t>(),
+            sample_count,
+            vocab_size,
+            at::cuda::getCurrentCUDAStream(device.index()));
+    }
+
+    cuda::launch_argmax_repetition_penalty_f32(
+        logits.data_ptr<float>(),
+        sample_rows_tensor.data_ptr<int32_t>(),
+        history_mask.data_ptr<uint8_t>(),
+        penalties_tensor.data_ptr<float>(),
+        sampled_tokens.data_ptr<int32_t>(),
+        sample_count,
+        vocab_size,
+        at::cuda::getCurrentCUDAStream(device.index()));
+
+    Tensor sampled_cpu = sampled_tokens.to(
+        torch::TensorOptions().dtype(torch::kInt32).device(c10::kCPU),
+        /*non_blocking=*/false,
+        /*copy=*/true).contiguous();
+    const int32_t* token_ptr = sampled_cpu.data_ptr<int32_t>();
+    return std::vector<int32_t>(token_ptr, token_ptr + sample_rows.size());
+#else
     std::vector<Tensor> sampled_per_row;
     sampled_per_row.reserve(sample_rows.size());
     const auto long_options = torch::TensorOptions().dtype(torch::kInt64).device(logits.device());
@@ -469,6 +642,7 @@ std::vector<int32_t> sample_cuda_rows_with_repetition_penalty(
         /*copy=*/true).contiguous();
     const int32_t* token_ptr = sampled_cpu.data_ptr<int32_t>();
     return std::vector<int32_t>(token_ptr, token_ptr + sample_rows.size());
+#endif
 }
 
 } // namespace

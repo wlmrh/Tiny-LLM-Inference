@@ -145,6 +145,44 @@ bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,
         params.ctx->stream());
 
     torch::NoGradGuard no_grad;
+    const int64_t segment_count = static_cast<int64_t>(segments.size());
+    const int64_t attention_hidden = attention_hidden_size(params.num_attention_heads, params.head_dim);
+    bool can_run_batched_prefill = segment_count > 1;
+    const int64_t first_len = can_run_batched_prefill ? static_cast<int64_t>(segments.front().length) : 0;
+    for (int64_t index = 0; can_run_batched_prefill && index < segment_count; ++index)
+    {
+        const PrefillSegment& segment = segments[static_cast<size_t>(index)];
+        can_run_batched_prefill =
+            static_cast<int64_t>(segment.length) == first_len
+            && segment.row_start == index * first_len;
+    }
+    if (can_run_batched_prefill)
+    {
+        Tensor q_batch = params.q->view({segment_count, first_len, params.num_attention_heads, params.head_dim})
+            .permute({0, 2, 1, 3})
+            .contiguous();
+        Tensor k_batch = params.k->view({segment_count, first_len, params.num_key_value_heads, params.head_dim})
+            .permute({0, 2, 1, 3})
+            .contiguous();
+        Tensor v_batch = params.v->view({segment_count, first_len, params.num_key_value_heads, params.head_dim})
+            .permute({0, 2, 1, 3})
+            .contiguous();
+        Tensor attended = at::scaled_dot_product_attention(
+            q_batch,
+            k_batch,
+            v_batch,
+            std::nullopt,
+            0.0,
+            true,
+            std::nullopt,
+            params.num_attention_heads != params.num_key_value_heads);
+        params.out->copy_(
+            attended.permute({0, 2, 1, 3})
+                .contiguous()
+                .view({rows, attention_hidden}));
+        return true;
+    }
+
     for (const PrefillSegment& segment : segments)
     {
         const int64_t len = static_cast<int64_t>(segment.length);
@@ -176,7 +214,7 @@ bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,
             attended.squeeze(0)
                 .permute({1, 0, 2})
                 .contiguous()
-                .view({len, attention_hidden_size(params.num_attention_heads, params.head_dim)}));
+                .view({len, attention_hidden}));
     }
     return true;
 }

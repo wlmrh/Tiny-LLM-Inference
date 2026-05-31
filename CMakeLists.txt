@@ -136,6 +136,7 @@ if (TINYLLM_ENABLE_CUDA)
         src/operators/matmul/gemm_kernels.cu
         src/operators/llama_ops_kernels.cu
         src/operators/paged_attention/paged_attention_kernels.cu
+        src/runtime/sampler_kernels.cu
     )
     target_compile_definitions(tiny_llm PUBLIC TINYLLM_ENABLE_CUDA=1)
     target_link_libraries(tiny_llm PUBLIC CUDA::cudart CUDA::cublas ${TORCH_LIBRARIES} tokenizers_cpp)

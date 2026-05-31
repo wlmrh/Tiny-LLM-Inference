@@ -11,6 +11,7 @@ namespace {
 
 constexpr int kThreadsPerBlock = 256;
 constexpr int kAttentionThreadsPerBlock = 1024;
+constexpr int kFastAttentionMaxContextTokens = 2048;
 
 __global__ void copy_f32_kernel(const float* src, float* dst, int64_t n)
 {
@@ -158,12 +159,11 @@ __global__ void paged_attention_f32_kernel(const float* q,
     const int64_t q_row_offset = row * static_cast<int64_t>(num_attention_heads) * head_dim;
     const int64_t q_head_offset = q_row_offset + static_cast<int64_t>(q_head) * head_dim;
     const int32_t context_tokens = position + 1;
-    if (context_tokens <= static_cast<int32_t>(blockDim.x) && head_dim <= static_cast<int32_t>(blockDim.x))
+    if (context_tokens <= kFastAttentionMaxContextTokens && head_dim <= static_cast<int32_t>(blockDim.x))
     {
         float local_score = -FLT_MAX;
-        if (tid < context_tokens)
+        for (int32_t src_pos = tid; src_pos < context_tokens; src_pos += static_cast<int32_t>(blockDim.x))
         {
-            const int32_t src_pos = tid;
             const int32_t block_id = block_id_for_position(
                 block_tables,
                 num_seqs,
@@ -184,10 +184,11 @@ __global__ void paged_attention_f32_kernel(const float* q,
                 {
                     score += q[q_head_offset + dim] * key_base[dim];
                 }
-                local_score = score * scale;
+                const float scaled_score = score * scale;
+                aux[src_pos] = scaled_score;
+                local_score = fmaxf(local_score, scaled_score);
             }
         }
-        aux[tid] = local_score;
         reduce[tid] = local_score;
         __syncthreads();
         for (int32_t stride = static_cast<int32_t>(blockDim.x) / 2; stride > 0; stride >>= 1)
@@ -200,8 +201,12 @@ __global__ void paged_attention_f32_kernel(const float* q,
         }
         const float max_score = reduce[0];
 
-        const float local_weight = tid < context_tokens ? expf(aux[tid] - max_score) : 0.0f;
-        reduce[tid] = local_weight;
+        float local_sum = 0.0f;
+        for (int32_t src_pos = tid; src_pos < context_tokens; src_pos += static_cast<int32_t>(blockDim.x))
+        {
+            local_sum += expf(aux[src_pos] - max_score);
+        }
+        reduce[tid] = local_sum;
         __syncthreads();
         for (int32_t stride = static_cast<int32_t>(blockDim.x) / 2; stride > 0; stride >>= 1)
         {
@@ -414,9 +419,9 @@ void launch_paged_attention_f32(const float* q,
         stream);
 
     const dim3 grid(static_cast<unsigned int>(rows), static_cast<unsigned int>(num_attention_heads));
-    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kAttentionThreadsPerBlock)
+    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kFastAttentionMaxContextTokens)
         ? static_cast<size_t>(head_dim)
-        : static_cast<size_t>(kAttentionThreadsPerBlock);
+        : static_cast<size_t>(kFastAttentionMaxContextTokens);
     const size_t shared_bytes = (static_cast<size_t>(kAttentionThreadsPerBlock) + aux_floats) * sizeof(float);
     paged_attention_f32_kernel<<<grid, kAttentionThreadsPerBlock, shared_bytes, stream>>>(
         q,

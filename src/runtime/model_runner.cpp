@@ -12,6 +12,8 @@
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/runtime_context.h"
 
+#include <c10/core/InferenceMode.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -595,6 +597,7 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStat
     RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, runtime_detail_profile_enabled());
     auto guard = exec_ctx.step_guard();
     (void)guard;
+    c10::InferenceMode inference_guard(true);
     return model_->forward(inputs, runtime_ctx);
 }
 
@@ -675,6 +678,21 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     synchronize_for_profile(runtime_device);
     const auto model_end = ProfileClock::now();
 
+    std::vector<int32_t> logit_sample_rows = inputs.sample_row_offsets;
+    if (logits.size(0) == static_cast<int64_t>(inputs.sample_row_offsets.size())
+        && logits.size(0) != inputs.input_ids.size(0))
+    {
+        logit_sample_rows.resize(inputs.sample_row_offsets.size());
+        for (size_t i = 0; i < logit_sample_rows.size(); ++i)
+        {
+            logit_sample_rows[i] = static_cast<int32_t>(i);
+        }
+    }
+    else if (logits.size(0) != inputs.input_ids.size(0))
+    {
+        throw std::runtime_error("ModelRunner::run: model logits rows must match either input rows or sample rows.");
+    }
+
     const int32_t debug_top_k = debug_logits_top_k();
     if (debug_top_k > 0)
     {
@@ -696,10 +714,11 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
         for (size_t i = 0; i < prepared_req_ids_.size(); ++i)
         {
-            const int32_t row = inputs.sample_row_offsets[i];
-            const int32_t seq_index = seq_index_ptr[row];
+            const int32_t input_row = inputs.sample_row_offsets[i];
+            const int32_t logit_row = logit_sample_rows[i];
+            const int32_t seq_index = seq_index_ptr[input_row];
             const std::vector<int32_t> top_tokens = top_k_token_ids(
-                logits_ptr + static_cast<size_t>(row) * static_cast<size_t>(model_->vocab_size()),
+                logits_ptr + static_cast<size_t>(logit_row) * static_cast<size_t>(model_->vocab_size()),
                 model_->vocab_size(),
                 debug_top_k);
 
@@ -707,9 +726,10 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
             std::cerr << "\"step\":" << debug_step_index_ << ",";
             std::cerr << "\"req_id\":" << prepared_req_ids_[i] << ",";
             std::cerr << "\"sample_index\":" << i << ",";
-            std::cerr << "\"sample_row\":" << row << ",";
-            std::cerr << "\"position\":" << position_ptr[row] << ",";
-            std::cerr << "\"slot\":" << slot_ptr[row] << ",";
+            std::cerr << "\"sample_row\":" << input_row << ",";
+            std::cerr << "\"logit_row\":" << logit_row << ",";
+            std::cerr << "\"position\":" << position_ptr[input_row] << ",";
+            std::cerr << "\"slot\":" << slot_ptr[input_row] << ",";
             std::cerr << "\"seq_index\":" << seq_index << ",";
             std::cerr << "\"context_len\":"
                       << ((seq_index >= 0 && seq_index < context_lens_cpu.numel()) ? context_ptr[seq_index] : -1)
@@ -725,7 +745,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
             for (size_t j = 0; j < top_tokens.size(); ++j)
             {
                 if (j != 0) std::cerr << ",";
-                std::cerr << logits_ptr[static_cast<size_t>(row) * static_cast<size_t>(model_->vocab_size()) + static_cast<size_t>(top_tokens[j])];
+                std::cerr << logits_ptr[static_cast<size_t>(logit_row) * static_cast<size_t>(model_->vocab_size()) + static_cast<size_t>(top_tokens[j])];
             }
             std::cerr << "],\"top_in_history\":[";
             for (size_t j = 0; j < top_tokens.size(); ++j)
@@ -772,7 +792,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     const auto sampling_start = ProfileClock::now();
     std::vector<int32_t> sampled_rows = sample_greedy_rows(
         logits,
-        inputs.sample_row_offsets,
+        logit_sample_rows,
         model_->vocab_size(),
         &prepared_token_histories_,
         &prepared_sampling_params_,
@@ -785,7 +805,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     for (size_t i = 0; i < prepared_req_ids_.size(); ++i)
     {
         const uint64_t req_id = prepared_req_ids_[i];
-        const int32_t row = inputs.sample_row_offsets[i];
+        const int32_t row = logit_sample_rows[i];
         if (row < 0 || static_cast<size_t>(row) >= sampled_rows.size())
         {
             throw std::runtime_error("ModelRunner::run: sampled row is out of range.");
