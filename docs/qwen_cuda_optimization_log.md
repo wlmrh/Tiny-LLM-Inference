@@ -735,3 +735,127 @@ python3 benchmark/industrial_benchmark.py \
 - The main long-prefill issue was a combination of an ineffective prefill budget option and the lack of a full-prefill attention path. After the fix, Qwen long-prefill throughput improved from `0.277x` to `0.745x` of Transformers.
 - Decode-heavy and throughput workloads now exceed Transformers e2e throughput on this RTX 3090 run.
 - Remaining prefill gap is mostly first-token latency: TinyLLM is still `887.946ms` vs Transformers `701.360ms` on `long_prefill`. The next target should be reducing prefill metadata checks/copies and replacing the temporary SDPA bridge with a native tiled prefill kernel.
+
+## Optimization 12: Qwen End-to-End Parity Cleanup
+
+### Motivation
+
+After Optimization 11, TinyLLM already exceeded Transformers on short, chat, decode-heavy, and throughput workloads, but `long_prefill` still lagged in the full Qwen2.5-1.5B benchmark. A focused profile showed the remaining runtime was dominated by attention and MLP, with smaller but repeated costs in LM head, sampling, and residual elementwise operations:
+
+| Metric, long_prefill profile | Before cleanup |
+| --- | ---: |
+| `avg_total_latency_ms` | `3703.974` |
+| `avg_first_token_latency_ms` | `1039.813` |
+| `attention_ms` | `1657.285` |
+| `mlp_ms` | `1020.463` |
+| `qkv_proj_ms` | `231.264` |
+| `lm_head_ms` | `175.975` |
+
+### Changes
+
+- Compacted hidden states before the LM head so prefill steps compute logits only for `sample_row_offsets`, not every prompt row.
+- Updated `ModelRunner` to accept compact sample-row logits while preserving the existing full-row logits contract.
+- Raised the non-atomic CUDA paged-attention fast-path context coverage to `2048` tokens and added coverage for contexts above the old single-block limit.
+- Cached full-prefill segment parsing for the CUDA SDPA bridge so layer-by-layer prefill does not repeatedly copy and validate the same metadata.
+- Replaced temporary-output `kOutIn` linear projections with `at::mm_out`, reducing extra allocations/copies in `o_proj`, `down_proj`, and `lm_head`.
+- Wrapped model forward in `c10::InferenceMode` from `ModelRunner::run_model`.
+- Added a CUDA greedy repetition-penalty sampler kernel with reusable scratch buffers. It avoids cloning full logits rows and running multiple small Torch indexing ops for every decode step.
+- Added a direct CUDA residual-add kernel for `ops::add_tensors`, replacing `out.copy_(lhs + rhs)` on CUDA tensors.
+
+### Rejected Experiment
+
+A 512-thread decode attention block improved one-off long-prefill latency, but repeated `PagedAttentionCudaTest.OptimizedBackendMatchesReferenceForQwenShapeLongPrefill` runs exposed nondeterministic mismatches. The final code keeps the stable 1024-thread attention block.
+
+### Files Changed
+
+- `CMakeLists.txt`
+- `src/models/llama_model.cpp`
+- `src/models/modules/linear.cpp`
+- `src/operators/llama_ops.cpp`
+- `src/operators/llama_ops_kernels.cu`
+- `src/operators/paged_attention/paged_attention_kernels.cu`
+- `src/operators/paged_attention/paged_attention_torch.cpp`
+- `src/runtime/model_runner.cpp`
+- `src/runtime/sampler.cpp`
+- `src/runtime/sampler_kernels.cu`
+- `tests/unit/test_model_runner_prepared_inputs.cpp`
+- `tests/unit/test_paged_attention_cuda.cpp`
+
+### Verification
+
+The following checks passed on the remote RTX 3090 server:
+
+| Check | Result |
+| --- | --- |
+| `git diff --check` | passed |
+| CPU build | passed |
+| CPU full `ctest` | `49/55` executed and passed, `6` skipped |
+| CUDA build | passed |
+| CUDA full `ctest` | `59/66` executed and passed, `7` skipped |
+| Repeated Qwen-shaped paged attention test | `3/3` passed |
+| Qwen CUDA smoke generation | passed |
+| Qwen full TinyLLM vs Transformers benchmark | passed |
+| Token IDs vs Transformers | matched in all five scenarios |
+
+Qwen CUDA smoke output:
+
+```json
+{"prompt":"hello","output":"hello = \"Hello World\"\nprint(hello","finish_reason":"length","generated_token_ids":[284,330,9707,4337,698,1350,3203,4791]}
+```
+
+### Report
+
+The generated report is:
+
+```text
+benchmark/results_qwen_baseline_compare/qwen25_after_stable_add_sampler_full_20260531_192324.json
+benchmark/results_qwen_baseline_compare/qwen25_after_stable_add_sampler_full_20260531_192324.md
+```
+
+Benchmark command:
+
+```bash
+python3 benchmark/industrial_benchmark.py \
+  --model-dir /models/Qwen2.5-1.5B-Instruct \
+  --tinyllm-binary build-cuda/benchmark/llama_engine_benchmark \
+  --device cuda:0 \
+  --backend all \
+  --scenarios all \
+  --transformers-scenarios all \
+  --warmup 1 \
+  --repeat 3 \
+  --output-dir benchmark/results_qwen_baseline_compare \
+  --label qwen25_after_stable_add_sampler_full
+```
+
+### Results After Optimization
+
+| Scenario | Batch | ISL | OSL | TinyLLM latency ms | Transformers latency ms | TinyLLM e2e tok/s | Transformers e2e tok/s | TinyLLM / Transformers e2e |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `interactive` | `1` | `128` | `64` | `732.568` | `1673.869` | `87.364` | `38.235` | `2.285x` |
+| `chat_serving` | `8` | `128` | `128` | `2307.694` | `3567.818` | `443.733` | `287.010` | `1.546x` |
+| `long_prefill` | `4` | `1024` | `64` | `2377.187` | `2428.604` | `107.690` | `105.410` | `1.022x` |
+| `decode_heavy` | `4` | `256` | `256` | `4358.113` | `7278.441` | `234.964` | `140.689` | `1.670x` |
+| `throughput` | `16` | `128` | `128` | `2951.499` | `3768.359` | `693.885` | `543.473` | `1.277x` |
+
+| Scenario | TinyLLM TTFT ms | Transformers TTFT ms | TinyLLM decode tok/s | Transformers decode tok/s | Token IDs match |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `interactive` | `36.979` | `34.031` | `90.285` | `38.305` | yes |
+| `chat_serving` | `178.701` | `162.603` | `483.529` | `302.424` | yes |
+| `long_prefill` | `738.732` | `705.515` | `154.127` | `146.502` | yes |
+| `decode_heavy` | `178.566` | `163.396` | `245.241` | `144.053` | yes |
+| `throughput` | `338.175` | `320.367` | `786.120` | `596.115` | yes |
+
+### Improvement Summary
+
+| Scenario | Before Opt 11 e2e tok/s | After Opt 11 e2e tok/s | After Opt 12 e2e tok/s | Opt 12 vs Opt 11 |
+| --- | ---: | ---: | ---: | ---: |
+| `long_prefill` | `30.086` | `80.752` | `107.690` | `1.334x` |
+| `decode_heavy` | `120.222` | `224.318` | `234.964` | `1.047x` |
+| `throughput` | `472.566` | `605.751` | `693.885` | `1.146x` |
+
+### Interpretation
+
+- TinyLLM now exceeds the Transformers baseline in all five Qwen benchmark scenarios on this RTX 3090 run.
+- The largest new win came from avoiding full-row LM-head work during long prefill. Smaller repeated savings came from reducing Torch temporary tensors in linear projections, sampling, and residual add.
+- TTFT remains higher than Transformers in every scenario, so the next major optimization should still be native tiled prefill attention and a lower-overhead model-step path rather than more wrapper-level cleanup.
