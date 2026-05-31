@@ -463,3 +463,155 @@ The preserved decode-heavy profile is:
 
 - The RoPE kernel is the clearer win in this stage; it cuts quick profile `rope_ms` from `82.603` to `45.154`.
 - MLP fusion is modest in serving-like profile and not the next primary target. Long decode remains dominated by paged attention.
+
+## Optimization 10: Runtime Contract Hardening and Sampling Semantics
+
+### Optimization Point
+
+The documentation review found several runtime surfaces that were either redundant, exposed but not enforced, or unsafe for long-lived engine use:
+
+- `RequestData::block_ids` duplicated the real rank-3 `block_tables` contract used by `ModelRunner`.
+- `SchedulerConfig::max_running_requests` and `enable_preemption` existed but were not fully reflected in scheduling behavior.
+- `temperature`, `top_k`, and `top_p` were exposed through sampling params, but the sampler still behaved as greedy-only aside from repetition penalty.
+- Completed frontend request state was retained indefinitely by the input/output preprocessors.
+- `KVCache::start_sequence()` and `BlockAllocator::free_block()` relied on upper layers to avoid duplicate sequence starts and double frees.
+- `LLM` model-directory validation was stricter than `ModelRunner` and did not accept sharded safetensors consistently.
+
+### Strategy
+
+Make the public runtime contracts match the implementation and make invalid state fail fast:
+
+- Remove the redundant `RequestData::block_ids` field and keep `block_tables` as the only KV mapping surface.
+- Enforce `max_running_requests` during waiting-request admission.
+- Honor `enable_preemption`: when disabled, allocation failure leaves the request waiting instead of evicting a running request.
+- Release completed request IDs and output state after the final response is delivered.
+- Reject duplicate active sequence starts in `KVCache`.
+- Track allocation state in `BlockAllocator` and reject invalid or duplicate frees.
+- Align `LLM` facade safetensors validation with `ModelRunner`, including sorted sharded `*.safetensors`.
+- Add deterministic non-greedy sampling support for `temperature > 0`, `top_k`, `top_p`, repetition penalty, and `seed`.
+
+### Files
+
+- `include/tiny_llm/core/allocator.h`
+- `include/tiny_llm/runtime/processors.h`
+- `include/tiny_llm/runtime/sampler.h`
+- `include/tiny_llm/runtime/scheduler.h`
+- `src/core/allocator_common.cpp`
+- `src/runtime/engine.cpp`
+- `src/runtime/kv_cache.cpp`
+- `src/runtime/llm.cpp`
+- `src/runtime/model_runner.cpp`
+- `src/runtime/processors.cpp`
+- `src/runtime/sampler.cpp`
+- `src/runtime/scheduler.cpp`
+- `tests/unit/test_engine_core.cpp`
+- `tests/unit/test_kv_cache_manager.cpp`
+- `tests/unit/test_sampler.cpp`
+- `tests/unit/test_scheduler.cpp`
+
+### Result
+
+This stage is mostly a correctness and operability optimization rather than a CUDA-kernel optimization. It reduces stale state in long-lived engines, makes scheduler configuration meaningful, and removes a redundant scheduler-to-runner field. The sampler now supports the behavior already exposed through the public API, while default generation remains greedy because `temperature` defaults to `0.0`.
+
+### Verification
+
+The following checks passed on the remote RTX 3090 server:
+
+| Check | Result |
+| --- | --- |
+| `git diff --check` | passed |
+| CPU focused tests | `31/31` passed |
+| CPU full `ctest` | `52/52` passed, `6` skipped |
+| CPU smoke generation | passed |
+| CUDA focused tests | `38/38` passed |
+| CUDA full `ctest` | `62/62` passed, `7` skipped |
+| CUDA smoke generation | passed |
+
+The CPU and CUDA smoke command both generated:
+
+```text
+hello, "I'm sorry, I didn
+```
+
+## Current Full Baseline Comparison on RTX 3090
+
+### Scope
+
+The missing Qwen2.5 model files were restored on the session server through the Hugging Face mirror endpoint:
+
+```text
+HF_ENDPOINT=https://hf-mirror.com
+/root/autodl-tmp/models/Qwen2.5-1.5B-Instruct
+/models/Qwen2.5-1.5B-Instruct
+```
+
+The local `/models/Qwen2.5-1.5B-Instruct` path is a symlink to the data-disk model directory. The downloaded runtime files are `config.json`, `generation_config.json`, `model.safetensors`, `tokenizer.json`, `tokenizer_config.json`, `merges.txt`, and `vocab.json`.
+
+Qwen CUDA smoke validation passed:
+
+```bash
+./build-cuda/tools/llama_engine_generate --device cuda:0 /models/Qwen2.5-1.5B-Instruct 8 hello
+```
+
+```json
+{"prompt":"hello","output":"hello = \"Hello World\"\nprint(hello","finish_reason":"length","generated_token_ids":[284,330,9707,4337,698,1350,3203,4791]}
+```
+
+### Report
+
+The generated report is:
+
+```text
+benchmark/results_qwen_baseline_compare/current_full_transformers_3090_qwen25_1p5b_20260531_163408.json
+benchmark/results_qwen_baseline_compare/current_full_transformers_3090_qwen25_1p5b_20260531_163408.md
+```
+
+Benchmark command:
+
+```bash
+python3 benchmark/industrial_benchmark.py \
+  --model-dir /models/Qwen2.5-1.5B-Instruct \
+  --tinyllm-binary build-cuda/benchmark/llama_engine_benchmark \
+  --device cuda:0 \
+  --backend all \
+  --scenarios all \
+  --transformers-scenarios all \
+  --warmup 1 \
+  --repeat 3 \
+  --output-dir benchmark/results_qwen_baseline_compare \
+  --label current_full_transformers_3090_qwen25_1p5b
+```
+
+Hardware:
+
+| Field | Value |
+| --- | --- |
+| GPU | `NVIDIA GeForce RTX 3090` |
+| GPU memory | `49152 MiB` |
+| Driver | `580.105.08` |
+| Device | `cuda:0` |
+
+### Results
+
+| Scenario | Batch | ISL | OSL | TinyLLM latency ms | Transformers latency ms | TinyLLM e2e tok/s | Transformers e2e tok/s | TinyLLM / Transformers e2e |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `interactive` | `1` | `128` | `64` | `772.660` | `1708.193` | `82.831` | `37.467` | `2.211` |
+| `chat_serving` | `8` | `128` | `128` | `2481.098` | `3596.109` | `412.720` | `284.752` | `1.449` |
+| `long_prefill` | `4` | `1024` | `64` | `8508.861` | `2355.053` | `30.086` | `108.702` | `0.277` |
+| `decode_heavy` | `4` | `256` | `256` | `8517.546` | `6928.482` | `120.222` | `147.796` | `0.813` |
+| `throughput` | `16` | `128` | `128` | `4333.790` | `3667.074` | `472.566` | `558.483` | `0.846` |
+
+| Scenario | TinyLLM TTFT ms | Transformers TTFT ms | TinyLLM decode tok/s | Transformers decode tok/s | Token IDs match |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `interactive` | `57.640` | `33.992` | `88.109` | `37.630` | yes |
+| `chat_serving` | `101.606` | `163.427` | `426.982` | `295.979` | yes |
+| `long_prefill` | `1263.815` | `702.796` | `34.782` | `152.519` | yes |
+| `decode_heavy` | `124.469` | `164.508` | `121.529` | `150.799` | yes |
+| `throughput` | `103.120` | `321.226` | `480.302` | `607.320` | yes |
+
+### Interpretation
+
+- TinyLLM remains faster than Transformers in `interactive` and `chat_serving`, with e2e throughput ratios of `2.211x` and `1.449x`.
+- Qwen exposes larger-model bottlenecks that were hidden by the earlier small-model smoke baseline: `long_prefill`, `decode_heavy`, and `throughput` now trail Transformers.
+- The most severe gap is `long_prefill`, where TinyLLM reaches only `0.277x` Transformers e2e throughput and has `1263.815ms` TTFT. This confirms that long-context prefill attention is the primary next optimization target.
+- The decode-heavy and throughput regressions show that the current CUDA paged-attention bridge is not yet competitive enough for larger Qwen batch/decode workloads, even though token-level outputs match Transformers.
