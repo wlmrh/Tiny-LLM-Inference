@@ -10,6 +10,7 @@ namespace tiny_llm::ops::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
+constexpr int kAttentionThreadsPerBlock = 1024;
 
 __global__ void copy_f32_kernel(const float* src, float* dst, int64_t n)
 {
@@ -157,7 +158,7 @@ __global__ void paged_attention_f32_kernel(const float* q,
     const int64_t q_row_offset = row * static_cast<int64_t>(num_attention_heads) * head_dim;
     const int64_t q_head_offset = q_row_offset + static_cast<int64_t>(q_head) * head_dim;
     const int32_t context_tokens = position + 1;
-    if (rows <= 8 && context_tokens <= static_cast<int32_t>(blockDim.x) && head_dim <= static_cast<int32_t>(blockDim.x))
+    if (context_tokens <= static_cast<int32_t>(blockDim.x) && head_dim <= static_cast<int32_t>(blockDim.x))
     {
         float local_score = -FLT_MAX;
         if (tid < context_tokens)
@@ -353,6 +354,22 @@ __global__ void paged_attention_f32_kernel(const float* q,
     }
 }
 
+void launch_write_paged_kv_cache_f32(const float* k,
+                                     const float* v,
+                                     const int32_t* positions,
+                                     const int32_t* seq_indices,
+                                     const int32_t* block_tables,
+                                     float* kv_pool_base,
+                                     int64_t rows,
+                                     int64_t num_seqs,
+                                     int64_t max_blocks_per_seq,
+                                     int64_t num_blocks,
+                                     int64_t block_size_bytes,
+                                     int32_t block_size_tokens,
+                                     int32_t layer_id,
+                                     int32_t kv_size,
+                                     cudaStream_t stream);
+
 void launch_paged_attention_f32(const float* q,
                                 const float* k,
                                 const float* v,
@@ -379,7 +396,7 @@ void launch_paged_attention_f32(const float* q,
         return;
     }
     const int32_t kv_size = num_key_value_heads * head_dim;
-    write_paged_kv_cache_f32_kernel<<<static_cast<unsigned int>(rows), kThreadsPerBlock, 0, stream>>>(
+    launch_write_paged_kv_cache_f32(
         k,
         v,
         positions,
@@ -393,15 +410,15 @@ void launch_paged_attention_f32(const float* q,
         block_size_bytes,
         block_size_tokens,
         layer_id,
-        kv_size);
-    CHECK_CUDA(cudaGetLastError());
+        kv_size,
+        stream);
 
     const dim3 grid(static_cast<unsigned int>(rows), static_cast<unsigned int>(num_attention_heads));
-    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kThreadsPerBlock)
+    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kAttentionThreadsPerBlock)
         ? static_cast<size_t>(head_dim)
-        : static_cast<size_t>(kThreadsPerBlock);
-    const size_t shared_bytes = (static_cast<size_t>(kThreadsPerBlock) + aux_floats) * sizeof(float);
-    paged_attention_f32_kernel<<<grid, kThreadsPerBlock, shared_bytes, stream>>>(
+        : static_cast<size_t>(kAttentionThreadsPerBlock);
+    const size_t shared_bytes = (static_cast<size_t>(kAttentionThreadsPerBlock) + aux_floats) * sizeof(float);
+    paged_attention_f32_kernel<<<grid, kAttentionThreadsPerBlock, shared_bytes, stream>>>(
         q,
         out,
         positions,
@@ -422,6 +439,43 @@ void launch_paged_attention_f32(const float* q,
     CHECK_CUDA(cudaGetLastError());
 }
 
+void launch_write_paged_kv_cache_f32(const float* k,
+                                     const float* v,
+                                     const int32_t* positions,
+                                     const int32_t* seq_indices,
+                                     const int32_t* block_tables,
+                                     float* kv_pool_base,
+                                     int64_t rows,
+                                     int64_t num_seqs,
+                                     int64_t max_blocks_per_seq,
+                                     int64_t num_blocks,
+                                     int64_t block_size_bytes,
+                                     int32_t block_size_tokens,
+                                     int32_t layer_id,
+                                     int32_t kv_size,
+                                     cudaStream_t stream)
+{
+    if (rows <= 0 || kv_size <= 0)
+    {
+        return;
+    }
+    write_paged_kv_cache_f32_kernel<<<static_cast<unsigned int>(rows), kThreadsPerBlock, 0, stream>>>(
+        k,
+        v,
+        positions,
+        seq_indices,
+        block_tables,
+        kv_pool_base,
+        rows,
+        num_seqs,
+        max_blocks_per_seq,
+        num_blocks,
+        block_size_bytes,
+        block_size_tokens,
+        layer_id,
+        kv_size);
+    CHECK_CUDA(cudaGetLastError());
+}
 
 } // namespace tiny_llm::ops::cuda
 #endif

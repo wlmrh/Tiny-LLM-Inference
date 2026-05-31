@@ -3,11 +3,18 @@
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 
+#include <ATen/ops/scaled_dot_product_attention.h>
+
 #include <cmath>
+#include <cstdint>
+#include <optional>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #if TINYLLM_ENABLE_CUDA
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAStream.h>
 #include <cuda_runtime.h>
 #endif
 
@@ -39,6 +46,141 @@ Tensor kv_block_tensor(KVCache& kv_cache,
         {block_size_tokens, kv_size},
         torch::TensorOptions().dtype(torch::kFloat32).device(kv_cache.device()));
 }
+
+struct PrefillSegment {
+    int64_t row_start = 0;
+    int32_t seq_index = 0;
+    int32_t length = 0;
+};
+
+bool collect_full_prefill_segments(const LlamaAttentionParams& params,
+                                   int64_t rows,
+                                   int64_t num_seqs,
+                                   std::vector<PrefillSegment>& segments)
+{
+    if (rows < 64)
+    {
+        return false;
+    }
+
+    Tensor positions_cpu;
+    Tensor seq_indices_cpu;
+    Tensor context_lens_cpu;
+    const int32_t* positions_ptr = cpu_int_ptr(*params.positions, positions_cpu);
+    const int32_t* seq_index_ptr = cpu_int_ptr(*params.metadata->seq_indices, seq_indices_cpu);
+    const int32_t* context_ptr = cpu_int_ptr(*params.metadata->context_lens, context_lens_cpu);
+
+    segments.clear();
+    std::vector<bool> seen(static_cast<size_t>(num_seqs), false);
+    int64_t row = 0;
+    while (row < rows)
+    {
+        const int32_t seq_index = seq_index_ptr[row];
+        if (seq_index < 0 || seq_index >= num_seqs || seen[static_cast<size_t>(seq_index)])
+        {
+            return false;
+        }
+        seen[static_cast<size_t>(seq_index)] = true;
+
+        const int32_t context_len = context_ptr[seq_index];
+        if (context_len <= 0 || row + static_cast<int64_t>(context_len) > rows)
+        {
+            return false;
+        }
+
+        for (int32_t offset = 0; offset < context_len; ++offset)
+        {
+            const int64_t current_row = row + offset;
+            if (seq_index_ptr[current_row] != seq_index || positions_ptr[current_row] != offset)
+            {
+                return false;
+            }
+        }
+
+        segments.push_back(PrefillSegment{row, seq_index, context_len});
+        row += context_len;
+    }
+    return !segments.empty();
+}
+
+#if TINYLLM_ENABLE_CUDA
+bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,
+                                    KVCache& kv_cache,
+                                    int64_t rows,
+                                    int64_t num_seqs,
+                                    int64_t max_blocks_per_seq,
+                                    int64_t num_blocks,
+                                    int64_t block_size_bytes)
+{
+    std::vector<PrefillSegment> segments;
+    if (!collect_full_prefill_segments(params, rows, num_seqs, segments))
+    {
+        return false;
+    }
+
+    std::optional<c10::cuda::CUDAStreamGuard> stream_guard;
+    if (params.ctx->stream() != nullptr)
+    {
+        stream_guard.emplace(c10::cuda::getStreamFromExternal(
+            params.ctx->stream(),
+            static_cast<c10::DeviceIndex>(params.q->device().index())));
+    }
+
+    const int32_t kv_size = kv_hidden_size(params.num_key_value_heads, params.head_dim);
+    cuda::launch_write_paged_kv_cache_f32(
+        static_cast<const float*>(tensor_data(*params.k)),
+        static_cast<const float*>(tensor_data(*params.v)),
+        params.positions->data_ptr<int32_t>(),
+        params.metadata->seq_indices->data_ptr<int32_t>(),
+        params.metadata->block_tables->data_ptr<int32_t>(),
+        static_cast<float*>(kv_cache.block_pool_base()),
+        rows,
+        num_seqs,
+        max_blocks_per_seq,
+        num_blocks,
+        block_size_bytes,
+        params.metadata->block_size_tokens,
+        params.layer_id,
+        kv_size,
+        params.ctx->stream());
+
+    torch::NoGradGuard no_grad;
+    for (const PrefillSegment& segment : segments)
+    {
+        const int64_t len = static_cast<int64_t>(segment.length);
+        Tensor q_seq = params.q->narrow(0, segment.row_start, len)
+            .view({len, params.num_attention_heads, params.head_dim})
+            .permute({1, 0, 2})
+            .unsqueeze(0)
+            .contiguous();
+        Tensor k_seq = params.k->narrow(0, segment.row_start, len)
+            .view({len, params.num_key_value_heads, params.head_dim})
+            .permute({1, 0, 2})
+            .unsqueeze(0)
+            .contiguous();
+        Tensor v_seq = params.v->narrow(0, segment.row_start, len)
+            .view({len, params.num_key_value_heads, params.head_dim})
+            .permute({1, 0, 2})
+            .unsqueeze(0)
+            .contiguous();
+        Tensor attended = at::scaled_dot_product_attention(
+            q_seq,
+            k_seq,
+            v_seq,
+            std::nullopt,
+            0.0,
+            true,
+            std::nullopt,
+            params.num_attention_heads != params.num_key_value_heads);
+        params.out->narrow(0, segment.row_start, len).copy_(
+            attended.squeeze(0)
+                .permute({1, 0, 2})
+                .contiguous()
+                .view({len, attention_hidden_size(params.num_attention_heads, params.head_dim)}));
+    }
+    return true;
+}
+#endif
 
 void run_direct_attention_torch(const LlamaAttentionParams& params)
 {
@@ -232,6 +374,17 @@ bool try_run_cuda_optimized_attention(const LlamaAttentionParams& params)
     const Tensor& block_tables = *params.metadata->block_tables;
     const std::vector<int64_t> block_shape = tensor_shape(block_tables);
     const int64_t rows = params.q->size(0);
+    if (try_run_full_prefill_sdpa_cuda(
+            params,
+            kv_cache,
+            rows,
+            block_shape[1],
+            block_shape[2],
+            static_cast<int64_t>(kv_cache.total_block_count()),
+            static_cast<int64_t>(kv_cache.block_size_bytes())))
+    {
+        return true;
+    }
 
     cuda::launch_paged_attention_f32(
         static_cast<const float*>(tensor_data(*params.q)),
