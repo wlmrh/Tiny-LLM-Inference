@@ -6,6 +6,8 @@ Tiny-LLM-Inference is a small vLLM-inspired, single-process inference engine. `L
 
 Default project workflow: perform code changes, builds, tests, benchmarks, and other project commands on the session-provided remote server unless the user explicitly scopes a task to local files. Use the SSH command and password supplied for the current session instead of assuming a persistent host alias.
 
+If the user explicitly requests local project edits, modify files locally but do not configure, build, test, or benchmark the project locally. Local verification should be limited to static checks such as search, diff, and whitespace validation.
+
 ## Stack And Build Assumptions
 
 - C++17, CMake 3.18+, one static library target `tiny_llm` plus compatibility aliases `tiny_llm_core`, `tiny_llm_models`, and `tiny_llm_operators`.
