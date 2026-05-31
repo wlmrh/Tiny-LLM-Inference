@@ -79,7 +79,7 @@ bool has_required_model_files(const std::filesystem::path& model_dir, std::strin
 }
 }
 
-TEST(TinyLMRuntimeIntegrationTest, GenerateStreamReturnsEventsAndFinalOutputs)
+TEST(LLMRuntimeIntegrationTest, GenerateStreamReturnsEventsAndFinalOutputs)
 {
     const std::filesystem::path model_dir(resolve_model_dir());
     std::string skip_reason;

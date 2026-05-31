@@ -6,9 +6,7 @@
 #include "tiny_llm/models/hf_safetensors_loader.h"
 #include "tiny_llm/models/llama_model.h"
 #include "tiny_llm/models/llama_weight_map.h"
-#include "tiny_llm/models/mini_llama.h"
 #include "tiny_llm/models/model.h"
-#include "tiny_llm/models/tiny_lm.h"
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/execution_context.h"
 #include "tiny_llm/runtime/kv_cache.h"
@@ -375,17 +373,6 @@ void ModelRunner::init_from_args(const EngineArgs& args)
     {
         switch (args.model_type)
         {
-            case EngineModelType::kTinyEmbeddingLM:
-                if (args.tiny_lm_checkpoint_path.empty())
-                {
-                    throw std::runtime_error("ModelRunner: tiny_lm_checkpoint_path must be provided.");
-                }
-                owned_model_ = std::make_unique<TinyEmbeddingLM>(
-                    TinyEmbeddingLM::from_checkpoint(args.tiny_lm_checkpoint_path));
-                break;
-            case EngineModelType::kMiniLLaMA:
-                owned_model_ = std::make_unique<MiniLLaMA>(args.mini_llama_config);
-                break;
             case EngineModelType::kHFLlamaSafeTensor:
             {
                 if (args.hf_model_dir.empty())

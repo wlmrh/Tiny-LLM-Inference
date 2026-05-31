@@ -18,7 +18,6 @@ tools/              Manual debug/generation tools
 benchmark/          Manual performance benchmarks
 tests/              GoogleTest and CTest correctness tests
 scripts/            Python comparison helpers
-assets/tiny_lm/     Tiny toy-model assets
 ```
 
 ## Dependencies
@@ -268,7 +267,7 @@ ctest --test-dir build --output-on-failure
 Run the runtime integration binary directly:
 
 ```bash
-./build/tests/test_tiny_lm_runtime /models/smollm2-135M
+./build/tests/test_llm_runtime /models/smollm2-135M
 ```
 
 Run CUDA tests after a CUDA build:

@@ -43,12 +43,12 @@ Important risk to resolve early:
 - `config.json` token ids may not perfectly align with tokenizer-derived ids in all HF exports.
 - This must be normalized in Phase 0/Phase 2 as a strict contract.
 
-## 2. Current Gap (Must Be Addressed)
+## 2. Historical Gap
 
-1. Current `MiniLLaMA` is a placeholder forward path, not real HuggingFace Llama weight execution.
-2. Runtime has no SafeTensor parser in C++.
-3. Runtime tokenizer supports Whitespace/WordPiece, but not Llama tokenizer behavior.
-4. Model construction path in `ModelExecutor::init_from_args` does not accept a HF directory.
+1. Runtime needed direct HuggingFace Llama-family weight execution.
+2. Runtime needed a SafeTensor parser in C++.
+3. Runtime tokenizer needed HuggingFace tokenizer behavior.
+4. Model construction needed to accept a HF directory.
 
 Therefore, this should be delivered in phases, not one-shot.
 
@@ -147,7 +147,7 @@ Files to modify:
 
 - include/tiny_llm/runtime/engine_args.h
 - src/runtime/executor.cpp
-- include/tiny_llm/models/mini_llama.h
+- include/tiny_llm/models/llama_model.h
 
 New files:
 
@@ -163,8 +163,8 @@ Planned changes:
    - optional `std::string hf_weight_file` (default `model.safetensors`)
 3. In `ModelExecutor::init_from_args`:
    - when model type is HF, call HF config loader + safetensor loader
-   - build `MiniLLaMAConfig` from `config.json`
-4. Expand `MiniLLaMAConfig` fields (minimum):
+   - build `LlamaConfig` from `config.json`
+4. Expand `LlamaConfig` fields (minimum):
    - num_hidden_layers
    - hidden_size
    - intermediate_size
@@ -184,7 +184,7 @@ Acceptance:
 
 ---
 
-## Phase 3 - Weight Mapping into MiniLLaMA (2-3 days)
+## Phase 3 - Weight Mapping into LLaMA Runtime (2-3 days)
 
 Goal:
 
@@ -197,7 +197,7 @@ New files:
 
 Files to modify:
 
-- include/tiny_llm/models/mini_llama.h
+- include/tiny_llm/models/llama_model.h
 - src/models/llama_layer.cpp
 
 Mapping logic (for each layer i):
@@ -217,7 +217,7 @@ Mapping logic (for each layer i):
 
 Design suggestion:
 
-- Add an internal `MiniLLaMAWeights` struct holding references/tensors.
+- Add an internal `LlamaWeights` struct holding references/tensors.
 - Validate every required key exists and shape matches config.
 - Fail fast with explicit error messages:
   - missing key
@@ -234,12 +234,12 @@ Acceptance:
 
 Goal:
 
-- Replace placeholder `MiniLLaMA::forward_step` with a real decoder-layer path based on loaded weights.
+- Build the real decoder-layer path based on loaded weights.
 
 Files to modify:
 
 - src/models/llama_layer.cpp (major rewrite)
-- include/tiny_llm/models/mini_llama.h
+- include/tiny_llm/models/llama_model.h
 - include/tiny_llm/operators/rmsnorm.h
 - src/operators/rmsnorm/rmsnorm.cpp
 - include/tiny_llm/operators/matmul.h
@@ -327,7 +327,7 @@ Files to modify:
 
 - tests/CMakeLists.txt
 - README.md
-- examples/tiny_lm_inference.cpp (or add new hf example)
+- tools/llama_engine_generate.cpp
 
 New tests:
 

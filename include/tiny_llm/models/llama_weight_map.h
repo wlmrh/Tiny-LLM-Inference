@@ -58,20 +58,20 @@ struct LlamaLayerWeights {
     Tensor down_proj;
 };
 
-struct MiniLLaMAWeights {
+struct LlamaWeights {
     Tensor embed_tokens;
     std::vector<LlamaLayerWeights> layers;
     Tensor norm;
     Tensor lm_head;
 };
 
-MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
-                                    const LlamaConfig& config);
-MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
-                                    const LlamaConfig& config,
-                                    const ParallelConfig& parallel_config);
+LlamaWeights load_llama_weights(const HFSafeTensorLoader& loader,
+                                const LlamaConfig& config);
+LlamaWeights load_llama_weights(const HFSafeTensorLoader& loader,
+                                const LlamaConfig& config,
+                                const ParallelConfig& parallel_config);
 
-MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,
-                                    const LlamaConfig& config);
+LlamaWeights load_llama_weights(const WeightMap& weight_map,
+                                const LlamaConfig& config);
 
 } // namespace tiny_llm

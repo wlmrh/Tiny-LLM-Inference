@@ -177,21 +177,21 @@ std::vector<std::string> WeightMap::keys() const
     return out;
 }
 
-MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
-                                    const LlamaConfig& config)
+LlamaWeights load_llama_weights(const HFSafeTensorLoader& loader,
+                                const LlamaConfig& config)
 {
     return load_llama_weights(WeightMap::from_safetensors(loader), config);
 }
 
-MiniLLaMAWeights load_llama_weights(const HFSafeTensorLoader& loader,
-                                    const LlamaConfig& config,
-                                    const ParallelConfig& parallel_config)
+LlamaWeights load_llama_weights(const HFSafeTensorLoader& loader,
+                                const LlamaConfig& config,
+                                const ParallelConfig& parallel_config)
 {
     return load_llama_weights(WeightMap::from_safetensors(loader, parallel_config), config);
 }
 
-MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,
-                                    const LlamaConfig& config)
+LlamaWeights load_llama_weights(const WeightMap& weight_map,
+                                const LlamaConfig& config)
 {
     if (config.num_hidden_layers <= 0 || config.hidden_size <= 0
         || config.intermediate_size <= 0 || config.vocab_size <= 0)
@@ -199,7 +199,7 @@ MiniLLaMAWeights load_llama_weights(const WeightMap& weight_map,
         throw std::runtime_error("load_llama_weights: invalid model config dimensions.");
     }
 
-    MiniLLaMAWeights weights;
+    LlamaWeights weights;
     weights.embed_tokens = load_checked_tensor(
         weight_map,
         "model.embed_tokens.weight",

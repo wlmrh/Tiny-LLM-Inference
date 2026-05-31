@@ -36,6 +36,4 @@ struct LlamaConfig {
     std::string torch_dtype = "float32";
 };
 
-using MiniLLaMAConfig = LlamaConfig;
-
 } // namespace tiny_llm

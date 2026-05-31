@@ -84,7 +84,7 @@ Focused runtime checks:
 ```bash
 TINYLLM_HF_TINY_LLAMA_DIR=~/models/smollm2-135M \
 ctest --test-dir build --output-on-failure \
-  -R 'TinyLMRuntimeIntegrationTest|LLMOfflineIntegrationTest|test_llama_generation_cpu_smoke'
+  -R 'LLMRuntimeIntegrationTest|LLMOfflineIntegrationTest|test_llama_generation_cpu_smoke'
 
 ctest --test-dir build-cuda --output-on-failure \
   -R 'Scheduler|KVCache|ModelRunner|EngineCore|PagedAttention|test_llama_generation_cuda_smoke'
@@ -94,7 +94,7 @@ Useful direct runs:
 
 ```bash
 ./build/tests/test_scheduler --gtest_filter='SchedulerTest.*'
-./build/tests/test_tiny_lm_runtime ~/models/smollm2-135M --gtest_filter='TinyLMRuntimeIntegrationTest.*'
+./build/tests/test_llm_runtime ~/models/smollm2-135M --gtest_filter='LLMRuntimeIntegrationTest.*'
 
 ./build-cuda/tools/llama_engine_generate \
   --device cuda:0 \

@@ -120,12 +120,10 @@ add_library(tiny_llm STATIC
     src/models/llama_layer.cpp
     src/models/llama_model.cpp
     src/models/llama_weight_map.cpp
-    src/models/mini_llama.cpp
     src/models/modules/embedding.cpp
     src/models/modules/linear.cpp
     src/models/modules/rmsnorm.cpp
     src/models/modules/rotary_embedding.cpp
-    src/models/tiny_lm.cpp
 )
 
 target_include_directories(tiny_llm PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
@@ -158,12 +156,6 @@ add_library(tiny_llm_operators ALIAS tiny_llm)
 # ==============================================================================
 # 4. 编译最终的可执行文件
 # ==============================================================================
-add_executable(llama_inference examples/llama_inference.cpp)
-target_link_libraries(llama_inference PRIVATE tiny_llm)
-
-add_executable(tiny_lm_inference examples/tiny_lm_inference.cpp)
-target_link_libraries(tiny_lm_inference PRIVATE tiny_llm)
-
 add_executable(offline_llm examples/offline_llm.cpp)
 target_link_libraries(offline_llm PRIVATE tiny_llm)
 
