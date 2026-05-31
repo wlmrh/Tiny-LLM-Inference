@@ -756,7 +756,7 @@ After Optimization 11, TinyLLM already exceeded Transformers on short, chat, dec
 - Compacted hidden states before the LM head so prefill steps compute logits only for `sample_row_offsets`, not every prompt row.
 - Updated `ModelRunner` to accept compact sample-row logits while preserving the existing full-row logits contract.
 - Raised the non-atomic CUDA paged-attention fast-path context coverage to `2048` tokens and added coverage for contexts above the old single-block limit.
-- Cached full-prefill segment parsing for the CUDA SDPA bridge so layer-by-layer prefill does not repeatedly copy and validate the same metadata.
+- Kept full-prefill segment parsing explicit in the CUDA SDPA bridge while optimizing the heavier LM-head, sampler, residual-add, linear projection, and paged-attention paths.
 - Replaced temporary-output `kOutIn` linear projections with `at::mm_out`, reducing extra allocations/copies in `o_proj`, `down_proj`, and `lm_head`.
 - Wrapped model forward in `c10::InferenceMode` from `ModelRunner::run_model`.
 - Added a CUDA greedy repetition-penalty sampler kernel with reusable scratch buffers. It avoids cloning full logits rows and running multiple small Torch indexing ops for every decode step.
@@ -765,6 +765,8 @@ After Optimization 11, TinyLLM already exceeded Transformers on short, chat, dec
 ### Rejected Experiment
 
 A 512-thread decode attention block improved one-off long-prefill latency, but repeated `PagedAttentionCudaTest.OptimizedBackendMatchesReferenceForQwenShapeLongPrefill` runs exposed nondeterministic mismatches. The final code keeps the stable 1024-thread attention block.
+
+An address-keyed thread-local cache for full-prefill segment parsing was also rejected. It reduced repeated metadata parsing, but it could become stale if allocator reuse produced the same tensor addresses for different position or context contents.
 
 ### Files Changed
 
