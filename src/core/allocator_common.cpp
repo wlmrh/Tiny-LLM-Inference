@@ -49,7 +49,8 @@ BlockAllocator::BlockAllocator(size_t num_blocks,
     : memory_pool_(memory_pool),
       num_blocks_(num_blocks),
       block_size_(block_size_bytes),
-      parallel_config_(parallel_config) {
+      parallel_config_(parallel_config),
+      allocated_(num_blocks_, false) {
     parallel_config_.validate();
     free_list_.reserve(num_blocks_);
     for (int32_t i = static_cast<int32_t>(num_blocks_) - 1; i >= 0; --i) {
@@ -63,13 +64,18 @@ int32_t BlockAllocator::allocate_block() {
     }
     const int32_t id = free_list_.back();
     free_list_.pop_back();
+    allocated_[static_cast<size_t>(id)] = true;
     return id;
 }
 
 void BlockAllocator::free_block(int32_t block_id) {
     if (block_id < 0 || block_id >= static_cast<int32_t>(num_blocks_)) {
-        return;
+        throw std::runtime_error("BlockAllocator::free_block: block id out of range.");
     }
+    if (!allocated_[static_cast<size_t>(block_id)]) {
+        throw std::runtime_error("BlockAllocator::free_block: block is not currently allocated.");
+    }
+    allocated_[static_cast<size_t>(block_id)] = false;
     free_list_.push_back(block_id);
 }
 

@@ -12,7 +12,8 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
                                         const std::vector<int32_t>& sample_rows,
                                         int32_t vocab_size,
                                         const std::vector<std::vector<int32_t>>* token_histories = nullptr,
-                                        const std::vector<SamplingParams>* sampling_params = nullptr);
+                                        const std::vector<SamplingParams>* sampling_params = nullptr,
+                                        const std::vector<uint64_t>* request_ids = nullptr);
 
 float apply_repetition_penalty_to_logit(float logit, float penalty);
 

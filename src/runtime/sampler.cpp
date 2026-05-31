@@ -3,11 +3,18 @@
 #include "tiny_llm/core/tensor.h"
 #include "tiny_llm/runtime/sampling.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <numeric>
+#include <random>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
 
 namespace tiny_llm {
+
+float apply_repetition_penalty_to_logit(float logit, float penalty);
 
 namespace {
 
@@ -18,6 +25,52 @@ Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
         return tensor.contiguous();
     }
     return tensor.to(c10::kCPU, /*non_blocking=*/false, /*copy=*/true).contiguous();
+}
+
+void validate_sampling_params(const SamplingParams& params)
+{
+    if (params.temperature < 0.0f)
+    {
+        throw std::runtime_error("sample_greedy_rows: temperature must be >= 0.");
+    }
+    if (!(params.top_p > 0.0f && params.top_p <= 1.0f))
+    {
+        throw std::runtime_error("sample_greedy_rows: top_p must be in (0, 1].");
+    }
+    if (params.top_k < 0)
+    {
+        throw std::runtime_error("sample_greedy_rows: top_k must be >= 0.");
+    }
+    if (params.repetition_penalty <= 0.0f)
+    {
+        throw std::runtime_error("sample_greedy_rows: repetition_penalty must be positive.");
+    }
+}
+
+void validate_sampling_metadata(const std::vector<int32_t>& sample_rows,
+                                const std::vector<std::vector<int32_t>>* token_histories,
+                                const std::vector<SamplingParams>* sampling_params,
+                                const std::vector<uint64_t>* request_ids)
+{
+    if (token_histories != nullptr && token_histories->size() != sample_rows.size())
+    {
+        throw std::runtime_error("sample_greedy_rows: token history metadata size mismatch.");
+    }
+    if (sampling_params != nullptr)
+    {
+        if (sampling_params->size() != sample_rows.size())
+        {
+            throw std::runtime_error("sample_greedy_rows: sampling parameter metadata size mismatch.");
+        }
+        for (const SamplingParams& params : *sampling_params)
+        {
+            validate_sampling_params(params);
+        }
+    }
+    if (request_ids != nullptr && request_ids->size() != sample_rows.size())
+    {
+        throw std::runtime_error("sample_greedy_rows: request id metadata size mismatch.");
+    }
 }
 
 bool has_active_repetition_penalty(const std::vector<int32_t>& sample_rows,
@@ -43,6 +96,27 @@ bool has_active_repetition_penalty(const std::vector<int32_t>& sample_rows,
     return false;
 }
 
+bool has_non_greedy_sampling(const std::vector<int32_t>& sample_rows,
+                             const std::vector<SamplingParams>* sampling_params)
+{
+    if (sampling_params == nullptr)
+    {
+        return false;
+    }
+    if (sampling_params->size() != sample_rows.size())
+    {
+        throw std::runtime_error("sample_greedy_rows: sampling parameter metadata size mismatch.");
+    }
+    for (const SamplingParams& params : *sampling_params)
+    {
+        if (params.temperature > 0.0f || params.top_k > 0 || params.top_p < 1.0f)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::vector<int64_t> unique_valid_history_tokens(const std::vector<int32_t>& history, int32_t vocab_size)
 {
     std::unordered_set<int32_t> seen_tokens;
@@ -61,6 +135,252 @@ std::vector<int64_t> unique_valid_history_tokens(const std::vector<int32_t>& his
         }
     }
     return unique_tokens;
+}
+
+uint64_t mix_seed(uint64_t value)
+{
+    value += 0x9e3779b97f4a7c15ULL;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+}
+
+uint64_t derive_sample_seed(const SamplingParams& params,
+                            uint64_t request_id,
+                            size_t history_size,
+                            size_t sample_index)
+{
+    uint64_t seed = mix_seed(params.seed);
+    seed ^= mix_seed(request_id + 0x100000001b3ULL);
+    seed ^= mix_seed(static_cast<uint64_t>(history_size) + 0x9e3779b97f4a7c15ULL);
+    seed ^= mix_seed(static_cast<uint64_t>(sample_index) + 0xbf58476d1ce4e5b9ULL);
+    return seed;
+}
+
+int32_t argmax_row(const std::vector<float>& row)
+{
+    int32_t best = -1;
+    float best_value = -std::numeric_limits<float>::infinity();
+    for (int32_t token = 0; token < static_cast<int32_t>(row.size()); ++token)
+    {
+        if (row[static_cast<size_t>(token)] > best_value)
+        {
+            best_value = row[static_cast<size_t>(token)];
+            best = token;
+        }
+    }
+    if (best < 0 || best_value == -std::numeric_limits<float>::infinity())
+    {
+        throw std::runtime_error("sample_greedy_rows: no valid token remains after filtering.");
+    }
+    return best;
+}
+
+void apply_repetition_penalty(std::vector<float>& row,
+                              const std::vector<int32_t>& history,
+                              int32_t vocab_size,
+                              float penalty)
+{
+    const std::vector<int64_t> history_tokens = unique_valid_history_tokens(history, vocab_size);
+    for (int64_t token : history_tokens)
+    {
+        float& value = row[static_cast<size_t>(token)];
+        value = apply_repetition_penalty_to_logit(value, penalty);
+    }
+}
+
+void apply_top_k_filter(std::vector<float>& row, int32_t top_k)
+{
+    if (top_k <= 0 || top_k >= static_cast<int32_t>(row.size()))
+    {
+        return;
+    }
+
+    std::vector<int32_t> indices(row.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::partial_sort(
+        indices.begin(),
+        indices.begin() + top_k,
+        indices.end(),
+        [&](int32_t lhs, int32_t rhs) {
+            const float l = row[static_cast<size_t>(lhs)];
+            const float r = row[static_cast<size_t>(rhs)];
+            if (l == r)
+            {
+                return lhs < rhs;
+            }
+            return l > r;
+        });
+
+    std::vector<bool> keep(row.size(), false);
+    for (int32_t i = 0; i < top_k; ++i)
+    {
+        keep[static_cast<size_t>(indices[static_cast<size_t>(i)])] = true;
+    }
+    for (size_t token = 0; token < row.size(); ++token)
+    {
+        if (!keep[token])
+        {
+            row[token] = -std::numeric_limits<float>::infinity();
+        }
+    }
+}
+
+std::vector<double> softmax_weights(const std::vector<float>& row, float temperature)
+{
+    const double temp = temperature > 0.0f ? static_cast<double>(temperature) : 1.0;
+    double max_value = -std::numeric_limits<double>::infinity();
+    for (float value : row)
+    {
+        if (value != -std::numeric_limits<float>::infinity())
+        {
+            max_value = std::max(max_value, static_cast<double>(value) / temp);
+        }
+    }
+    if (max_value == -std::numeric_limits<double>::infinity())
+    {
+        throw std::runtime_error("sample_greedy_rows: no valid logits remain after filtering.");
+    }
+
+    std::vector<double> weights(row.size(), 0.0);
+    for (size_t token = 0; token < row.size(); ++token)
+    {
+        if (row[token] != -std::numeric_limits<float>::infinity())
+        {
+            weights[token] = std::exp(static_cast<double>(row[token]) / temp - max_value);
+        }
+    }
+    return weights;
+}
+
+void apply_top_p_filter(std::vector<float>& row, float top_p, float temperature)
+{
+    if (top_p >= 1.0f)
+    {
+        return;
+    }
+
+    std::vector<double> weights = softmax_weights(row, temperature);
+    const double total = std::accumulate(weights.begin(), weights.end(), 0.0);
+    if (total <= 0.0)
+    {
+        throw std::runtime_error("sample_greedy_rows: probability mass is zero.");
+    }
+    for (double& weight : weights)
+    {
+        weight /= total;
+    }
+
+    std::vector<int32_t> indices(row.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(
+        indices.begin(),
+        indices.end(),
+        [&](int32_t lhs, int32_t rhs) {
+            const double l = weights[static_cast<size_t>(lhs)];
+            const double r = weights[static_cast<size_t>(rhs)];
+            if (l == r)
+            {
+                return lhs < rhs;
+            }
+            return l > r;
+        });
+
+    std::vector<bool> keep(row.size(), false);
+    double cumulative = 0.0;
+    bool kept_any = false;
+    for (int32_t token : indices)
+    {
+        if (weights[static_cast<size_t>(token)] <= 0.0)
+        {
+            continue;
+        }
+        keep[static_cast<size_t>(token)] = true;
+        kept_any = true;
+        cumulative += weights[static_cast<size_t>(token)];
+        if (cumulative >= static_cast<double>(top_p))
+        {
+            break;
+        }
+    }
+    if (!kept_any)
+    {
+        keep[static_cast<size_t>(indices.front())] = true;
+    }
+
+    for (size_t token = 0; token < row.size(); ++token)
+    {
+        if (!keep[token])
+        {
+            row[token] = -std::numeric_limits<float>::infinity();
+        }
+    }
+}
+
+int32_t sample_filtered_row(std::vector<float> row,
+                            const std::vector<int32_t>& history,
+                            int32_t vocab_size,
+                            const SamplingParams& params,
+                            uint64_t request_id,
+                            size_t sample_index)
+{
+    validate_sampling_params(params);
+    if (params.repetition_penalty != 1.0f && !history.empty())
+    {
+        apply_repetition_penalty(row, history, vocab_size, params.repetition_penalty);
+    }
+    apply_top_k_filter(row, params.top_k);
+    apply_top_p_filter(row, params.top_p, params.temperature);
+
+    if (params.temperature == 0.0f)
+    {
+        return argmax_row(row);
+    }
+
+    std::vector<double> weights = softmax_weights(row, params.temperature);
+    const double total = std::accumulate(weights.begin(), weights.end(), 0.0);
+    if (total <= 0.0)
+    {
+        throw std::runtime_error("sample_greedy_rows: probability mass is zero.");
+    }
+
+    std::mt19937_64 rng(derive_sample_seed(params, request_id, history.size(), sample_index));
+    std::discrete_distribution<int32_t> dist(weights.begin(), weights.end());
+    return dist(rng);
+}
+
+std::vector<int32_t> sample_cpu_rows_general(
+    const Tensor& logits,
+    const std::vector<int32_t>& sample_rows,
+    int32_t vocab_size,
+    const std::vector<std::vector<int32_t>>* token_histories,
+    const std::vector<SamplingParams>* sampling_params,
+    const std::vector<uint64_t>* request_ids)
+{
+    std::vector<int32_t> sampled(static_cast<size_t>(logits.size(0)), -1);
+    Tensor logits_cpu = tensor_to_cpu_contiguous(logits);
+    const float* logits_ptr = logits_cpu.data_ptr<float>();
+    const SamplingParams default_params;
+    const std::vector<int32_t> empty_history;
+
+    for (size_t sample_index = 0; sample_index < sample_rows.size(); ++sample_index)
+    {
+        const int32_t row = sample_rows[sample_index];
+        const float* row_logits = logits_ptr + static_cast<size_t>(row) * static_cast<size_t>(vocab_size);
+        std::vector<float> row_values(row_logits, row_logits + vocab_size);
+        const SamplingParams& params = sampling_params == nullptr ? default_params : (*sampling_params)[sample_index];
+        const std::vector<int32_t>& history =
+            token_histories == nullptr ? empty_history : (*token_histories)[sample_index];
+        const uint64_t request_id = request_ids == nullptr ? static_cast<uint64_t>(sample_index) : (*request_ids)[sample_index];
+        sampled[static_cast<size_t>(row)] = sample_filtered_row(
+            std::move(row_values),
+            history,
+            vocab_size,
+            params,
+            request_id,
+            sample_index);
+    }
+    return sampled;
 }
 
 std::vector<int32_t> sample_cuda_rows_without_repetition_penalty(const Tensor& logits,
@@ -204,7 +524,8 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
                                         const std::vector<int32_t>& sample_rows,
                                         int32_t vocab_size,
                                         const std::vector<std::vector<int32_t>>* token_histories,
-                                        const std::vector<SamplingParams>* sampling_params)
+                                        const std::vector<SamplingParams>* sampling_params,
+                                        const std::vector<uint64_t>* request_ids)
 {
     if (!logits.defined())
     {
@@ -213,6 +534,10 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
     if (tensor_dtype(logits) != DType::kFloat32)
     {
         throw std::runtime_error("sample_greedy_rows: logits must be float32.");
+    }
+    if (vocab_size <= 0)
+    {
+        throw std::runtime_error("sample_greedy_rows: vocab_size must be positive.");
     }
     if (logits.dim() != 2 || logits.size(1) != vocab_size)
     {
@@ -231,6 +556,18 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
     if (sample_rows.empty())
     {
         return sampled;
+    }
+
+    validate_sampling_metadata(sample_rows, token_histories, sampling_params, request_ids);
+    if (has_non_greedy_sampling(sample_rows, sampling_params))
+    {
+        return sample_cpu_rows_general(
+            logits,
+            sample_rows,
+            vocab_size,
+            token_histories,
+            sampling_params,
+            request_ids);
     }
 
     const bool apply_repetition_penalty =

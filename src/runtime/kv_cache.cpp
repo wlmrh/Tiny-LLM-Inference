@@ -86,6 +86,9 @@ void* KVCache::block_ptr(int32_t block_id) const {
 }
 
 void KVCache::start_sequence(int32_t seq_id) {
+    if (seqs_.find(seq_id) != seqs_.end()) {
+        throw std::runtime_error("KVCache: sequence already exists.");
+    }
     SeqState state;
     state.page_tables.resize(static_cast<size_t>(cfg_.num_layers));
     seqs_[seq_id] = std::move(state);

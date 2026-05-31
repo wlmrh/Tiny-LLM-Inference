@@ -39,7 +39,6 @@ struct RequestData {
     int32_t num_computed_tokens = 0; // 已经计算过 kvcache 的 token 长度
     int32_t prompt_token_count = 0;
     bool is_prefill = false; // Whether this scheduled chunk is still processing prompt tokens.
-    std::vector<int32_t> block_ids; // 该请求的映射表，将逻辑上的 block id 映射到物理块编号
     std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id
     SamplingParams sampling_params;
     std::vector<int32_t> all_token_ids;
@@ -208,6 +207,8 @@ public:
 
 private:
     void _preempt_request(Request request);
+    size_t running_request_count() const;
+    bool can_admit_waiting_request() const;
 
     KVCacheManager kvcache_manager;
     std::map<int64_t, Request> requests;
@@ -215,6 +216,8 @@ private:
     std::deque<uint64_t> waiting;
     std::deque<uint64_t> running;
     int64_t max_num_scheduled_tokens = 256;
+    size_t max_running_requests = 0;
+    bool enable_preemption = true;
 };
 
 } // namespace tiny_llm

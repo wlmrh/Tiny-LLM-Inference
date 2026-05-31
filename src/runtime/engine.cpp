@@ -57,6 +57,13 @@ std::vector<UserOutput> LLMEngine::step()
     last_step_profile_ = core_->last_step_profile();
 
     std::vector<UserOutput> user_outputs = output_preprocessor_.process_outputs(core_outputs);
+    for (const UserOutput& output : user_outputs)
+    {
+        if (output.is_finished)
+        {
+            input_preprocessor_.release_request(output.external_id, output.internal_id);
+        }
+    }
 
     // Trigger one final core step to reclaim finished Scheduler/KV state.
     if (!output_preprocessor_.has_unfinished_requests())

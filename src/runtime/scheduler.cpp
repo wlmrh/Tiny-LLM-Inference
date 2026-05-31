@@ -395,7 +395,9 @@ bool KVCacheManager::allocate_slots(
 Scheduler::Scheduler(SchedulerConfig config)
     : policy(config.policy),
       max_num_scheduled_tokens(
-          std::max<int64_t>(1, static_cast<int64_t>(config.max_prefill_tokens_per_step)))
+          std::max<int64_t>(1, static_cast<int64_t>(config.max_prefill_tokens_per_step))),
+      max_running_requests(config.max_running_requests),
+      enable_preemption(config.enable_preemption)
 {
 }
 
@@ -488,6 +490,24 @@ bool Scheduler::has_unfinished_requests()
     return get_num_unfinished_requests() > 0;
 }
 
+size_t Scheduler::running_request_count() const
+{
+    size_t count = 0;
+    for (const auto& item : requests)
+    {
+        if (item.second.status == RequestStatus::RUNNING)
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool Scheduler::can_admit_waiting_request() const
+{
+    return max_running_requests == 0 || running_request_count() < max_running_requests;
+}
+
 void Scheduler::_preempt_request(Request request)
 {
     Request* req = find_request(requests, request.request_id);
@@ -542,6 +562,10 @@ SchedulerOutput Scheduler::schedule()
             {
                 req.status = RequestStatus::RUNNING;
                 return true;
+            }
+            if (!enable_preemption)
+            {
+                return false;
             }
             // No enough Space for a the current request
             // Find a legal Request from the back of the queue and preempt it
@@ -626,10 +650,6 @@ SchedulerOutput Scheduler::schedule()
             req_data.sampling_params = req->sampling_params;
             req_data.all_token_ids = req->_all_token_ids;
             req_data.block_tables = std::move(block_tables);
-            if (!req_data.block_tables.empty())
-            {
-                req_data.block_ids = req_data.block_tables.front();
-            }
             req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
             for (int32_t i = 0; i < chunk; ++i)
             {
@@ -665,10 +685,6 @@ SchedulerOutput Scheduler::schedule()
         req_data.sampling_params = req->sampling_params;
         req_data.all_token_ids = req->_all_token_ids;
         req_data.block_tables = std::move(block_tables);
-        if (!req_data.block_tables.empty())
-        {
-            req_data.block_ids = req_data.block_tables.front();
-        }
         req_data.new_token_ids.push_back(req->_all_token_ids.back());
 
         scheduler_output.num_scheduled_tokens[request_id] = 1;
@@ -695,6 +711,10 @@ SchedulerOutput Scheduler::schedule()
             if (req == nullptr || req->status == RequestStatus::FINISHED)
             {
                 continue;
+            }
+            if (req->status == RequestStatus::WAITING && !can_admit_waiting_request())
+            {
+                break;
             }
 
             const int32_t core_seq_id = static_cast<int32_t>(request_id);
@@ -725,10 +745,6 @@ SchedulerOutput Scheduler::schedule()
                 req_data.sampling_params = req->sampling_params;
                 req_data.all_token_ids = req->_all_token_ids;
                 req_data.block_tables = std::move(block_tables);
-                if (!req_data.block_tables.empty())
-                {
-                    req_data.block_ids = req_data.block_tables.front();
-                }
                 req_data.new_token_ids.push_back(req->_all_token_ids.back());
 
                 scheduler_output.num_scheduled_tokens[request_id] = 1;
@@ -754,10 +770,6 @@ SchedulerOutput Scheduler::schedule()
             req_data.sampling_params = req->sampling_params;
             req_data.all_token_ids = req->_all_token_ids;
             req_data.block_tables = std::move(block_tables);
-            if (!req_data.block_tables.empty())
-            {
-                req_data.block_ids = req_data.block_tables.front();
-            }
             req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
             for (int32_t i = 0; i < chunk; ++i)
             {

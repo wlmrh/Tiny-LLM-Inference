@@ -147,6 +147,7 @@ private:
     size_t block_size_ = 0;           ///< Fixed size of each block in bytes.
     ParallelConfig parallel_config_{};
     std::vector<int32_t> free_list_;  ///< LIFO list of currently available block IDs.
+    std::vector<bool> allocated_;     ///< Per-block allocation state for double-free detection.
 };
 
 } // namespace tiny_llm

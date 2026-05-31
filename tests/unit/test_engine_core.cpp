@@ -1,5 +1,6 @@
 #include "tiny_llm/core/allocator.h"
 #include "tiny_llm/models/model.h"
+#include "tiny_llm/runtime/engine.h"
 #include "tiny_llm/runtime/engine_core.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/tokenizer.h"
@@ -35,7 +36,7 @@ public:
 
 class FakeTokenizer final : public tiny_llm::Tokenizer {
 public:
-    std::vector<int32_t> encode(const std::string&) override { return {}; }
+    std::vector<int32_t> encode(const std::string&) override { return {4}; }
     std::string decode(const std::vector<int32_t>& ids) const override
     {
         std::string result;
@@ -144,4 +145,28 @@ TEST(EngineCoreTest, RejectsPromptTokenOutsideModelVocabulary)
 {
     EngineCoreFixture fixture;
     EXPECT_THROW(fixture.add_request(1, {63, 64}, 1), std::runtime_error);
+}
+
+TEST(EngineCoreTest, LLMEngineReleasesFinishedExternalRequestIds)
+{
+    EngineCoreFixture fixture;
+    tiny_llm::EngineArgs args;
+    args.model = &fixture.model;
+    args.ctx = &fixture.ctx;
+    args.kv = &fixture.kv;
+    args.tokenizer = &fixture.tokenizer;
+    args.max_generated_tokens = 1;
+    args.scheduler_config.max_prefill_tokens_per_step = 8;
+
+    tiny_llm::LLMEngine engine(args);
+    tiny_llm::UserSamplingParams sampling_params;
+    sampling_params.max_tokens = 1;
+
+    EXPECT_NO_THROW(engine.add_request("first", sampling_params, "reuse-id"));
+    while (engine.has_unfinished_requests())
+    {
+        (void)engine.step();
+    }
+
+    EXPECT_NO_THROW(engine.add_request("second", sampling_params, "reuse-id"));
 }

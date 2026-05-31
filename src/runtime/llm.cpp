@@ -81,6 +81,22 @@ size_t llama_kv_block_bytes(const LlamaConfig& config, int32_t block_size_tokens
                        "kv block bytes");
 }
 
+bool has_any_safetensors_file(const std::filesystem::path& model_dir)
+{
+    if (!std::filesystem::exists(model_dir) || !std::filesystem::is_directory(model_dir))
+    {
+        return false;
+    }
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".safetensors")
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void validate_model_dir(const std::filesystem::path& model_dir, const std::string& weight_file)
 {
     if (!std::filesystem::is_directory(model_dir))
@@ -91,9 +107,16 @@ void validate_model_dir(const std::filesystem::path& model_dir, const std::strin
     {
         throw std::runtime_error("LLM: missing config.json under model directory: " + model_dir.string());
     }
-    if (!std::filesystem::exists(model_dir / weight_file))
+    const bool uses_default_weight = weight_file.empty() || weight_file == "model.safetensors";
+    if (!uses_default_weight && !std::filesystem::exists(model_dir / weight_file))
     {
         throw std::runtime_error("LLM: missing weight file under model directory: " + (model_dir / weight_file).string());
+    }
+    if (uses_default_weight
+        && !std::filesystem::exists(model_dir / "model.safetensors")
+        && !has_any_safetensors_file(model_dir))
+    {
+        throw std::runtime_error("LLM: missing safetensors weight file under model directory: " + model_dir.string());
     }
     if (!std::filesystem::exists(model_dir / "tokenizer.json")
         && !std::filesystem::exists(model_dir / "tokenizer.model"))

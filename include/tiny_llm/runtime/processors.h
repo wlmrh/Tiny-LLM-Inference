@@ -22,6 +22,7 @@ struct UserSamplingParams {
     float top_p = 1.0f;
     int32_t top_k = 0;
     float repetition_penalty = 1.0f;
+    uint64_t seed = 0;
     int32_t max_tokens = 32;
     std::vector<int32_t> stop_token_ids;
 };
@@ -34,6 +35,7 @@ struct SamplingParams {
     float top_p = 1.0f;
     int32_t top_k = 0;
     float repetition_penalty = 1.0f;
+    uint64_t seed = 0;
     int32_t max_tokens = 32;
     std::vector<int32_t> stop_token_ids;
 };
@@ -98,6 +100,7 @@ public:
     EngineCoreRequest process_inputs(const std::string& prompt,
                                      const UserSamplingParams& user_params,
                                      const std::string& ext_request_id) const;
+    void release_request(const std::string& external_id, uint64_t internal_id) const;
 
 private:
     uint64_t assign_internal_id() const;

@@ -30,6 +30,8 @@ struct LlamaAttentionParams {
     int32_t head_dim = 0;
 };
 
+// Legacy compatibility API. New model code should pass metadata explicitly
+// through RuntimeContext/LlamaAttentionParams instead of using thread-local state.
 void set_paged_attention_runtime_metadata(const Tensor& slot_mapping,
                                           const Tensor& seq_indices,
                                           const Tensor& context_lens,

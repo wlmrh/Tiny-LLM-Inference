@@ -76,6 +76,15 @@ void InputPreprocessor::bind_external_id(EngineCoreRequest& request, const std::
     }
 }
 
+void InputPreprocessor::release_request(const std::string& external_id, uint64_t internal_id) const
+{
+    const auto it = external_to_internal_id_.find(external_id);
+    if (it != external_to_internal_id_.end() && it->second == internal_id)
+    {
+        external_to_internal_id_.erase(it);
+    }
+}
+
 void InputPreprocessor::validate_tokenizer_contract() const
 {
     const Tokenizer* tokenizer = tokenizer_;
@@ -115,6 +124,7 @@ SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingPa
     params.top_p = user_params.top_p;
     params.top_k = user_params.top_k;
     params.repetition_penalty = user_params.repetition_penalty;
+    params.seed = user_params.seed;
     params.max_tokens = user_params.max_tokens > 0 ? user_params.max_tokens : default_max_tokens_;
     params.stop_token_ids = user_params.stop_token_ids;
 
@@ -225,6 +235,7 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::unordered_ma
 {
     std::vector<UserOutput> user_outputs;
     user_outputs.reserve(core_outputs.size());
+    std::vector<uint64_t> finished_ids;
 
     for (const auto& item : core_outputs)
     {
@@ -272,7 +283,16 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::unordered_ma
         out.generated_token_ids = state.generated_token_ids;
         out.is_finished = state.is_finished;
         out.finish_reason = state.finish_reason;
+        if (state.is_finished)
+        {
+            finished_ids.push_back(state.internal_id);
+        }
         user_outputs.push_back(std::move(out));
+    }
+
+    for (uint64_t id : finished_ids)
+    {
+        states_.erase(id);
     }
 
     return user_outputs;

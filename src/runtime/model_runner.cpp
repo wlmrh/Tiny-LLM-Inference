@@ -751,7 +751,8 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         inputs.sample_row_offsets,
         model_->vocab_size(),
         &prepared_token_histories_,
-        &prepared_sampling_params_);
+        &prepared_sampling_params_,
+        &prepared_req_ids_);
     synchronize_for_profile(runtime_device);
     const auto sampling_end = ProfileClock::now();
     output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);
