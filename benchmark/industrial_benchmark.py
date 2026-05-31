@@ -133,6 +133,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--quick", action="store_true", help="run two short validation scenarios")
     parser.add_argument("--profile-detail", action="store_true", help="enable TinyLLM detailed runtime profiling")
+    parser.add_argument("--max-num-batched-token-cap", type=positive_int, default=4096)
     parser.add_argument("--output-dir", default="benchmark/results")
     parser.add_argument("--label", default="qwen25_1p5b_cuda4090")
     parser.add_argument("--dry-run", action="store_true", help="print commands without running them")
@@ -239,6 +240,8 @@ def command_for(args: argparse.Namespace, scenario: Dict[str, int], prompts: Seq
         str(args.repeat),
         "--max-new-tokens",
         str(scenario["osl"]),
+        "--max-num-batched-token-cap",
+        str(args.max_num_batched_token_cap),
     ]
     if args.profile_detail:
         command.append("--profile-detail")

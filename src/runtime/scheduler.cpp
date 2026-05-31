@@ -547,6 +547,54 @@ SchedulerOutput Scheduler::schedule()
     SchedulerOutput scheduler_output;
     int64_t remaining_token_budget = std::max<int64_t>(1, max_num_scheduled_tokens);
     bool preempted_during_running = false;
+    auto count_prefill_candidates = [&](const std::deque<uint64_t>& snapshot,
+                                        size_t start_index,
+                                        bool waiting_phase) -> int32_t {
+        int32_t count = 0;
+        size_t admitted_running = running_request_count();
+        for (size_t index = start_index; index < snapshot.size(); ++index)
+        {
+            const uint64_t candidate_id = snapshot[index];
+            if (scheduler_output.num_scheduled_tokens.find(candidate_id)
+                != scheduler_output.num_scheduled_tokens.end())
+            {
+                continue;
+            }
+            Request* candidate = find_request(requests, candidate_id);
+            if (candidate == nullptr || candidate->status == RequestStatus::FINISHED)
+            {
+                continue;
+            }
+            if (waiting_phase)
+            {
+                if (candidate->status == RequestStatus::WAITING)
+                {
+                    if (max_running_requests != 0 && admitted_running >= max_running_requests)
+                    {
+                        break;
+                    }
+                    ++admitted_running;
+                }
+            }
+            else if (candidate->status != RequestStatus::RUNNING)
+            {
+                continue;
+            }
+            if (candidate->num_computed < context_token_count(*candidate))
+            {
+                ++count;
+            }
+        }
+        return std::max<int32_t>(1, count);
+    };
+    auto fair_prefill_chunk = [&](int32_t remaining_prefill, int32_t candidate_count) -> int32_t {
+        const int64_t fair_budget =
+            (remaining_token_budget + static_cast<int64_t>(candidate_count) - 1)
+            / static_cast<int64_t>(candidate_count);
+        return std::min<int32_t>(
+            remaining_prefill,
+            static_cast<int32_t>(std::max<int64_t>(1, fair_budget)));
+    };
     // try to allocate `num_new_tokens` for req, whose current state is is_running.
     auto try_allocate_with_tail_preempt = [&](Request& req, int32_t num_new_tokens, bool is_running) -> bool {
         if (num_new_tokens <= 0)
@@ -608,8 +656,9 @@ SchedulerOutput Scheduler::schedule()
     };
 
     const std::deque<uint64_t> running_snapshot = running;
-    for (uint64_t request_id : running_snapshot)
+    for (size_t running_index = 0; running_index < running_snapshot.size(); ++running_index)
     {
+        const uint64_t request_id = running_snapshot[running_index];
         if (remaining_token_budget <= 0)
         {
             break;
@@ -633,7 +682,9 @@ SchedulerOutput Scheduler::schedule()
         if (req->num_computed < context_tokens)
         {// 处于 prefilling 阶段
             const int32_t remaining_prefill = context_tokens - req->num_computed;
-            const int32_t chunk = std::min(remaining_prefill, static_cast<int32_t>(remaining_token_budget)); // 本轮调度的 token 数量
+            const int32_t chunk = fair_prefill_chunk(
+                remaining_prefill,
+                count_prefill_candidates(running_snapshot, running_index, false));
             if (!try_allocate_with_tail_preempt(*req, chunk, true))
             {
                 continue;
@@ -695,8 +746,9 @@ SchedulerOutput Scheduler::schedule()
     if (!preempted_during_running)
     {
         const std::deque<uint64_t> waiting_snapshot = waiting;
-        for (uint64_t request_id : waiting_snapshot)
+        for (size_t waiting_index = 0; waiting_index < waiting_snapshot.size(); ++waiting_index)
         {
+            const uint64_t request_id = waiting_snapshot[waiting_index];
             if (remaining_token_budget <= 0)
             {
                 break;
@@ -753,7 +805,9 @@ SchedulerOutput Scheduler::schedule()
                 continue;
             }
             // 本轮对该请求调度的 token 数量
-            const int32_t chunk = std::min(remaining_prefill, static_cast<int32_t>(remaining_token_budget));
+            const int32_t chunk = fair_prefill_chunk(
+                remaining_prefill,
+                count_prefill_candidates(waiting_snapshot, waiting_index, true));
             if (!try_allocate_with_tail_preempt(*req, chunk, false))
             {
                 break;

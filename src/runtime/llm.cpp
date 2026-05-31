@@ -275,7 +275,8 @@ void LLM::initialize()
         {
             scheduler_config.max_running_requests = options_.max_num_seqs;
         }
-        if (scheduler_config.max_prefill_tokens_per_step <= 0)
+        if (scheduler_config.max_prefill_tokens_per_step <= 0
+            || scheduler_config.max_prefill_tokens_per_step == SchedulerConfig{}.max_prefill_tokens_per_step)
         {
             scheduler_config.max_prefill_tokens_per_step = options_.max_num_batched_tokens;
         }

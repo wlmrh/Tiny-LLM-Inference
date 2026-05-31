@@ -39,6 +39,9 @@ struct Options {
     std::vector<int64_t> prompt_token_counts;
     size_t kv_num_blocks = 0;
     bool kv_num_blocks_explicit = false;
+    int32_t max_num_batched_tokens = 0;
+    bool max_num_batched_tokens_explicit = false;
+    int32_t max_num_batched_token_cap = 4096;
 };
 
 struct PromptTokenStats {
@@ -75,6 +78,12 @@ struct RepeatMetrics {
     int64_t generated_tokens = 0;
     int64_t prefill_tokens = 0;
     int64_t decode_tokens = 0;
+    int64_t scheduled_requests = 0;
+    int64_t scheduled_tokens = 0;
+    int64_t prefill_requests = 0;
+    int64_t decode_requests = 0;
+    int64_t max_context_len = 0;
+    int64_t profiled_steps = 0;
     bool cuda_memory_available = false;
     double cuda_memory_allocated_mb = 0.0;
     double cuda_memory_reserved_mb = 0.0;
@@ -216,7 +225,9 @@ void print_usage(const char* argv0)
 {
     std::cerr << "usage: " << argv0
               << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
-              << " [--max-new-tokens N] [--kv-num-blocks N] [--prompt TEXT]..."
+              << " [--max-new-tokens N] [--kv-num-blocks N]"
+              << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
+              << " [--prompt TEXT]..."
               << " [--json] [--profile-detail] <model_dir>\n";
 }
 
@@ -255,6 +266,19 @@ Options parse_args(int argc, char** argv)
         {
             options.kv_num_blocks = static_cast<size_t>(parse_positive_int(require_value("--kv-num-blocks"), "kv-num-blocks"));
             options.kv_num_blocks_explicit = true;
+        }
+        else if (arg == "--max-num-batched-tokens")
+        {
+            options.max_num_batched_tokens = parse_positive_int(
+                require_value("--max-num-batched-tokens"),
+                "max-num-batched-tokens");
+            options.max_num_batched_tokens_explicit = true;
+        }
+        else if (arg == "--max-num-batched-token-cap")
+        {
+            options.max_num_batched_token_cap = parse_positive_int(
+                require_value("--max-num-batched-token-cap"),
+                "max-num-batched-token-cap");
         }
         else if (arg == "--prompt")
         {
@@ -465,6 +489,12 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     metrics.cuda_memory_peak_reserved_mb = memory.peak_reserved_mb;
     metrics.prefill_tokens = profile.prefill_tokens;
     metrics.decode_tokens = profile.decode_tokens;
+    metrics.scheduled_requests = profile.scheduled_requests;
+    metrics.scheduled_tokens = profile.scheduled_tokens;
+    metrics.prefill_requests = profile.prefill_requests;
+    metrics.decode_requests = profile.decode_requests;
+    metrics.max_context_len = profile.max_context_len;
+    metrics.profiled_steps = profile.profiled_steps;
     metrics.prompt_tokens = options.prompt_tokens;
     metrics.generated_tokens = 0;
     metrics.samples.reserve(outputs.size());
@@ -577,6 +607,12 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::vector<double> cuda_memory_reserved_mb;
     std::vector<double> cuda_memory_peak_allocated_mb;
     std::vector<double> cuda_memory_peak_reserved_mb;
+    std::vector<double> scheduled_requests;
+    std::vector<double> scheduled_tokens;
+    std::vector<double> prefill_requests;
+    std::vector<double> decode_requests;
+    std::vector<double> max_context_len;
+    std::vector<double> profiled_steps;
     load_ms.reserve(repeats.size());
     total_ms.reserve(repeats.size());
     first_token_ms.reserve(repeats.size());
@@ -597,6 +633,12 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     cuda_memory_reserved_mb.reserve(repeats.size());
     cuda_memory_peak_allocated_mb.reserve(repeats.size());
     cuda_memory_peak_reserved_mb.reserve(repeats.size());
+    scheduled_requests.reserve(repeats.size());
+    scheduled_tokens.reserve(repeats.size());
+    prefill_requests.reserve(repeats.size());
+    decode_requests.reserve(repeats.size());
+    max_context_len.reserve(repeats.size());
+    profiled_steps.reserve(repeats.size());
     int64_t generated_tokens = 0;
     int64_t prompt_tokens = -1;
     int64_t prefill_tokens = 0;
@@ -621,6 +663,12 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         mlp_ms.push_back(metrics.mlp_ms);
         norm_ms.push_back(metrics.norm_ms);
         lm_head_ms.push_back(metrics.lm_head_ms);
+        scheduled_requests.push_back(static_cast<double>(metrics.scheduled_requests));
+        scheduled_tokens.push_back(static_cast<double>(metrics.scheduled_tokens));
+        prefill_requests.push_back(static_cast<double>(metrics.prefill_requests));
+        decode_requests.push_back(static_cast<double>(metrics.decode_requests));
+        max_context_len.push_back(static_cast<double>(metrics.max_context_len));
+        profiled_steps.push_back(static_cast<double>(metrics.profiled_steps));
         if (metrics.cuda_memory_available)
         {
             cuda_memory_allocated_mb.push_back(metrics.cuda_memory_allocated_mb);
@@ -654,6 +702,18 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     const double avg_cuda_memory_reserved_mb = mean(cuda_memory_reserved_mb);
     const double avg_cuda_memory_peak_allocated_mb = mean(cuda_memory_peak_allocated_mb);
     const double avg_cuda_memory_peak_reserved_mb = mean(cuda_memory_peak_reserved_mb);
+    const double avg_scheduled_requests = mean(scheduled_requests);
+    const double avg_scheduled_tokens = mean(scheduled_tokens);
+    const double avg_prefill_requests = mean(prefill_requests);
+    const double avg_decode_requests = mean(decode_requests);
+    const double avg_max_context_len = mean(max_context_len);
+    const double avg_profiled_steps = mean(profiled_steps);
+    const double avg_scheduled_requests_per_step = avg_profiled_steps > 0.0
+        ? avg_scheduled_requests / avg_profiled_steps
+        : 0.0;
+    const double avg_scheduled_tokens_per_step = avg_profiled_steps > 0.0
+        ? avg_scheduled_tokens / avg_profiled_steps
+        : 0.0;
     const bool has_cuda_memory = !cuda_memory_allocated_mb.empty();
     const double avg_generated_tokens = repeats.empty() ? 0.0 : static_cast<double>(generated_tokens) / repeats.size();
     const double e2e_tokens_per_s = avg_total_ms > 0.0 ? avg_generated_tokens / (avg_total_ms / 1000.0) : 0.0;
@@ -699,6 +759,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     }
     std::cout << "  avg_prefill_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << "\n";
     std::cout << "  avg_decode_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << "\n";
+    std::cout << "  avg_scheduled_requests: " << avg_scheduled_requests << "\n";
+    std::cout << "  avg_scheduled_tokens: " << avg_scheduled_tokens << "\n";
+    std::cout << "  avg_profiled_steps: " << avg_profiled_steps << "\n";
+    std::cout << "  avg_scheduled_requests_per_step: " << avg_scheduled_requests_per_step << "\n";
+    std::cout << "  avg_scheduled_tokens_per_step: " << avg_scheduled_tokens_per_step << "\n";
+    std::cout << "  avg_prefill_requests: " << avg_prefill_requests << "\n";
+    std::cout << "  avg_decode_requests: " << avg_decode_requests << "\n";
+    std::cout << "  avg_max_context_len: " << avg_max_context_len << "\n";
     if (prompt_tokens >= 0)
     {
         std::cout << "  prompt_tokens: " << prompt_tokens << "\n";
@@ -799,6 +867,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
     std::cout << "\"profile_detail\":" << (options.profile_detail ? "true" : "false") << ",";
     std::cout << "\"kv_num_blocks\":" << options.kv_num_blocks << ",";
+    std::cout << "\"max_num_batched_tokens\":" << options.max_num_batched_tokens << ",";
     std::cout << "\"avg_load_init_ms\":" << avg_load_ms << ",";
     std::cout << "\"avg_total_latency_ms\":" << avg_total_ms << ",";
     std::cout << "\"avg_first_token_latency_ms\":" << avg_first_ms << ",";
@@ -823,6 +892,14 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"cuda_memory_peak_reserved_mb\":" << avg_cuda_memory_peak_reserved_mb << ",";
     std::cout << "\"avg_prefill_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << ",";
     std::cout << "\"avg_decode_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << ",";
+    std::cout << "\"avg_scheduled_requests\":" << avg_scheduled_requests << ",";
+    std::cout << "\"avg_scheduled_tokens\":" << avg_scheduled_tokens << ",";
+    std::cout << "\"avg_profiled_steps\":" << avg_profiled_steps << ",";
+    std::cout << "\"avg_scheduled_requests_per_step\":" << avg_scheduled_requests_per_step << ",";
+    std::cout << "\"avg_scheduled_tokens_per_step\":" << avg_scheduled_tokens_per_step << ",";
+    std::cout << "\"avg_prefill_requests\":" << avg_prefill_requests << ",";
+    std::cout << "\"avg_decode_requests\":" << avg_decode_requests << ",";
+    std::cout << "\"avg_max_context_len\":" << avg_max_context_len << ",";
     std::cout << "\"end_to_end_tokens_per_s\":" << e2e_tokens_per_s << ",";
     std::cout << "\"decode_tokens_per_s\":" << decode_tokens_per_s << ",";
     std::cout << "\"repeat_total_latency_ms\":[";
@@ -914,6 +991,14 @@ int main(int argc, char** argv)
         options.prompt_token_counts = token_stats.per_prompt;
         const tiny_llm::LlamaConfig hf_config =
             tiny_llm::HFLlamaConfigLoader::load_from_dir(options.model_dir.string());
+        if (!options.max_num_batched_tokens_explicit)
+        {
+            options.max_num_batched_tokens = std::max<int32_t>(
+                1,
+                std::min<int64_t>(
+                    static_cast<int64_t>(options.max_num_batched_token_cap),
+                    std::max<int64_t>(1, options.prompt_tokens)));
+        }
         constexpr int32_t kBlockSizeTokens = 16;
         if (!options.kv_num_blocks_explicit)
         {
@@ -927,6 +1012,7 @@ int main(int argc, char** argv)
         const auto load_start = Clock::now();
         tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
         llm_options.max_tokens = options.max_new_tokens;
+        llm_options.max_num_batched_tokens = options.max_num_batched_tokens;
         llm_options.block_size_tokens = kBlockSizeTokens;
         llm_options.kv_num_blocks = options.kv_num_blocks;
         tiny_llm::LLM llm(llm_options);

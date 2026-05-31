@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -75,6 +76,12 @@ struct RuntimeProfilingStats {
     int64_t prefill_tokens = 0;
     int64_t decode_tokens = 0;
     int64_t sampled_tokens = 0;
+    int64_t scheduled_requests = 0;
+    int64_t scheduled_tokens = 0;
+    int64_t prefill_requests = 0;
+    int64_t decode_requests = 0;
+    int64_t max_context_len = 0;
+    int64_t profiled_steps = 0;
 
     void add(const RuntimeProfilingStats& other)
     {
@@ -93,6 +100,12 @@ struct RuntimeProfilingStats {
         prefill_tokens += other.prefill_tokens;
         decode_tokens += other.decode_tokens;
         sampled_tokens += other.sampled_tokens;
+        scheduled_requests += other.scheduled_requests;
+        scheduled_tokens += other.scheduled_tokens;
+        prefill_requests += other.prefill_requests;
+        decode_requests += other.decode_requests;
+        max_context_len = std::max(max_context_len, other.max_context_len);
+        profiled_steps += other.profiled_steps;
     }
 };
 

@@ -32,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=non_negative_int, default=1)
     parser.add_argument("--repeat", type=positive_int, default=3)
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
+    parser.add_argument("--max-num-batched-token-cap", type=positive_int, default=4096)
     parser.add_argument("--prompt", action="append", dest="prompts", default=[])
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--profile-detail", action="store_true", help="enable TinyLLM detailed runtime profiling")
@@ -83,6 +84,8 @@ def run_tinyllm(args: argparse.Namespace) -> Dict[str, Any]:
     if not binary.exists():
         raise RuntimeError(f"TinyLLM benchmark binary does not exist: {binary}; build it first with cmake --build")
     common = command_common_args(args)
+    json_index = len(common) - 2
+    common[json_index:json_index] = ["--max-num-batched-token-cap", str(args.max_num_batched_token_cap)]
     if args.profile_detail:
         common.insert(-1, "--profile-detail")
     return run_command([str(binary), *common], "tinyllm")

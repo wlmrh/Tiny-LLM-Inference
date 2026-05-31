@@ -132,6 +132,46 @@ TEST(SchedulerTest, ChunksPrefillAndEmitsSampleWhenPromptCompletes)
     EXPECT_EQ(second_outputs.at(1).generated_tokens, 1);
 }
 
+TEST(SchedulerTest, SpreadsPrefillBudgetAcrossWaitingRequests)
+{
+    SchedulerFixture fixture(8);
+    fixture.add_request(1, {10, 11, 12, 13}, 2);
+    fixture.add_request(2, {20, 21, 22, 23}, 2);
+    fixture.add_request(3, {30, 31, 32, 33}, 2);
+    fixture.add_request(4, {40, 41, 42, 43}, 2);
+
+    tiny_llm::SchedulerOutput output = fixture.scheduler.schedule();
+    ASSERT_EQ(output.scheduled_reqs.size(), 4u);
+    EXPECT_EQ(output.total_num_scheduled_tokens, 8);
+    for (const tiny_llm::RequestData& req : output.scheduled_reqs)
+    {
+        ASSERT_EQ(req.new_token_ids.size(), 2u);
+        EXPECT_TRUE(req.is_prefill);
+    }
+    EXPECT_EQ(output.scheduled_reqs[0].req_id, 1u);
+    EXPECT_EQ(output.scheduled_reqs[1].req_id, 2u);
+    EXPECT_EQ(output.scheduled_reqs[2].req_id, 3u);
+    EXPECT_EQ(output.scheduled_reqs[3].req_id, 4u);
+}
+
+TEST(SchedulerTest, SchedulesFullPrefillBatchWhenBudgetCoversAllRequests)
+{
+    SchedulerFixture fixture(16);
+    fixture.add_request(1, {10, 11, 12, 13}, 2);
+    fixture.add_request(2, {20, 21, 22, 23}, 2);
+    fixture.add_request(3, {30, 31, 32, 33}, 2);
+    fixture.add_request(4, {40, 41, 42, 43}, 2);
+
+    tiny_llm::SchedulerOutput output = fixture.scheduler.schedule();
+    ASSERT_EQ(output.scheduled_reqs.size(), 4u);
+    EXPECT_EQ(output.total_num_scheduled_tokens, 16);
+    for (const tiny_llm::RequestData& req : output.scheduled_reqs)
+    {
+        ASSERT_EQ(req.new_token_ids.size(), 4u);
+        EXPECT_TRUE(req.is_prefill);
+    }
+}
+
 TEST(SchedulerTest, DecodeStepConsumesLastGeneratedTokenAndStopsByLength)
 {
     SchedulerFixture fixture(8);

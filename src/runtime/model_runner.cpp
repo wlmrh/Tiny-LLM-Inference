@@ -605,6 +605,9 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
     int64_t prefill_tokens = 0;
     int64_t decode_tokens = 0;
+    int64_t prefill_requests = 0;
+    int64_t decode_requests = 0;
+    int64_t max_context_len = 0;
     for (const RequestData& req_data : scheduler_output.scheduled_reqs)
     {
         const auto count_it = scheduler_output.num_scheduled_tokens.find(req_data.req_id);
@@ -612,17 +615,32 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         {
             continue;
         }
+        bool request_has_prefill = false;
+        bool request_has_decode = false;
+        max_context_len = std::max<int64_t>(
+            max_context_len,
+            static_cast<int64_t>(req_data.num_computed_tokens) + static_cast<int64_t>(count_it->second));
         for (int32_t i = 0; i < count_it->second; ++i)
         {
             const int32_t position = req_data.num_computed_tokens + i;
             if (position < req_data.prompt_token_count)
             {
                 ++prefill_tokens;
+                request_has_prefill = true;
             }
             else
             {
                 ++decode_tokens;
+                request_has_decode = true;
             }
+        }
+        if (request_has_prefill)
+        {
+            ++prefill_requests;
+        }
+        if (request_has_decode)
+        {
+            ++decode_requests;
         }
     }
 
@@ -636,6 +654,12 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     output.profiling.prepare_inputs_ms = elapsed_profile_ms(prepare_start, prepare_end);
     output.profiling.prefill_tokens = prefill_tokens;
     output.profiling.decode_tokens = decode_tokens;
+    output.profiling.scheduled_requests = static_cast<int64_t>(scheduler_output.scheduled_reqs.size());
+    output.profiling.scheduled_tokens = prefill_tokens + decode_tokens;
+    output.profiling.prefill_requests = prefill_requests;
+    output.profiling.decode_requests = decode_requests;
+    output.profiling.max_context_len = max_context_len;
+    output.profiling.profiled_steps = (prefill_tokens + decode_tokens) > 0 ? 1 : 0;
     output.req_ids.reserve(prepared_req_ids_.size());
     output.sampled_token_ids.reserve(prepared_req_ids_.size());
     output.req_id_to_index.reserve(prepared_req_ids_.size());
