@@ -418,9 +418,7 @@ benchmark/results/regression_after_next_perf_20260531_015332.json
 
 The regression preset is TinyLLM-only by design, so a separate baseline run was added for the same `interactive` and `chat_serving` workloads with `backend=all`, `warmup=0`, and `repeat=1`.
 
-```text
-benchmark/results_baseline_compare/regression_with_transformers_after_next_perf_20260531_020309.json
-```
+The intermediate report artifact has been pruned from the repository; the measured values are retained below.
 
 | Workload | TinyLLM total | Transformers total | TinyLLM first token | Transformers first token | Token match |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -559,12 +557,7 @@ Qwen CUDA smoke validation passed:
 
 ### Report
 
-The generated report is:
-
-```text
-benchmark/results_qwen_baseline_compare/current_full_transformers_3090_qwen25_1p5b_20260531_163408.json
-benchmark/results_qwen_baseline_compare/current_full_transformers_3090_qwen25_1p5b_20260531_163408.md
-```
+The intermediate report artifacts have been pruned from the repository; the measured values are retained below.
 
 Benchmark command:
 
@@ -681,12 +674,7 @@ Qwen CUDA smoke output after the final stream-guard update:
 
 ### Report
 
-The generated report is:
-
-```text
-benchmark/results_qwen_baseline_compare/qwen25_after_prefill_decode_optimization_20260531_173015.json
-benchmark/results_qwen_baseline_compare/qwen25_after_prefill_decode_optimization_20260531_173015.md
-```
+The intermediate report artifacts have been pruned from the repository; the measured values are retained below.
 
 Benchmark command:
 
