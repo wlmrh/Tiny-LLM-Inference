@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "tiny_llm/core/tensor.h"
 
 namespace tiny_llm {
@@ -7,12 +9,21 @@ class ExecutionContext;
 
 namespace ops {
 
+struct PagedAttentionPrefillSegment {
+    int64_t row_start = 0;
+    int32_t seq_index = 0;
+    int32_t length = 0;
+};
+
 struct PagedAttentionRuntimeMetadata {
     const Tensor* slot_mapping = nullptr;
     const Tensor* seq_indices = nullptr;
     const Tensor* context_lens = nullptr;
     const Tensor* block_tables = nullptr;
+    const PagedAttentionPrefillSegment* prefill_segments = nullptr;
+    int64_t prefill_segment_count = 0;
     int32_t block_size_tokens = 0;
+    bool prefill_segments_valid = false;
     bool enabled = false;
 };
 

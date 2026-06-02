@@ -47,58 +47,47 @@ Tensor kv_block_tensor(KVCache& kv_cache,
         torch::TensorOptions().dtype(torch::kFloat32).device(kv_cache.device()));
 }
 
-struct PrefillSegment {
-    int64_t row_start = 0;
-    int32_t seq_index = 0;
-    int32_t length = 0;
-};
-
 bool collect_full_prefill_segments(const LlamaAttentionParams& params,
                                    int64_t rows,
                                    int64_t num_seqs,
-                                   std::vector<PrefillSegment>& segments)
+                                   std::vector<PagedAttentionPrefillSegment>& segments)
 {
     if (rows < 64)
     {
         return false;
     }
-
-    Tensor positions_cpu;
-    Tensor seq_indices_cpu;
-    Tensor context_lens_cpu;
-    const int32_t* positions_ptr = cpu_int_ptr(*params.positions, positions_cpu);
-    const int32_t* seq_index_ptr = cpu_int_ptr(*params.metadata->seq_indices, seq_indices_cpu);
-    const int32_t* context_ptr = cpu_int_ptr(*params.metadata->context_lens, context_lens_cpu);
+    if (params.metadata == nullptr
+        || !params.metadata->prefill_segments_valid
+        || params.metadata->prefill_segments == nullptr
+        || params.metadata->prefill_segment_count <= 0)
+    {
+        return false;
+    }
 
     segments.clear();
     std::vector<bool> seen(static_cast<size_t>(num_seqs), false);
-    int64_t row = 0;
-    while (row < rows)
+    int64_t next_row = 0;
+    for (int64_t index = 0; index < params.metadata->prefill_segment_count; ++index)
     {
-        const int32_t seq_index = seq_index_ptr[row];
-        if (seq_index < 0 || seq_index >= num_seqs || seen[static_cast<size_t>(seq_index)])
+        const PagedAttentionPrefillSegment& segment = params.metadata->prefill_segments[index];
+        if (segment.row_start != next_row
+            || segment.seq_index < 0
+            || segment.seq_index >= num_seqs
+            || segment.length <= 0
+            || next_row + static_cast<int64_t>(segment.length) > rows
+            || seen[static_cast<size_t>(segment.seq_index)])
         {
+            segments.clear();
             return false;
         }
-        seen[static_cast<size_t>(seq_index)] = true;
-
-        const int32_t context_len = context_ptr[seq_index];
-        if (context_len <= 0 || row + static_cast<int64_t>(context_len) > rows)
-        {
-            return false;
-        }
-
-        for (int32_t offset = 0; offset < context_len; ++offset)
-        {
-            const int64_t current_row = row + offset;
-            if (seq_index_ptr[current_row] != seq_index || positions_ptr[current_row] != offset)
-            {
-                return false;
-            }
-        }
-
-        segments.push_back(PrefillSegment{row, seq_index, context_len});
-        row += context_len;
+        seen[static_cast<size_t>(segment.seq_index)] = true;
+        segments.push_back(segment);
+        next_row += segment.length;
+    }
+    if (next_row != rows)
+    {
+        segments.clear();
+        return false;
     }
     return !segments.empty();
 }
@@ -112,7 +101,7 @@ bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,
                                     int64_t num_blocks,
                                     int64_t block_size_bytes)
 {
-    std::vector<PrefillSegment> segments;
+    std::vector<PagedAttentionPrefillSegment> segments;
     if (!collect_full_prefill_segments(params, rows, num_seqs, segments))
     {
         return false;
@@ -151,7 +140,7 @@ bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,
     const int64_t first_len = can_run_batched_prefill ? static_cast<int64_t>(segments.front().length) : 0;
     for (int64_t index = 0; can_run_batched_prefill && index < segment_count; ++index)
     {
-        const PrefillSegment& segment = segments[static_cast<size_t>(index)];
+        const PagedAttentionPrefillSegment& segment = segments[static_cast<size_t>(index)];
         can_run_batched_prefill =
             static_cast<int64_t>(segment.length) == first_len
             && segment.row_start == index * first_len;
@@ -183,7 +172,7 @@ bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,
         return true;
     }
 
-    for (const PrefillSegment& segment : segments)
+    for (const PagedAttentionPrefillSegment& segment : segments)
     {
         const int64_t len = static_cast<int64_t>(segment.length);
         Tensor q_seq = params.q->narrow(0, segment.row_start, len)

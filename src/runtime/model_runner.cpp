@@ -130,6 +130,55 @@ Tensor make_int32_tensor_from_host(const std::vector<int32_t>& values,
     return cpu_tensor.to(device, /*non_blocking=*/false, /*copy=*/true).contiguous();
 }
 
+void populate_prefill_segments(const SchedulerOutput& output,
+                               int64_t total_tokens,
+                               PreparedInputs& prepared)
+{
+    prepared.prefill_segments.clear();
+    prepared.prefill_segments_valid = false;
+    if (total_tokens < 64 || output.scheduled_reqs.empty())
+    {
+        return;
+    }
+
+    int64_t row_start = 0;
+    int32_t seq_index = 0;
+    prepared.prefill_segments.reserve(output.scheduled_reqs.size());
+    for (const RequestData& req_data : output.scheduled_reqs)
+    {
+        const auto count_it = output.num_scheduled_tokens.find(req_data.req_id);
+        if (count_it == output.num_scheduled_tokens.end() || count_it->second <= 0)
+        {
+            prepared.prefill_segments.clear();
+            return;
+        }
+        const int32_t scheduled_tokens = count_it->second;
+        if (!req_data.is_prefill || req_data.num_computed_tokens != 0)
+        {
+            prepared.prefill_segments.clear();
+            return;
+        }
+        if (req_data.new_token_ids.size() < static_cast<size_t>(scheduled_tokens))
+        {
+            prepared.prefill_segments.clear();
+            return;
+        }
+
+        prepared.prefill_segments.push_back(
+            ops::PagedAttentionPrefillSegment{row_start, seq_index, scheduled_tokens});
+        row_start += scheduled_tokens;
+        ++seq_index;
+    }
+
+    if (row_start == total_tokens)
+    {
+        prepared.prefill_segments_valid = !prepared.prefill_segments.empty();
+        return;
+    }
+
+    prepared.prefill_segments.clear();
+}
+
 Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
 {
     if (tensor.device().is_cpu())
@@ -571,6 +620,7 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
         {model_->num_layers(), request_count, max_blocks_per_seq},
         runtime_device,
         "ModelRunner::prepare_inputs");
+    populate_prefill_segments(output, total_tokens, prepared);
     return prepared;
 }
 
@@ -590,7 +640,10 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStat
     metadata.seq_indices = &inputs.seq_indices;
     metadata.context_lens = &inputs.context_lens;
     metadata.block_tables = &inputs.block_tables;
+    metadata.prefill_segments = inputs.prefill_segments.empty() ? nullptr : inputs.prefill_segments.data();
+    metadata.prefill_segment_count = static_cast<int64_t>(inputs.prefill_segments.size());
     metadata.block_size_tokens = kv_block_size_tokens_;
+    metadata.prefill_segments_valid = inputs.prefill_segments_valid;
     metadata.enabled = true;
 
     ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run_model");

@@ -87,6 +87,40 @@ tiny_llm::SchedulerOutput make_valid_output()
     output.total_num_scheduled_tokens = 4;
     return output;
 }
+
+tiny_llm::SchedulerOutput make_full_prefill_output()
+{
+    tiny_llm::SchedulerOutput output;
+    tiny_llm::RequestData req0;
+    req0.req_id = 17;
+    req0.num_computed_tokens = 0;
+    req0.prompt_token_count = 64;
+    req0.is_prefill = true;
+    req0.block_tables = {{0, 1, 2, 3}, {4, 5, 6, 7}};
+    for (int32_t token = 0; token < 64; ++token)
+    {
+        req0.new_token_ids.push_back(token);
+    }
+    req0.all_token_ids = req0.new_token_ids;
+
+    tiny_llm::RequestData req1;
+    req1.req_id = 19;
+    req1.num_computed_tokens = 0;
+    req1.prompt_token_count = 64;
+    req1.is_prefill = true;
+    req1.block_tables = {{8, 9, 10, 11}, {12, 13, 14, 15}};
+    for (int32_t token = 0; token < 64; ++token)
+    {
+        req1.new_token_ids.push_back((token + 64) % 128);
+    }
+    req1.all_token_ids = req1.new_token_ids;
+
+    output.scheduled_reqs = {req0, req1};
+    output.num_scheduled_tokens[17] = 64;
+    output.num_scheduled_tokens[19] = 64;
+    output.total_num_scheduled_tokens = 128;
+    return output;
+}
 }
 
 TEST(ModelRunnerPreparedInputsTest, FlattensSchedulerOutputIntoRuntimeTensors)
@@ -108,6 +142,25 @@ TEST(ModelRunnerPreparedInputsTest, FlattensSchedulerOutputIntoRuntimeTensors)
     expect_tensor_values(prepared.seq_indices, {0, 0, 0, 1});
     expect_tensor_values(prepared.context_lens, {8, 17});
     EXPECT_EQ(tiny_llm::tensor_shape(prepared.block_tables), std::vector<int64_t>({2, 2, 2}));
+    EXPECT_FALSE(prepared.prefill_segments_valid);
+    EXPECT_TRUE(prepared.prefill_segments.empty());
+}
+
+TEST(ModelRunnerPreparedInputsTest, PrecomputesFullPrefillSegments)
+{
+    FakeModel model;
+    tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
+    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+
+    tiny_llm::PreparedInputs prepared = runner.prepare_inputs(make_full_prefill_output());
+    ASSERT_TRUE(prepared.prefill_segments_valid);
+    ASSERT_EQ(prepared.prefill_segments.size(), 2u);
+    EXPECT_EQ(prepared.prefill_segments[0].row_start, 0);
+    EXPECT_EQ(prepared.prefill_segments[0].seq_index, 0);
+    EXPECT_EQ(prepared.prefill_segments[0].length, 64);
+    EXPECT_EQ(prepared.prefill_segments[1].row_start, 64);
+    EXPECT_EQ(prepared.prefill_segments[1].seq_index, 1);
+    EXPECT_EQ(prepared.prefill_segments[1].length, 64);
 }
 
 TEST(ModelRunnerPreparedInputsTest, SamplesOnlyFinalRowForEachRequest)

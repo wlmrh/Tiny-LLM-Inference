@@ -121,11 +121,19 @@ CaseResult run_prefill_then_decode(bool optimized,
     tiny_llm::Tensor seq_indices_prefill = int_cuda(repeated(0, prefill_tokens), {prefill_tokens});
     tiny_llm::Tensor context_prefill = int_cuda({prefill_tokens}, {1});
     tiny_llm::Tensor blocks_prefill = int_cuda(block_table(block_count), {1, 1, block_count});
+    std::vector<tiny_llm::ops::PagedAttentionPrefillSegment> prefill_segments;
+    if (optimized)
+    {
+        prefill_segments.push_back({0, 0, prefill_tokens});
+    }
     tiny_llm::ops::PagedAttentionRuntimeMetadata prefill_metadata;
     prefill_metadata.seq_indices = &seq_indices_prefill;
     prefill_metadata.context_lens = &context_prefill;
     prefill_metadata.block_tables = &blocks_prefill;
+    prefill_metadata.prefill_segments = prefill_segments.empty() ? nullptr : prefill_segments.data();
+    prefill_metadata.prefill_segment_count = static_cast<int64_t>(prefill_segments.size());
     prefill_metadata.block_size_tokens = block_size_tokens;
+    prefill_metadata.prefill_segments_valid = !prefill_segments.empty();
     prefill_metadata.enabled = true;
     tiny_llm::ops::LlamaAttentionParams prefill;
     prefill.positions = &positions_prefill;
@@ -235,11 +243,20 @@ tiny_llm::Tensor run_two_sequence_prefill_then_decode(bool optimized)
     tiny_llm::Tensor seq_indices_prefill = int_cuda(prefill_seq_indices, {prefill_rows});
     tiny_llm::Tensor context_prefill = int_cuda({prefill_tokens_per_seq, prefill_tokens_per_seq}, {num_seqs});
     tiny_llm::Tensor blocks_prefill = int_cuda(block_table_values, {1, num_seqs, blocks_per_seq});
+    std::vector<tiny_llm::ops::PagedAttentionPrefillSegment> prefill_segments;
+    if (optimized)
+    {
+        prefill_segments.push_back({0, 0, prefill_tokens_per_seq});
+        prefill_segments.push_back({prefill_tokens_per_seq, 1, prefill_tokens_per_seq});
+    }
     tiny_llm::ops::PagedAttentionRuntimeMetadata prefill_metadata;
     prefill_metadata.seq_indices = &seq_indices_prefill;
     prefill_metadata.context_lens = &context_prefill;
     prefill_metadata.block_tables = &blocks_prefill;
+    prefill_metadata.prefill_segments = prefill_segments.empty() ? nullptr : prefill_segments.data();
+    prefill_metadata.prefill_segment_count = static_cast<int64_t>(prefill_segments.size());
     prefill_metadata.block_size_tokens = block_size_tokens;
+    prefill_metadata.prefill_segments_valid = !prefill_segments.empty();
     prefill_metadata.enabled = true;
     tiny_llm::ops::LlamaAttentionParams prefill;
     prefill.positions = &positions_prefill;
