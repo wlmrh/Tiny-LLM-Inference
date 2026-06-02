@@ -31,6 +31,7 @@ struct Options {
     int32_t warmup = 1;
     int32_t repeat = 3;
     int32_t max_new_tokens = 8;
+    bool ignore_eos = false;
     bool json = false;
     bool profile_detail = false;
     std::vector<std::string> prompts;
@@ -228,7 +229,7 @@ void print_usage(const char* argv0)
               << " [--max-new-tokens N] [--kv-num-blocks N]"
               << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
               << " [--prompt TEXT]..."
-              << " [--json] [--profile-detail] <model_dir>\n";
+              << " [--json] [--profile-detail] [--ignore-eos] <model_dir>\n";
 }
 
 Options parse_args(int argc, char** argv)
@@ -291,6 +292,10 @@ Options parse_args(int argc, char** argv)
         else if (arg == "--profile-detail")
         {
             options.profile_detail = true;
+        }
+        else if (arg == "--ignore-eos")
+        {
+            options.ignore_eos = true;
         }
         else if (arg == "--help" || arg == "-h")
         {
@@ -442,6 +447,7 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     sampling_params.top_k = 0;
     sampling_params.repetition_penalty = generation_config.repetition_penalty;
     sampling_params.max_tokens = options.max_new_tokens;
+    sampling_params.ignore_eos = options.ignore_eos;
 
     bool saw_first_token = false;
     Clock::time_point first_token_time{};
@@ -726,6 +732,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "  device: " << options.device_text << "\n";
     std::cout << "  prompts: " << options.prompts.size() << ", warmup: " << options.warmup
               << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens
+              << ", ignore_eos: " << (options.ignore_eos ? "on" : "off")
               << ", profile_detail: " << (options.profile_detail ? "on" : "off")
               << ", kv_num_blocks: " << options.kv_num_blocks << "\n";
     std::cout << std::fixed << std::setprecision(3);
@@ -865,6 +872,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"warmup\":" << options.warmup << ",";
     std::cout << "\"repeat\":" << options.repeat << ",";
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
+    std::cout << "\"ignore_eos\":" << (options.ignore_eos ? "true" : "false") << ",";
     std::cout << "\"profile_detail\":" << (options.profile_detail ? "true" : "false") << ",";
     std::cout << "\"kv_num_blocks\":" << options.kv_num_blocks << ",";
     std::cout << "\"max_num_batched_tokens\":" << options.max_num_batched_tokens << ",";

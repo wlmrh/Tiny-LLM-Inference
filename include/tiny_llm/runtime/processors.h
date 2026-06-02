@@ -24,6 +24,7 @@ struct UserSamplingParams {
     float repetition_penalty = 1.0f;
     uint64_t seed = 0;
     int32_t max_tokens = 32;
+    bool ignore_eos = false;
     std::vector<int32_t> stop_token_ids;
 };
 
@@ -37,6 +38,7 @@ struct SamplingParams {
     float repetition_penalty = 1.0f;
     uint64_t seed = 0;
     int32_t max_tokens = 32;
+    bool ignore_eos = false;
     std::vector<int32_t> stop_token_ids;
 };
 

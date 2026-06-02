@@ -126,10 +126,12 @@ SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingPa
     params.repetition_penalty = user_params.repetition_penalty;
     params.seed = user_params.seed;
     params.max_tokens = user_params.max_tokens > 0 ? user_params.max_tokens : default_max_tokens_;
+    params.ignore_eos = user_params.ignore_eos;
     params.stop_token_ids = user_params.stop_token_ids;
 
     const int32_t eos_token = tokenizer_->eos_id();
-    if (std::find(params.stop_token_ids.begin(), params.stop_token_ids.end(), eos_token)
+    if (!params.ignore_eos
+        && std::find(params.stop_token_ids.begin(), params.stop_token_ids.end(), eos_token)
         == params.stop_token_ids.end())
     {
         params.stop_token_ids.push_back(eos_token);
@@ -350,7 +352,7 @@ bool OutPreprocessor::check_stop_criteria(RequestState& state, int32_t latest_to
         throw std::runtime_error("OutPreprocessor::check_stop_criteria: tokenizer is not available.");
     }
 
-    if (latest_token == tokenizer->eos_id())
+    if (!state.sampling_params.ignore_eos && latest_token == tokenizer->eos_id())
     {
         state.is_finished = true;
         state.finish_reason = "eos";

@@ -6,11 +6,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 DEFAULT_MODEL_DIR = "/models/Qwen2.5-1.5B-Instruct"
 DEFAULT_TINYLLM_BINARY = "build-cuda/benchmark/llama_engine_benchmark"
 DEFAULT_DEVICE = "cuda:0"
+VALID_BACKENDS = ("tinyllm", "transformers", "vllm")
 
 STANDARD_SCENARIOS = [
     {"name": "interactive", "batch": 1, "isl": 128, "osl": 64},
@@ -36,6 +37,7 @@ PRESETS = {
         "backend": "all",
         "scenarios": "all",
         "transformers_scenarios": "all",
+        "vllm_scenarios": "all",
         "warmup": 0,
         "repeat": 1,
         "label": "quick_validation",
@@ -46,6 +48,7 @@ PRESETS = {
         "backend": "tinyllm",
         "scenarios": "interactive",
         "transformers_scenarios": "none",
+        "vllm_scenarios": "none",
         "warmup": 0,
         "repeat": 1,
         "label": "focus_interactive",
@@ -56,6 +59,7 @@ PRESETS = {
         "backend": "tinyllm",
         "scenarios": "interactive,chat_serving",
         "transformers_scenarios": "none",
+        "vllm_scenarios": "none",
         "warmup": 1,
         "repeat": 1,
         "label": "regression_decode",
@@ -66,6 +70,7 @@ PRESETS = {
         "backend": "tinyllm",
         "scenarios": "all",
         "transformers_scenarios": "none",
+        "vllm_scenarios": "none",
         "warmup": 1,
         "repeat": 3,
         "label": "full_after_optimization",
@@ -76,6 +81,7 @@ PRESETS = {
         "backend": "tinyllm",
         "scenarios": "all",
         "transformers_scenarios": "none",
+        "vllm_scenarios": "none",
         "warmup": 0,
         "repeat": 1,
         "label": "profile_prefill_detail",
@@ -108,6 +114,21 @@ def parse_csv(text: str) -> List[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
+def parse_backend_selection(text: str) -> List[str]:
+    if text == "all":
+        return list(VALID_BACKENDS)
+    selected: List[str] = []
+    for item in parse_csv(text):
+        if item not in VALID_BACKENDS:
+            valid = ", ".join((*VALID_BACKENDS, "all"))
+            raise argparse.ArgumentTypeError(f"unknown backend {item!r}; valid: {valid}")
+        if item not in selected:
+            selected.append(item)
+    if not selected:
+        raise argparse.ArgumentTypeError("at least one backend is required")
+    return selected
+
+
 def env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "") in {"1", "true", "TRUE", "on", "ON"}
 
@@ -124,21 +145,47 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default=DEFAULT_DEVICE)
     parser.add_argument("--warmup", type=non_negative_int, default=1)
     parser.add_argument("--repeat", type=positive_int, default=3)
-    parser.add_argument("--backend", choices=("tinyllm", "transformers", "all"), default="all")
+    parser.add_argument(
+        "--benchmark-mode",
+        choices=("correctness", "fixed_output_perf", "dual"),
+        default="fixed_output_perf",
+        help="correctness keeps EOS stops, fixed_output_perf ignores EOS, dual runs both",
+    )
+    parser.add_argument(
+        "--backend",
+        default="all",
+        help="backend to run: all, tinyllm, transformers, vllm, or a comma-separated subset",
+    )
     parser.add_argument("--scenarios", default="all", help="comma-separated scenario names, or all")
     parser.add_argument(
         "--transformers-scenarios",
         default="all",
         help="comma-separated scenarios that should include Transformers when --backend=all; use all or none",
     )
+    parser.add_argument(
+        "--vllm-scenarios",
+        default="all",
+        help="comma-separated scenarios that should include vLLM when --backend=all; use all or none",
+    )
     parser.add_argument("--quick", action="store_true", help="run two short validation scenarios")
     parser.add_argument("--profile-detail", action="store_true", help="enable TinyLLM detailed runtime profiling")
     parser.add_argument("--max-num-batched-token-cap", type=positive_int, default=4096)
+    parser.add_argument("--vllm-python", default=sys.executable, help="Python executable used for the vLLM baseline")
+    parser.add_argument("--vllm-dtype", default="auto", help="vLLM dtype, for example auto, float16, bfloat16, or float32")
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.90)
+    parser.add_argument(
+        "--vllm-max-model-len",
+        type=non_negative_int,
+        default=4096,
+        help="vLLM max_model_len; use 0 to leave the model config default unchanged",
+    )
+    parser.add_argument("--vllm-enforce-eager", action="store_true", help="disable vLLM CUDA graph capture")
     parser.add_argument("--output-dir", default="benchmark/results")
     parser.add_argument("--label", default="qwen25_1p5b_cuda4090")
     parser.add_argument("--dry-run", action="store_true", help="print commands without running them")
     args = parser.parse_args()
     apply_preset(args)
+    args.selected_backends = parse_backend_selection(args.backend)
     return args
 
 
@@ -146,7 +193,7 @@ def apply_preset(args: argparse.Namespace) -> None:
     if args.preset is None:
         return
     preset = PRESETS[args.preset]
-    for key in ("quick", "backend", "scenarios", "transformers_scenarios", "warmup", "repeat"):
+    for key in ("quick", "backend", "scenarios", "transformers_scenarios", "vllm_scenarios", "warmup", "repeat"):
         setattr(args, key, preset[key])
     args.scenario_set = str(preset.get("scenario_set", "quick" if args.quick else "standard"))
     if args.label == "qwen25_1p5b_cuda4090":
@@ -215,8 +262,8 @@ def select_scenarios(args: argparse.Namespace) -> List[Dict[str, int]]:
 
 
 def transformers_enabled_for(args: argparse.Namespace, scenario_name: str) -> bool:
-    if args.backend != "all":
-        return args.backend == "transformers"
+    if "transformers" not in args.selected_backends:
+        return False
     if args.transformers_scenarios == "all":
         return True
     if args.transformers_scenarios == "none":
@@ -224,7 +271,84 @@ def transformers_enabled_for(args: argparse.Namespace, scenario_name: str) -> bo
     return scenario_name in set(parse_csv(args.transformers_scenarios))
 
 
-def command_for(args: argparse.Namespace, scenario: Dict[str, int], prompts: Sequence[str], backend: str) -> List[str]:
+def vllm_enabled_for(args: argparse.Namespace, scenario_name: str) -> bool:
+    if "vllm" not in args.selected_backends:
+        return False
+    if args.vllm_scenarios == "all":
+        return True
+    if args.vllm_scenarios == "none":
+        return False
+    return scenario_name in set(parse_csv(args.vllm_scenarios))
+
+
+def enabled_backends_for(args: argparse.Namespace, scenario_name: str) -> Tuple[List[str], List[str]]:
+    enabled = []
+    omitted = []
+    for backend in args.selected_backends:
+        include = True
+        if backend == "transformers":
+            include = transformers_enabled_for(args, scenario_name)
+        elif backend == "vllm":
+            include = vllm_enabled_for(args, scenario_name)
+        if include:
+            enabled.append(backend)
+        else:
+            omitted.append(backend)
+    if not enabled:
+        raise RuntimeError(f"all selected backends were omitted for scenario {scenario_name}")
+    return enabled, omitted
+
+
+def benchmark_runs_for(args: argparse.Namespace, scenario_name: str) -> List[Dict[str, Any]]:
+    runs: List[Dict[str, Any]] = []
+    if args.benchmark_mode in {"correctness", "dual"}:
+        correctness_backends = [backend for backend in args.selected_backends if backend in {"tinyllm", "transformers"}]
+        if correctness_backends:
+            omitted = [backend for backend in args.selected_backends if backend not in correctness_backends]
+            runs.append(
+                {
+                    "mode": "correctness",
+                    "enabled": correctness_backends,
+                    "omitted": omitted,
+                    "warmup": 0,
+                    "repeat": 1,
+                    "ignore_eos": False,
+                }
+            )
+    if args.benchmark_mode in {"fixed_output_perf", "dual"}:
+        enabled, omitted = enabled_backends_for(args, scenario_name)
+        runs.append(
+            {
+                "mode": "fixed_output_perf",
+                "enabled": enabled,
+                "omitted": omitted,
+                "warmup": args.warmup,
+                "repeat": args.repeat,
+                "ignore_eos": True,
+            }
+        )
+    if not runs:
+        raise RuntimeError(f"no benchmark runs are enabled for scenario {scenario_name}")
+    return runs
+
+
+def vllm_model_len_for(args: argparse.Namespace, scenario: Dict[str, int]) -> int:
+    if args.vllm_max_model_len == 0:
+        return 0
+    required = int(scenario["isl"]) + int(scenario["osl"])
+    return max(args.vllm_max_model_len, required, 256)
+
+
+def command_for(
+    args: argparse.Namespace,
+    scenario: Dict[str, int],
+    prompts: Sequence[str],
+    backend: str,
+    benchmark_mode: str,
+    warmup: int,
+    repeat: int,
+    ignore_eos: bool,
+) -> List[str]:
     command = [
         sys.executable,
         "benchmark/run_benchmark_comparison.py",
@@ -235,16 +359,30 @@ def command_for(args: argparse.Namespace, scenario: Dict[str, int], prompts: Seq
         "--device",
         args.device,
         "--warmup",
-        str(args.warmup),
+        str(warmup),
         "--repeat",
-        str(args.repeat),
+        str(repeat),
         "--max-new-tokens",
         str(scenario["osl"]),
+        "--benchmark-mode",
+        benchmark_mode,
         "--max-num-batched-token-cap",
         str(args.max_num_batched_token_cap),
+        "--vllm-python",
+        args.vllm_python,
+        "--vllm-dtype",
+        args.vllm_dtype,
+        "--vllm-gpu-memory-utilization",
+        str(args.vllm_gpu_memory_utilization),
+        "--vllm-max-model-len",
+        str(vllm_model_len_for(args, scenario)),
     ]
+    if ignore_eos:
+        command.append("--ignore-eos")
     if args.profile_detail:
         command.append("--profile-detail")
+    if args.vllm_enforce_eager:
+        command.append("--vllm-enforce-eager")
     for prompt in prompts:
         command.extend(["--prompt", prompt])
     command.extend(["--json", args.model_dir])
@@ -252,10 +390,12 @@ def command_for(args: argparse.Namespace, scenario: Dict[str, int], prompts: Seq
 
 
 def parse_json_line(stdout: str) -> Dict[str, Any]:
+    decoder = json.JSONDecoder()
     for line in reversed(stdout.splitlines()):
         line = line.strip()
         if line.startswith("{"):
-            return json.loads(line)
+            data, _ = decoder.raw_decode(line)
+            return data
     raise RuntimeError("benchmark command did not emit a final JSON line")
 
 
@@ -328,6 +468,62 @@ def samples_by_prompt(results: Sequence[Dict[str, Any]], prompt_index: int) -> L
     return samples
 
 
+def sample_generated_text(sample: Dict[str, Any]) -> str:
+    return str(sample.get("generated_text", sample.get("output_text", "")))
+
+
+def sample_token_ids(sample: Dict[str, Any]) -> List[int]:
+    token_ids = sample.get("token_ids", [])
+    if not isinstance(token_ids, list):
+        return []
+    return [int(token_id) for token_id in token_ids]
+
+
+def build_output_agreement(results: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    max_prompts = 0
+    for result in results:
+        samples = result.get("samples", [])
+        if isinstance(samples, list):
+            max_prompts = max(max_prompts, len(samples))
+
+    agreements = []
+    for prompt_index in range(max_prompts):
+        prompt_samples = samples_by_prompt(results, prompt_index)
+        if len(prompt_samples) < 2:
+            continue
+        reference_backend, reference_sample = prompt_samples[0]
+        reference_text = sample_generated_text(reference_sample)
+        reference_token_ids = sample_token_ids(reference_sample)
+        for backend, sample in prompt_samples[1:]:
+            token_ids = sample_token_ids(sample)
+            agreements.append(
+                {
+                    "prompt_index": prompt_index,
+                    "reference_backend": reference_backend,
+                    "backend": backend,
+                    "text_match": sample_generated_text(sample) == reference_text,
+                    "token_ids_match": token_ids == reference_token_ids,
+                    "reference_token_ids": reference_token_ids,
+                    "backend_token_ids": token_ids,
+                }
+            )
+    return agreements
+
+
+def ratio_row(ratios: Dict[str, Any], prefix: str, label: str) -> Optional[Tuple[str, str, str, str, str, str]]:
+    latency_key = f"{prefix}_latency"
+    if latency_key not in ratios:
+        return None
+    return (
+        label,
+        fmt_float(ratios.get(latency_key)),
+        fmt_float(ratios.get(f"{prefix}_first_token_latency")),
+        fmt_float(ratios.get(f"{prefix}_e2e_throughput")),
+        fmt_float(ratios.get(f"{prefix}_decode_throughput")),
+        fmt_float(ratios.get(f"{prefix}_load_init")),
+    )
+
+
 def build_markdown(report: Dict[str, Any]) -> str:
     lines = []
     lines.append(f"# Industrial Benchmark Report: {report['label']}")
@@ -340,24 +536,28 @@ def build_markdown(report: Dict[str, Any]) -> str:
         lines.append(f"- gpu: `{gpu.get('name', 'unknown')}`, memory `{gpu.get('memory_total', 'unknown')}`")
     if report.get("preset"):
         lines.append(f"- preset: `{report['preset']}`")
+    lines.append(f"- benchmark_mode: `{report.get('benchmark_mode', '-')}`")
     lines.append(f"- warmup/repeat: `{report['warmup']}/{report['repeat']}`")
     lines.append(f"- profile_detail: `{'on' if report.get('profile_detail') else 'off'}`")
     lines.append("")
     lines.append("Current benchmark mode is offline batched generation. It is not a request-rate server benchmark with p50/p95/p99 latency.")
+    lines.append("Sample output is reported for sanity; exact generated-token agreement is tracked separately below.")
     lines.append("")
-    lines.append("| scenario | backend | batch | ISL target | prompt tokens | OSL | generated | TTFT ms | latency ms | decode ms/token | e2e tok/s | decode tok/s |")
-    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| scenario | mode | backend | batch | ISL target | prompt tokens | OSL | target gen | generated | TTFT ms | latency ms | decode ms/token | e2e tok/s | decode tok/s |")
+    lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for scenario in report["scenarios"]:
         meta = scenario["workload"]
         for result in scenario.get("results", []):
             lines.append(
-                "| {scenario} | {backend} | {batch} | {isl} | {prompt_tokens} | {osl} | {generated} | {ttft} | {latency} | {decode_ms} | {e2e} | {decode_tps} |".format(
+                "| {scenario} | {mode} | {backend} | {batch} | {isl} | {prompt_tokens} | {osl} | {target_generated} | {generated} | {ttft} | {latency} | {decode_ms} | {e2e} | {decode_tps} |".format(
                     scenario=meta["name"],
+                    mode=scenario.get("benchmark_mode", "-"),
                     backend=result.get("backend", "-"),
                     batch=meta["batch"],
                     isl=meta["isl"],
                     prompt_tokens=result.get("prompt_tokens", scenario.get("actual_prompt_tokens", "-")),
                     osl=meta["osl"],
+                    target_generated=scenario.get("target_generated_tokens", "-"),
                     generated=fmt_float(result.get("avg_generated_tokens")),
                     ttft=fmt_float(result.get("avg_first_token_latency_ms")),
                     latency=fmt_float(result.get("avg_total_latency_ms")),
@@ -368,33 +568,83 @@ def build_markdown(report: Dict[str, Any]) -> str:
             )
         if scenario.get("omitted_baselines"):
             lines.append(
-                f"| {meta['name']} | omitted: {', '.join(scenario['omitted_baselines'])} | {meta['batch']} | {meta['isl']} | {scenario.get('actual_prompt_tokens', '-')} | {meta['osl']} | - | - | - | - | - | - |"
+                f"| {meta['name']} | {scenario.get('benchmark_mode', '-')} | omitted: {', '.join(scenario['omitted_baselines'])} | {meta['batch']} | {meta['isl']} | {scenario.get('actual_prompt_tokens', '-')} | {meta['osl']} | {scenario.get('target_generated_tokens', '-')} | - | - | - | - | - | - |"
             )
     lines.append("")
-    lines.append("## TinyLLM / Transformers Ratios")
+    lines.append("## Output Agreement")
     lines.append("")
-    lines.append("| scenario | latency | TTFT | e2e throughput | decode throughput | load/init |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("Each row compares a backend to the first backend emitted for that scenario, usually TinyLLM.")
+    lines.append("")
+    lines.append("| scenario | mode | prompt | reference | backend | text match | token ids match |")
+    lines.append("| --- | --- | ---: | --- | --- | --- | --- |")
+    for scenario in report["scenarios"]:
+        for agreement in scenario.get("output_agreement", []):
+            lines.append(
+                "| {scenario} | {mode} | {prompt} | {reference} | {backend} | {text_match} | {token_match} |".format(
+                    scenario=scenario["workload"]["name"],
+                    mode=scenario.get("benchmark_mode", "-"),
+                    prompt=agreement.get("prompt_index", "-"),
+                    reference=agreement.get("reference_backend", "-"),
+                    backend=agreement.get("backend", "-"),
+                    text_match="yes" if agreement.get("text_match") else "no",
+                    token_match="yes" if agreement.get("token_ids_match") else "no",
+                )
+            )
+    lines.append("")
+    lines.append("## Ratio Validity")
+    lines.append("")
+    lines.append("Ratios are valid only when both compared backends generated the target number of tokens.")
+    lines.append("")
+    lines.append("| scenario | mode | ratio | valid | target generated | reason |")
+    lines.append("| --- | --- | --- | --- | ---: | --- |")
+    for scenario in report["scenarios"]:
+        for prefix, status in scenario.get("ratio_status", {}).items():
+            lines.append(
+                "| {scenario} | {mode} | {ratio} | {valid} | {target} | {reason} |".format(
+                    scenario=scenario["workload"]["name"],
+                    mode=scenario.get("benchmark_mode", "-"),
+                    ratio=prefix,
+                    valid="yes" if status.get("valid") else "no",
+                    target=status.get("target_generated_tokens", "-"),
+                    reason=status.get("reason", ""),
+                )
+            )
+    lines.append("")
+    lines.append("## Backend Ratios")
+    lines.append("")
+    lines.append("| scenario | mode | ratio | latency | TTFT | e2e throughput | decode throughput | load/init |")
+    lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |")
     for scenario in report["scenarios"]:
         ratios = scenario.get("ratios", {})
         if not ratios:
             continue
-        lines.append(
-            "| {scenario} | {latency} | {ttft} | {e2e} | {decode} | {load} |".format(
-                scenario=scenario["workload"]["name"],
-                latency=fmt_float(ratios.get("tinyllm_vs_transformers_latency")),
-                ttft=fmt_float(ratios.get("tinyllm_vs_transformers_first_token_latency")),
-                e2e=fmt_float(ratios.get("tinyllm_vs_transformers_e2e_throughput")),
-                decode=fmt_float(ratios.get("tinyllm_vs_transformers_decode_throughput")),
-                load=fmt_float(ratios.get("tinyllm_vs_transformers_load_init")),
+        rows = [
+            ratio_row(ratios, "tinyllm_vs_transformers", "TinyLLM / Transformers"),
+            ratio_row(ratios, "tinyllm_vs_vllm", "TinyLLM / vLLM"),
+            ratio_row(ratios, "transformers_vs_vllm", "Transformers / vLLM"),
+        ]
+        for row in rows:
+            if row is None:
+                continue
+            label, latency, ttft, e2e, decode, load = row
+            lines.append(
+                "| {scenario} | {mode} | {label} | {latency} | {ttft} | {e2e} | {decode} | {load} |".format(
+                    scenario=scenario["workload"]["name"],
+                    mode=scenario.get("benchmark_mode", "-"),
+                    label=label,
+                    latency=latency,
+                    ttft=ttft,
+                    e2e=e2e,
+                    decode=decode,
+                    load=load,
+                )
             )
-        )
     lines.append("")
     lines.append("## Prompts And Outputs")
     lines.append("")
     for scenario in report["scenarios"]:
         meta = scenario["workload"]
-        lines.append(f"### {meta['name']}")
+        lines.append(f"### {meta['name']} ({scenario.get('benchmark_mode', '-')})")
         prompts = scenario.get("prompts", [])
         per_prompt_tokens = scenario.get("per_prompt_tokens", [])
         for prompt_index, prompt in enumerate(prompts):
@@ -476,10 +726,19 @@ def main() -> int:
         "device": args.device,
         "warmup": args.warmup,
         "repeat": args.repeat,
+        "benchmark_mode": args.benchmark_mode,
         "backend": args.backend,
+        "selected_backends": args.selected_backends,
         "preset": args.preset,
         "profile_detail": args.profile_detail or env_flag_enabled("TINYLLM_PROFILE_DETAIL"),
         "gpu": query_gpu(),
+        "vllm": {
+            "python": args.vllm_python,
+            "dtype": args.vllm_dtype,
+            "max_model_len": args.vllm_max_model_len,
+            "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
+            "enforce_eager": args.vllm_enforce_eager,
+        },
         "scenarios": [],
     }
 
@@ -491,31 +750,48 @@ def main() -> int:
             prompts.append(prompt)
             per_prompt_tokens.append(count)
 
-        scenario_backend = args.backend
-        omitted: List[str] = []
-        if args.backend == "all" and not transformers_enabled_for(args, str(scenario["name"])):
-            scenario_backend = "tinyllm"
-            omitted.append("transformers")
-
-        command = command_for(args, scenario, prompts, scenario_backend)
-        print(
-            f"running {scenario['name']}: backend={scenario_backend}, batch={scenario['batch']}, "
-            f"target_isl={scenario['isl']}, actual_prompt_tokens={sum(per_prompt_tokens)}, osl={scenario['osl']}",
-            flush=True,
-        )
-        comparison = run_command(command, args.dry_run)
-        report["scenarios"].append(
-            {
-                "workload": scenario,
-                "actual_prompt_tokens": sum(per_prompt_tokens),
-                "per_prompt_tokens": per_prompt_tokens,
-                "command": command,
-                "prompts": list(prompts),
-                "results": flatten_results(comparison),
-                "ratios": comparison.get("ratios", {}),
-                "omitted_baselines": omitted,
-            }
-        )
+        for run in benchmark_runs_for(args, str(scenario["name"])):
+            scenario_backend = ",".join(run["enabled"])
+            command = command_for(
+                args,
+                scenario,
+                prompts,
+                scenario_backend,
+                str(run["mode"]),
+                int(run["warmup"]),
+                int(run["repeat"]),
+                bool(run["ignore_eos"]),
+            )
+            print(
+                f"running {scenario['name']} [{run['mode']}]: backend={scenario_backend}, "
+                f"batch={scenario['batch']}, target_isl={scenario['isl']}, "
+                f"actual_prompt_tokens={sum(per_prompt_tokens)}, osl={scenario['osl']}",
+                flush=True,
+            )
+            comparison = run_command(command, args.dry_run)
+            results = flatten_results(comparison)
+            report["scenarios"].append(
+                {
+                    "workload": scenario,
+                    "benchmark_mode": str(run["mode"]),
+                    "ignore_eos": bool(run["ignore_eos"]),
+                    "warmup": int(run["warmup"]),
+                    "repeat": int(run["repeat"]),
+                    "actual_prompt_tokens": sum(per_prompt_tokens),
+                    "per_prompt_tokens": per_prompt_tokens,
+                    "target_generated_tokens": comparison.get(
+                        "target_generated_tokens",
+                        int(scenario["batch"]) * int(scenario["osl"]),
+                    ),
+                    "command": command,
+                    "prompts": list(prompts),
+                    "results": results,
+                    "ratios": comparison.get("ratios", {}),
+                    "ratio_status": comparison.get("ratio_status", {}),
+                    "output_agreement": build_output_agreement(results),
+                    "omitted_baselines": run["omitted"],
+                }
+            )
 
     json_path, md_path = write_reports(args, report)
     print(f"wrote JSON report: {json_path}")

@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=non_negative_int, default=1)
     parser.add_argument("--repeat", type=positive_int, default=3)
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
+    parser.add_argument("--ignore-eos", action="store_true", help="generate exactly max_new_tokens unless another hard limit is hit")
     parser.add_argument("--prompt", action="append", dest="prompts", default=[])
     parser.add_argument("--json", action="store_true")
     parser.add_argument("model_dir")
@@ -150,16 +151,18 @@ def generate_once(
         attention_mask = attention_mask.to(device)
 
     timer.mark_start()
+    generate_kwargs = {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "do_sample": False,
+        "max_new_tokens": args.max_new_tokens,
+        "pad_token_id": tokenizer.pad_token_id,
+        "eos_token_id": None if args.ignore_eos else tokenizer.eos_token_id,
+        "logits_processor": logits_processor_list([timer]),
+    }
+
     with torch.no_grad():
-        output_ids = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            do_sample=False,
-            max_new_tokens=args.max_new_tokens,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            logits_processor=logits_processor_list([timer]),
-        )
+        output_ids = model.generate(**generate_kwargs)
     synchronize()
     generation_end = time.perf_counter()
 
@@ -232,6 +235,7 @@ def build_summary(args: argparse.Namespace, model_dir: Path, device_text: str, p
         "warmup": args.warmup,
         "repeat": args.repeat,
         "max_new_tokens": args.max_new_tokens,
+        "ignore_eos": bool(args.ignore_eos),
         "avg_load_init_ms": mean(load_ms),
         "avg_total_latency_ms": avg_total_ms,
         "avg_first_token_latency_ms": avg_first_ms,
@@ -254,7 +258,8 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
     print(f"  device: {summary['device']}")
     print(
         f"  prompts: {summary['prompt_count']}, warmup: {summary['warmup']}, "
-        f"repeat: {summary['repeat']}, max_new_tokens: {summary['max_new_tokens']}"
+        f"repeat: {summary['repeat']}, max_new_tokens: {summary['max_new_tokens']}, "
+        f"ignore_eos: {'on' if summary['ignore_eos'] else 'off'}"
     )
     print("  latency:")
     print(f"    avg_load_init_ms: {summary['avg_load_init_ms']:.3f}")
