@@ -77,6 +77,8 @@ block_tables  [num_layers, num_seqs, max_blocks_per_seq] int32
 
 These tensors are token-aligned except for `context_lens` and `block_tables`.
 
+`PreparedInputs` may also carry derived full-prefill segment descriptors for the current step. These descriptors summarize contiguous full-prefill rows and are valid only for full prefill from position zero. They let CUDA full-prefill attention select the SDPA path without rereading CUDA metadata on the CPU in every decoder layer; they do not change the scheduler output contract.
+
 ## Scheduling Model
 
 The scheduler currently implements FCFS-style scheduling over two queues:
@@ -103,7 +105,7 @@ Each physical block stores both key and value data:
 2 * block_size_tokens * (num_key_value_heads * head_dim) * sizeof(float)
 ```
 
-The attention runtime receives `slot_mapping`, `seq_indices`, `context_lens`, and rank-3 `block_tables` through `RuntimeContext::attention_metadata()`. This is the current preferred path. Legacy thread-local paged-attention metadata APIs still exist for compatibility.
+The attention runtime receives `slot_mapping`, `seq_indices`, `context_lens`, rank-3 `block_tables`, and optional derived prefill segments through `RuntimeContext::attention_metadata()`. This is the current preferred path. Legacy thread-local paged-attention metadata APIs still exist for compatibility.
 
 ## Model Runtime
 
@@ -128,7 +130,7 @@ The model path supports LLaMA-family and Qwen2-family checkpoints that match thi
 
 `ParallelConfig` selects CPU or one CUDA device. Tensor and allocator paths dispatch by actual tensor/device state, not compile flag alone. CPU tensors remain valid in CUDA builds.
 
-CUDA builds add CUDA kernels for selected operators while retaining torch or CPU implementations where appropriate. The current paged attention CUDA path is a correctness-oriented bridge, not a final optimized kernel.
+CUDA builds add CUDA kernels for selected operators while retaining torch or CPU implementations where appropriate. The current paged attention CUDA path is a correctness-oriented bridge, not a final optimized kernel; fallback/reference paths may still inspect CPU metadata, while optimized full-prefill dispatch uses precomputed segment descriptors.
 
 ## Build Layout
 

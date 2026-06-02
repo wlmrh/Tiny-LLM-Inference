@@ -66,6 +66,8 @@ Attributes:
 - `context_lens`: context length per scheduled sequence, shape `[num_seqs]`, int32.
 - `block_tables`: per-layer page tables, shape `[num_layers, num_seqs, max_blocks_per_seq]`, int32.
 - `sample_row_offsets`: final row offset for each scheduled request.
+- `prefill_segments`: optional derived descriptors `{row_start, seq_index, length}` for contiguous full-prefill rows.
+- `prefill_segments_valid`: true only when the current step is entirely full prefill from position zero.
 
 For an empty scheduler step, `PreparedInputs` contains defined zero-length tensors so downstream validation can stay uniform.
 
@@ -80,7 +82,8 @@ For each scheduled request, `prepare_inputs()`:
 - computes `position = num_computed_tokens + token_index`;
 - computes `logical_block_index = position / kv_block_size_tokens`;
 - computes `slot = physical_block_id * kv_block_size_tokens + (position % kv_block_size_tokens)`;
-- appends the final token row to `sample_row_offsets`.
+- appends the final token row to `sample_row_offsets`;
+- precomputes full-prefill segments only when all scheduled requests are full prefill chunks with `num_computed_tokens == 0` and the flattened token count is large enough for the CUDA SDPA prefill path.
 
 `sample_row_offsets` is the reason prefill can emit the first generated token from the last prefill row.
 
@@ -93,6 +96,8 @@ RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, detail_profile_enabled
 ```
 
 The model receives `PreparedInputs` plus this context. Attention modules read paged metadata from `RuntimeContext::attention_metadata()`.
+
+The metadata includes tensor pointers for paged attention and, when valid, a pointer/count view over `PreparedInputs::prefill_segments`. The segment view is step-local and must not outlive `PreparedInputs`.
 
 ## Sampling and Output
 

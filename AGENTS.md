@@ -34,8 +34,8 @@ If the user explicitly requests local project edits, modify files locally but do
 - `EngineCore::step()` calls `Scheduler::schedule()`, `ModelRunner::run()`, then `Scheduler::update_from_output()`. `EngineCore` passes the scheduler-owned `KVCache*` into `ModelRunner`; do not create a second runner-local KV cache for the same engine.
 - `ModelRunner` loads either `model.safetensors` or all sorted `*.safetensors` shards, prepares `PreparedInputs`, builds `RuntimeContext`, calls `Model::forward(const PreparedInputs&, RuntimeContext&)`, and greedily samples request-final rows.
 - LLaMA and Qwen2 reuse the LLaMA-style runtime path. `LlamaForCausalLM` owns `LlamaModel` plus LM head; model modules stay limited to reusable layers such as `Embedding`, `Linear`, `RMSNorm`, and `RotaryEmbedding`.
-- Attention reads paged metadata from `RuntimeContext::attention_metadata()`. New model code should pass metadata through `RuntimeContext`, not through global setters.
-- CUDA paged attention is currently a correctness bridge using libtorch operations and some CPU-side metadata handling; do not treat it as the final optimized kernel.
+- Attention reads paged metadata from `RuntimeContext::attention_metadata()`. New model code should pass metadata through `RuntimeContext`, not through global setters. Full-prefill segment descriptors are derived by `ModelRunner` per step; they are not a scheduler contract.
+- CUDA paged attention is currently a correctness bridge using libtorch operations and fallback CPU-side metadata handling. Optimized full-prefill paths may use precomputed segments to avoid per-layer CUDA metadata reads, but do not treat this as the final optimized kernel.
 
 ## Coding Rules
 
@@ -112,6 +112,7 @@ Useful direct runs:
 - Use `--preset full` only at phase boundaries or before reporting headline numbers.
 - Use `--preset quick --dry-run` for command plumbing checks.
 - Use `--preset profile_prefill --profile-detail` only for bottleneck diagnosis; synchronized per-component timings are not headline throughput numbers.
+- For vLLM comparisons, use fixed-output performance mode so all backends generate the requested token count; output agreement is a sanity/correctness signal, not a requirement for performance ratios.
 - `benchmark/results/` keeps only recent reports; preserve a report elsewhere only when the user asks.
 
 ## Debug And Alignment Tools
@@ -122,7 +123,8 @@ Useful direct runs:
 - `tools/llama_engine_generate.cpp`: run greedy generation and JSONL output; also used by generation comparison and smoke scripts.
 - `benchmark/llama_engine_benchmark.cpp`: end-to-end TinyLLM benchmark binary.
 - `benchmark/transformers_generate_benchmark.py`: Hugging Face Transformers baseline.
-- `benchmark/run_benchmark_comparison.py`: TinyLLM/Transformers benchmark comparison wrapper.
+- `benchmark/vllm_generate_benchmark.py`: vLLM performance baseline.
+- `benchmark/run_benchmark_comparison.py`: TinyLLM/Transformers/vLLM benchmark comparison wrapper.
 
 Historical `test_llama_phase*` files were temporary bring-up checks and should not be restored as regular tests.
 
