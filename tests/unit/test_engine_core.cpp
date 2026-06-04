@@ -2,6 +2,7 @@
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/runtime/engine.h"
 #include "tiny_llm/runtime/engine_core.h"
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/tokenizer.h"
@@ -70,7 +71,7 @@ struct EngineCoreFixture {
           blocks(num_blocks, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu()),
           kv(make_kv_config(), &blocks),
           ctx(nullptr, nullptr, &kv),
-          core(&model, &ctx, &kv, &tokenizer, 8, make_scheduler_config(max_prefill_tokens))
+          core(make_engine_args(&model, &ctx, &kv, &tokenizer, max_prefill_tokens))
     {
     }
 
@@ -87,6 +88,22 @@ struct EngineCoreFixture {
         tiny_llm::SchedulerConfig cfg;
         cfg.max_prefill_tokens_per_step = max_prefill_tokens;
         return cfg;
+    }
+
+    static tiny_llm::EngineArgs make_engine_args(tiny_llm::Model* model,
+                                                tiny_llm::ExecutionContext* ctx,
+                                                tiny_llm::KVCache* kv,
+                                                tiny_llm::Tokenizer* tokenizer,
+                                                int32_t max_prefill_tokens)
+    {
+        tiny_llm::EngineArgs args;
+        args.model = model;
+        args.ctx = ctx;
+        args.kv = kv;
+        args.tokenizer = tokenizer;
+        args.max_generated_tokens = 8;
+        args.scheduler_config = make_scheduler_config(max_prefill_tokens);
+        return args;
     }
 
     void add_request(uint64_t id, std::vector<int32_t> prompt, int32_t max_tokens)
