@@ -10,6 +10,8 @@ The runtime API module is the user-facing layer for offline generation. It hides
 - `src/runtime/engine.cpp`
 - `include/tiny_llm/runtime/engine_args.h`
 
+Class-level details for the high-level facade are maintained in [LLM](LLM.md).
+
 ## Responsibilities
 
 - Construct a complete runtime from a HuggingFace model directory.
@@ -46,7 +48,6 @@ Important attributes:
 - `workspace_`: owned `StackAllocator`.
 - `engine_`: owned `LLMEngine`.
 - `kv_pool_`: raw CPU or CUDA KV memory pool.
-- `next_generation_id_`: monotonically increasing prefix for generated external request IDs.
 - `last_generation_profile_`: accumulated runtime profile for the most recent generation call.
 
 Main interfaces:
@@ -54,10 +55,12 @@ Main interfaces:
 - `LLM(std::string model)`: constructs a CPU runtime from a model path.
 - `LLM(std::string model, ParallelConfig parallel_config)`: constructs a runtime for the selected device.
 - `LLM(LLMOptions options)`: constructs a runtime with explicit resource settings.
-- `generate(const std::vector<std::string>&, const UserSamplingParams&)`: blocking batch generation.
-- `generate(const std::string&, const UserSamplingParams&)`: blocking single-prompt generation.
+- `generate(const std::vector<std::string>&, const LLMSamplingParams&)`: blocking batch generation.
+- `generate(const std::string&, const LLMSamplingParams&)`: blocking single-prompt generation.
 - `generate_stream(...)`: generation with `CompletionStreamCallback` invoked for each emitted token event.
 - `last_generation_profile()`: returns accumulated timings and token counters.
+
+`LLMSamplingParams` is an alias for `UserSamplingParams`. A `max_tokens` value of `0` uses the runtime default from `LLMOptions.max_tokens`; positive values override it for the request.
 
 Construction behavior:
 

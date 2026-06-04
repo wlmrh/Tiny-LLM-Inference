@@ -2,6 +2,7 @@
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/runtime/engine.h"
 #include "tiny_llm/runtime/engine_core.h"
+#include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
@@ -97,6 +98,70 @@ struct EngineCoreFixture {
         core.add_request(request);
     }
 };
+}
+
+TEST(InputPreprocessorTest, DefaultUserMaxTokensUsesEngineDefaultAndCopiesSharedFields)
+{
+    FakeTokenizer tokenizer;
+    tiny_llm::EngineArgs args;
+    args.tokenizer = &tokenizer;
+    args.max_generated_tokens = 7;
+
+    tiny_llm::InputPreprocessor preprocessor(args);
+    tiny_llm::UserSamplingParams user_params;
+    user_params.temperature = 0.8f;
+    user_params.top_p = 0.7f;
+    user_params.top_k = 3;
+    user_params.repetition_penalty = 1.2f;
+    user_params.seed = 42;
+    user_params.ignore_eos = true;
+    user_params.stop_token_ids = {6, 7};
+
+    const tiny_llm::EngineCoreRequest request =
+        preprocessor.process_inputs("prompt", user_params, "sampling-default");
+    const tiny_llm::SamplingParams& params = request.sampling_params;
+
+    EXPECT_FLOAT_EQ(params.temperature, user_params.temperature);
+    EXPECT_FLOAT_EQ(params.top_p, user_params.top_p);
+    EXPECT_EQ(params.top_k, user_params.top_k);
+    EXPECT_FLOAT_EQ(params.repetition_penalty, user_params.repetition_penalty);
+    EXPECT_EQ(params.seed, user_params.seed);
+    EXPECT_TRUE(params.ignore_eos);
+    EXPECT_EQ(params.stop_token_ids, user_params.stop_token_ids);
+    EXPECT_EQ(params.max_tokens, 7);
+}
+
+TEST(InputPreprocessorTest, ExplicitUserMaxTokensOverridesEngineDefault)
+{
+    FakeTokenizer tokenizer;
+    tiny_llm::EngineArgs args;
+    args.tokenizer = &tokenizer;
+    args.max_generated_tokens = 7;
+
+    tiny_llm::InputPreprocessor preprocessor(args);
+    tiny_llm::UserSamplingParams user_params;
+    user_params.max_tokens = 5;
+
+    const tiny_llm::EngineCoreRequest request =
+        preprocessor.process_inputs("prompt", user_params, "sampling-override");
+
+    EXPECT_EQ(request.sampling_params.max_tokens, 5);
+}
+
+TEST(InputPreprocessorTest, RejectsNegativeUserMaxTokens)
+{
+    FakeTokenizer tokenizer;
+    tiny_llm::EngineArgs args;
+    args.tokenizer = &tokenizer;
+    args.max_generated_tokens = 7;
+
+    tiny_llm::InputPreprocessor preprocessor(args);
+    tiny_llm::UserSamplingParams user_params;
+    user_params.max_tokens = -1;
+
+    EXPECT_THROW(
+        preprocessor.process_inputs("prompt", user_params, "sampling-negative"),
+        std::runtime_error);
 }
 
 TEST(EngineCoreTest, EmitsPrefillSampleAsFirstGeneratedTokenThenDecodes)
