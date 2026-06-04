@@ -6,5 +6,6 @@ build/
 Dockerfile
 .DS_Store
 build-cuda/
+build-*/
 __pycache__/
 results/
