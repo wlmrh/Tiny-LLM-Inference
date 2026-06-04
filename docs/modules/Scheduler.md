@@ -1,6 +1,6 @@
 # Scheduler Module
 
-The scheduler owns request state and decides which tokens are computed in each engine step. It also coordinates KV cache block allocation and preemption.
+`Scheduler` owns request state between engine steps. It decides which token IDs are computed next, reserves KV cache slots for those tokens, and applies sampled model output back to requests.
 
 ## Main Files
 
@@ -11,112 +11,93 @@ The scheduler owns request state and decides which tokens are computed in each e
 
 ## Responsibilities
 
-- Maintain all active `Request` objects.
-- Maintain `waiting` and `running` queues.
+- Maintain active `Request` objects and their `waiting`/`running` queues.
 - Enforce the per-step scheduled-token budget.
-- Split request work into chunked prefill and decode.
-- Allocate KV cache blocks before model execution.
-- Preempt tail running requests when KV capacity is insufficient.
-- Apply scheduler state updates after sampled tokens return from `ModelRunner`.
-- Release finished request KV cache state.
+- Split work into chunked prefill and one-token decode steps.
+- Bind or own the runtime `KVCache` through `KVCacheManager`.
+- Allocate KV blocks before a request is emitted in `SchedulerOutput`.
+- Preempt tail running requests when KV capacity is insufficient and preemption is enabled.
+- Consume `ModelRunnerOutput`, append sampled tokens, emit `EngineCoreOutput`, and release finished KV state.
 
-## `SchedulerConfig`
+The scheduler does not tokenize text, run model code, sample logits, or own a second KV cache for the same engine.
 
-Attributes:
+## Configuration
 
-- `policy`: currently `SchedulerPolicy::kFcfs`.
+`SchedulerConfig` contains:
+
 - `max_running_requests`: maximum active running request count; `0` means unlimited.
-- `enable_preemption`: allows tail preemption when KV allocation fails.
-- `max_prefill_tokens_per_step`: token budget used by `Scheduler` as `max_num_scheduled_tokens`.
+- `enable_preemption`: allows tail preemption on KV allocation failure.
+- `max_prefill_tokens_per_step`: lower-bounded at `1` and used as the step token budget.
 
-## `Scheduler`
+## KV Cache Manager
 
-Important attributes:
+`KVCacheManager` is the scheduler's KV ownership adapter. It either binds the engine-provided cache or constructs one from `EngineArgs`; it is not a runner-local duplicate cache.
 
-- `kvcache_manager`: binds or owns the runtime `KVCache`.
-- `requests`: map from request ID to `Request`.
-- `policy`: scheduling policy selector.
-- `waiting`: queue of new or preempted request IDs.
-- `running`: queue of request IDs with active runtime state.
-- `max_num_scheduled_tokens`: per-step token budget.
+It provides block-count estimation, sequence start/end, slot allocation, and block-table refresh helpers. `refresh_block_tables(...)` is the active all-layer contract consumed by `ModelRunner`; `refresh_block_table(...)` remains as a legacy layer-0 helper.
 
-Main interfaces:
+## Scheduler Interface
 
-- `Scheduler(SchedulerConfig)`: constructs a scheduler without KV binding.
+- `Scheduler(SchedulerConfig)`: constructs scheduling policy state without binding KV cache.
 - `Scheduler(const EngineArgs&)`: binds `args.kv` or constructs an owned KV cache from args.
 - `Scheduler(KVCache*, SchedulerConfig)`: binds an existing cache.
-- `add_request(Request request)`: validates and enqueues a request.
-- `schedule()`: produces one `SchedulerOutput`.
-- `update_from_output(SchedulerOutput, ModelRunnerOutput)`: consumes sampled tokens and returns `EngineCoreOutput`.
-- `get_num_unfinished_requests()`: counts non-finished requests.
-- `has_unfinished_requests()`: true when any request is waiting or running.
-- `kv_cache()`: exposes the bound cache for `ModelRunner`.
+- `add_request(Request)`: validates and enqueues a request.
+- `schedule()`: creates one step-local `SchedulerOutput`.
+- `update_from_output(SchedulerOutput, ModelRunnerOutput)`: advances request state after model execution.
+- `get_num_unfinished_requests() const` and `has_unfinished_requests() const`: report active scheduler state.
+- `kv_cache()`: exposes the scheduler-owned or scheduler-bound cache to `EngineCore`/`ModelRunner`.
 
-## `SchedulerOutput`
+## Step Output Contract
 
-Attributes:
+`SchedulerOutput` is the scheduler-to-runner package for one step:
 
-- `scheduled_reqs`: list of `RequestData` entries to execute this step.
-- `num_scheduled_tokens`: request ID to token count.
-- `total_num_scheduled_tokens`: total flattened token count.
-- `finished_req_ids`: IDs already marked finished before the current step.
-- `preempted_req_ids`: IDs preempted during scheduling.
+- `scheduled_reqs`: ordered `RequestData` entries to execute.
+- `num_scheduled_tokens`: request ID to scheduled token count.
+- `total_num_scheduled_tokens`: flattened token count across all scheduled requests.
+- `preempted_req_ids`: request IDs preempted while building this step.
 
-`finished_req_ids` and `preempted_req_ids` are retained in the contract, but the current `ModelRunner` does not directly use them for cleanup. Scheduler/KV cleanup happens inside scheduler methods.
+`ModelRunner` consumes `scheduled_reqs`, `num_scheduled_tokens`, and `total_num_scheduled_tokens`. Scheduler/KV cleanup is handled by scheduler methods; the runner does not consume cleanup ID fields.
 
-## `RequestData`
-
-Attributes:
+`RequestData` is step-local execution metadata:
 
 - `req_id`: request ID.
-- `new_token_ids`: tokens to run in this step.
-- `num_computed_tokens`: number of tokens whose KV state already exists before this step.
+- `new_token_ids`: prefill chunk tokens or the previous generated token for decode.
+- `num_computed_tokens`: tokens with KV state before this step.
 - `prompt_token_count`: original prompt length.
-- `is_prefill`: true when this scheduled chunk still processes prompt/context tokens.
-- `block_tables`: rank-2 host table `[layer][logical_block] -> physical_block_id`.
-- `sampling_params`: normalized request sampling parameters.
+- `is_prefill`: true when the chunk still processes context tokens.
+- `block_tables`: all-layer host table `[layer][logical_block] -> physical_block_id`.
+- `sampling_params`: normalized sampling parameters for the request.
 - `all_token_ids`: full prompt plus generated-token history before sampling this step.
-
-`ModelRunner` uses the all-layer `block_tables` contract directly.
 
 ## Scheduling Algorithm
 
-`schedule()` runs in two phases:
+`schedule()` first scans a snapshot of `running`, then scans `waiting` if no running request was preempted during the first phase.
 
-1. Iterate a snapshot of `running`.
-2. If no preemption occurred while scheduling running requests, iterate a snapshot of `waiting`.
+For each eligible request:
 
-For each request:
+- If `num_computed < all_token_count`, schedule a fair prefill chunk bounded by remaining step budget.
+- Otherwise schedule one decode token by replaying the last token in `all_token_ids`.
+- Reserve KV slots before the request is emitted.
+- Build `RequestData` through the shared private helper so prefill and decode use the same metadata contract.
 
-- If `num_computed < context_token_count`, schedule a prefill chunk.
-- Otherwise schedule one decode token by replaying the last token in `_all_token_ids`.
-- Allocate enough KV slots before adding the request to the output.
-- Refresh all per-layer block tables after allocation.
-
-The prefill chunk size is bounded by the remaining token budget. Decode always schedules one token per selected request.
+When a waiting request is admitted, it moves to running as part of KV slot allocation. `max_running_requests` limits only admission from waiting; existing running requests remain candidates.
 
 ## Preemption
 
-When `KVCacheManager::allocate_slots()` fails, the scheduler scans the back of `running` for a tail victim. The victim is reset as follows:
+If KV slot allocation fails and preemption is enabled, the scheduler chooses the tail running request as a victim. `preempt_request()` releases its KV sequence state, resets `num_computed` to `0`, removes it from `running`, and pushes it to the front of `waiting`.
 
-- KV sequence state is ended and blocks are released.
-- `status` becomes `WAITING`.
-- `num_computed` becomes `0`.
-- the request is removed from `running` and pushed to the front of `waiting`.
-
-The request's `_all_token_ids` is preserved. This means recomputation includes the original prompt and already-generated context, which avoids losing generated tokens after preemption.
+The request's `all_token_ids` history is preserved, so recomputation includes the original prompt and already generated context.
 
 ## Updating From Model Output
 
-`update_from_output()` performs:
+`update_from_output()`:
 
-1. Cleanup of requests that were already `FINISHED`.
-2. Mark scheduled requests as running.
-3. Advance `num_computed` for prefill tokens.
-4. Read sampled token IDs from `ModelRunnerOutput`.
-5. Append sampled token to `_all_token_ids`.
-6. Emit `EngineCoreOutput`.
-7. Finish requests by stop token or max generated length.
-8. Release KV blocks and erase finished requests.
+1. Erases requests already marked finished.
+2. Marks scheduled requests as running.
+3. Advances prefill `num_computed` by the scheduled chunk size.
+4. Reads sampled token IDs from `ModelRunnerOutput`, which is defined with the runner/runtime contract rather than in `scheduler.h`.
+5. Appends sampled tokens to request history and emits `EngineCoreOutput`.
+6. Advances decode `num_computed` after sampled-token append.
+7. Finishes requests by stop token or max generated length.
+8. Releases KV blocks and erases finished requests.
 
-During prefill, the final prefill row sample is emitted as the first generated token. During decode, `num_computed` advances after appending the sampled token.
+The final prefill row sample is emitted as the first generated token when a prompt completes.

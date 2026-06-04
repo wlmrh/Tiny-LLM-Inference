@@ -47,9 +47,9 @@ Suggested cleanup:
 
 - Remove the thread-local API after tests and helper tools use explicit metadata.
 
-### `SchedulerPolicy` Is Only a Placeholder
+### Scheduler Policy Placeholder Removed
 
-`SchedulerPolicy::kFcfs` is the only policy and there is no policy dispatch. This is fine for current scope, but the config name implies pluggable policy behavior that does not exist yet.
+Resolved: `SchedulerConfig` no longer exposes a policy selector until a real scheduling policy dispatch exists.
 
 Suggested direction:
 
