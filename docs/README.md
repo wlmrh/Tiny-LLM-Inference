@@ -4,7 +4,7 @@ This directory contains the current English documentation for the Tiny-LLM-Infer
 
 ## Core Documents
 
-- [Architecture](Architecture.md): end-to-end runtime architecture, ownership boundaries, execution flow, data flow, and build layout.
+- [Architecture](Architecture.md): end-to-end runtime architecture, ownership boundaries, rendered D2 architecture map, execution flow, data flow, and build layout.
 - [Design Review Notes](Design_Review_Notes.md): implementation issues, redundant fields, and cleanup candidates found while documenting the current code.
 
 ## Module Documents

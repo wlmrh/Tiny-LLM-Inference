@@ -12,6 +12,14 @@ The codebase is intentionally layered:
 - `Model` implementations are reusable `torch::nn::Module` graphs. The current production model path is `LlamaForCausalLM`, which also supports Qwen2-family checkpoint shapes used by Qwen2.5-1.5B-Instruct.
 - `operators` provide CPU/CUDA tensor kernels and torch-backed fallback paths.
 
+## Project Architecture Map
+
+The main class relationships are maintained in [architecture.d2](architecture.d2) and rendered to [architecture.svg](architecture.svg). Regenerate the image after editing the source with `d2 docs/architecture.d2 docs/architecture.svg`.
+
+![Tiny-LLM-Inference architecture](architecture.svg)
+
+This diagram intentionally shows only the major classes and separates ownership from non-owning runtime references. Tiny-LLM-Inference is a single-process offline runtime: `LLMEngine` owns text/token I/O, `EngineCore` owns the scheduling/execution loop, `Scheduler` owns request state and owns or binds the runtime `KVCache`, and `ModelRunner` bridges scheduled token work into the `Model` interface. In the default HuggingFace path, that model is a constructed `LlamaForCausalLM`; in compatibility paths, `ModelRunner` may reference a prebuilt `Model`.
+
 ## Runtime Flow
 
 The high-level call path is:
