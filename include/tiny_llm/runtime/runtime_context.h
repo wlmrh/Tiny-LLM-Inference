@@ -4,7 +4,7 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/operators/paged_attention.h"
-#include "tiny_llm/runtime/scheduler.h"
+#include "tiny_llm/runtime/runtime_stats.h"
 
 namespace tiny_llm {
 

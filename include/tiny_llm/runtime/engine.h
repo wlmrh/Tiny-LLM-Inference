@@ -7,6 +7,7 @@
 
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/processors.h"
+#include "tiny_llm/runtime/runtime_stats.h"
 
 namespace tiny_llm {
 

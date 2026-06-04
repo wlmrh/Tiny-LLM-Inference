@@ -2,6 +2,7 @@
 
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/model_runner.h"
+#include "tiny_llm/runtime/scheduler.h"
 
 #include <stdexcept>
 #include <utility>
@@ -71,8 +72,8 @@ std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> EngineCore::step()
     last_step_profile_ = model_output.profiling;
 
     std::map<int, EngineCoreOutput> scheduler_outputs = scheduler_->update_from_output(
-        std::move(scheduler_output),
-        std::move(model_output));
+        scheduler_output,
+        model_output);
     std::unordered_map<int, EngineCoreOutput> engine_core_outputs;
     engine_core_outputs.reserve(scheduler_outputs.size());
     for (auto& item : scheduler_outputs)

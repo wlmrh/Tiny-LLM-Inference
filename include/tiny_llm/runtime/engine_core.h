@@ -6,11 +6,12 @@
 #include <unordered_map>
 
 #include "tiny_llm/runtime/processors.h"
-#include "tiny_llm/runtime/scheduler.h"
+#include "tiny_llm/runtime/runtime_stats.h"
 
 namespace tiny_llm {
 
 class ModelRunner;
+class Scheduler;
 struct EngineArgs;
 
 /**

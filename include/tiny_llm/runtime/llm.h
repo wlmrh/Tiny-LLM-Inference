@@ -9,6 +9,7 @@
 
 #include "tiny_llm/runtime/parallel_config.h"
 #include "tiny_llm/runtime/processors.h"
+#include "tiny_llm/runtime/runtime_stats.h"
 #include "tiny_llm/runtime/scheduler.h"
 
 namespace tiny_llm {
