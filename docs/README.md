@@ -10,6 +10,7 @@ This directory contains the current English documentation for the Tiny-LLM-Infer
 ## Module Documents
 
 - [Runtime API](modules/Runtime_API.md): `LLM`, `LLMEngine`, request ingestion, streaming outputs, and offline usage.
+- [LLM](modules/LLM.md): high-level offline facade positioning, construction options, public methods, outputs, and owned resources.
 - [Engine Core](modules/Engine_Core.md): token-level orchestration between scheduling, model execution, and scheduler state updates.
 - [Scheduler](modules/Scheduler.md): request queues, prefill/decode scheduling, KV block allocation, preemption, and outputs.
 - [Request State](modules/Request_State.md): request lifecycle, token accounting, status transitions, and output state.

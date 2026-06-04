@@ -120,14 +120,13 @@ std::string InputPreprocessor::apply_chat_template(const std::string& text) cons
 SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingParams& user_params) const
 {
     SamplingParams params;
-    params.temperature = user_params.temperature;
-    params.top_p = user_params.top_p;
-    params.top_k = user_params.top_k;
-    params.repetition_penalty = user_params.repetition_penalty;
-    params.seed = user_params.seed;
+    static_cast<SamplingParamsCommon&>(params) =
+        static_cast<const SamplingParamsCommon&>(user_params);
+    if (user_params.max_tokens < 0)
+    {
+        throw std::runtime_error("InputPreprocessor::normalize_sampling_params: max_tokens must be >= 0.");
+    }
     params.max_tokens = user_params.max_tokens > 0 ? user_params.max_tokens : default_max_tokens_;
-    params.ignore_eos = user_params.ignore_eos;
-    params.stop_token_ids = user_params.stop_token_ids;
 
     const int32_t eos_token = tokenizer_->eos_id();
     if (!params.ignore_eos

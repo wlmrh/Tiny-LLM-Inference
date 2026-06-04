@@ -12,19 +12,19 @@ The sampling module implements greedy token selection and seeded non-greedy samp
 
 ## Sampling Parameters
 
-`UserSamplingParams` is the user-facing structure.
+`SamplingParamsCommon` stores fields shared by user-facing and normalized engine parameters. `UserSamplingParams` is the user-facing structure and `SamplingParams` is the normalized engine structure.
 
-Attributes:
+Shared attributes:
 
 - `temperature`
 - `top_p`
 - `top_k`
 - `repetition_penalty`
 - `seed`
-- `max_tokens`
+- `ignore_eos`
 - `stop_token_ids`
 
-`SamplingParams` is the normalized engine structure with the same fields.
+`UserSamplingParams::max_tokens` uses `0` as the default sentinel, which means "use the runtime default". Negative values are invalid. `SamplingParams::max_tokens` is always a positive normalized value after input preprocessing.
 
 Current execution behavior:
 
@@ -34,6 +34,8 @@ Current execution behavior:
 - `repetition_penalty` affects logits before filtering.
 - `max_tokens` affects scheduler/frontend stopping.
 - `stop_token_ids` affect scheduler/frontend stopping.
+
+Prefer default construction plus field assignment for public sampling params instead of positional aggregate initialization.
 
 ## Interfaces
 

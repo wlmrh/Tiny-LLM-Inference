@@ -54,15 +54,10 @@ struct CompletionOutput {
     std::string finish_reason;
 };
 
-struct CompletionStreamOutput {
+struct CompletionStreamOutput : public CompletionOutput {
     size_t prompt_index = 0;
-    std::string prompt;
     std::string delta_text;
-    std::string text;
-    std::vector<int32_t> token_ids;
     int32_t token_id = -1;
-    bool finished = false;
-    std::string finish_reason;
 };
 
 using CompletionStreamCallback = std::function<void(const CompletionStreamOutput&)>;
@@ -83,15 +78,15 @@ public:
     LLM& operator=(const LLM&) = delete;
 
     std::vector<CompletionOutput> generate(const std::vector<std::string>& prompts,
-                                           const UserSamplingParams& sampling_params = UserSamplingParams{});
+                                           const LLMSamplingParams& sampling_params = LLMSamplingParams{});
     CompletionOutput generate(const std::string& prompt,
-                              const UserSamplingParams& sampling_params = UserSamplingParams{});
+                              const LLMSamplingParams& sampling_params = LLMSamplingParams{});
 
     std::vector<CompletionOutput> generate_stream(const std::vector<std::string>& prompts,
-                                                  const UserSamplingParams& sampling_params,
+                                                  const LLMSamplingParams& sampling_params,
                                                   CompletionStreamCallback callback);
     CompletionOutput generate_stream(const std::string& prompt,
-                                     const UserSamplingParams& sampling_params,
+                                     const LLMSamplingParams& sampling_params,
                                      CompletionStreamCallback callback);
 
     const RuntimeProfilingStats& last_generation_profile() const { return last_generation_profile_; }
@@ -105,7 +100,6 @@ private:
     std::unique_ptr<StackAllocator> workspace_;
     std::unique_ptr<LLMEngine> engine_;
     void* kv_pool_ = nullptr;
-    uint64_t next_generation_id_ = 1;
     RuntimeProfilingStats last_generation_profile_;
 };
 

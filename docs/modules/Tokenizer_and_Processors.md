@@ -120,4 +120,4 @@ Internal behavior:
 - `finish_reason`
 - `error_message`
 
-`LLM` converts this into `CompletionOutput` and `CompletionStreamOutput`.
+`LLM` converts this into `CompletionOutput` and `CompletionStreamOutput`. `CompletionStreamOutput` extends the final output shape with stream-only fields such as `prompt_index`, `delta_text`, and latest `token_id`.

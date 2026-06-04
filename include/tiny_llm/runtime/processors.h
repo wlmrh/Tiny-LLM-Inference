@@ -15,31 +15,32 @@ struct EngineArgs;
 struct Request;
 
 /**
- * @brief User-facing sampling configuration.
+ * @brief Sampling fields shared by user-facing and normalized engine parameters.
  */
-struct UserSamplingParams {
+struct SamplingParamsCommon {
     float temperature = 0.0f;
     float top_p = 1.0f;
     int32_t top_k = 0;
     float repetition_penalty = 1.0f;
     uint64_t seed = 0;
-    int32_t max_tokens = 32;
     bool ignore_eos = false;
     std::vector<int32_t> stop_token_ids;
 };
 
 /**
+ * @brief User-facing sampling configuration.
+ *
+ * A max_tokens value of 0 means the runtime default should be used.
+ */
+struct UserSamplingParams : public SamplingParamsCommon {
+    int32_t max_tokens = 0;
+};
+
+/**
  * @brief Engine-ready normalized sampling configuration.
  */
-struct SamplingParams {
-    float temperature = 0.0f;
-    float top_p = 1.0f;
-    int32_t top_k = 0;
-    float repetition_penalty = 1.0f;
-    uint64_t seed = 0;
+struct SamplingParams : public SamplingParamsCommon {
     int32_t max_tokens = 32;
-    bool ignore_eos = false;
-    std::vector<int32_t> stop_token_ids;
 };
 
 /**

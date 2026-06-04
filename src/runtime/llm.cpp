@@ -200,10 +200,10 @@ LLM::LLM(LLM&& other) noexcept
       workspace_(std::move(other.workspace_)),
       engine_(std::move(other.engine_)),
       kv_pool_(other.kv_pool_),
-      next_generation_id_(other.next_generation_id_)
+      last_generation_profile_(other.last_generation_profile_)
 {
     other.kv_pool_ = nullptr;
-    other.next_generation_id_ = 1;
+    other.last_generation_profile_ = RuntimeProfilingStats{};
 }
 
 LLM& LLM::operator=(LLM&& other) noexcept
@@ -220,9 +220,9 @@ LLM& LLM::operator=(LLM&& other) noexcept
         workspace_ = std::move(other.workspace_);
         engine_ = std::move(other.engine_);
         kv_pool_ = other.kv_pool_;
-        next_generation_id_ = other.next_generation_id_;
+        last_generation_profile_ = other.last_generation_profile_;
         other.kv_pool_ = nullptr;
-        other.next_generation_id_ = 1;
+        other.last_generation_profile_ = RuntimeProfilingStats{};
     }
     return *this;
 }
@@ -332,19 +332,19 @@ void LLM::release_kv_pool() noexcept
 }
 
 std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prompts,
-                                            const UserSamplingParams& sampling_params)
+                                            const LLMSamplingParams& sampling_params)
 {
     return generate_stream(prompts, sampling_params, CompletionStreamCallback{});
 }
 
-CompletionOutput LLM::generate(const std::string& prompt, const UserSamplingParams& sampling_params)
+CompletionOutput LLM::generate(const std::string& prompt, const LLMSamplingParams& sampling_params)
 {
     std::vector<CompletionOutput> outputs = generate(std::vector<std::string>{prompt}, sampling_params);
     return outputs.empty() ? CompletionOutput{} : std::move(outputs.front());
 }
 
 std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string>& prompts,
-                                                   const UserSamplingParams& sampling_params,
+                                                   const LLMSamplingParams& sampling_params,
                                                    CompletionStreamCallback callback)
 {
     if (engine_ == nullptr)
@@ -359,14 +359,12 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
     last_generation_profile_ = RuntimeProfilingStats{};
 
     std::vector<CompletionOutput> results(prompts.size());
-    std::unordered_map<std::string, size_t> request_to_index;
+    std::unordered_map<uint64_t, size_t> request_to_index;
     request_to_index.reserve(prompts.size());
 
-    const uint64_t generation_id = next_generation_id_++;
     for (size_t i = 0; i < prompts.size(); ++i)
     {
-        const std::string request_id = "offline-" + std::to_string(generation_id) + "-" + std::to_string(i);
-        engine_->add_request(prompts[i], sampling_params, request_id);
+        const uint64_t request_id = engine_->add_request(prompts[i], sampling_params);
         results[i].prompt = prompts[i];
         request_to_index.emplace(request_id, i);
     }
@@ -377,7 +375,7 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
         last_generation_profile_.add(engine_->last_step_profile());
         for (const UserOutput& output : step_outputs)
         {
-            auto it = request_to_index.find(output.external_id);
+            auto it = request_to_index.find(output.internal_id);
             if (it == request_to_index.end())
             {
                 continue;
@@ -398,14 +396,10 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
             if (callback)
             {
                 CompletionStreamOutput stream_output;
+                static_cast<CompletionOutput&>(stream_output) = result;
                 stream_output.prompt_index = prompt_index;
-                stream_output.prompt = result.prompt;
                 stream_output.delta_text = output.delta_text;
-                stream_output.text = result.text;
-                stream_output.token_ids = result.token_ids;
                 stream_output.token_id = result.token_ids.empty() ? -1 : result.token_ids.back();
-                stream_output.finished = result.finished;
-                stream_output.finish_reason = result.finish_reason;
                 callback(stream_output);
             }
         }
@@ -415,7 +409,7 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
 }
 
 CompletionOutput LLM::generate_stream(const std::string& prompt,
-                                      const UserSamplingParams& sampling_params,
+                                      const LLMSamplingParams& sampling_params,
                                       CompletionStreamCallback callback)
 {
     std::vector<CompletionOutput> outputs =
