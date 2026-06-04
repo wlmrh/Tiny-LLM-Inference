@@ -42,7 +42,7 @@
 5. Call `Scheduler::update_from_output(...)`.
 6. Convert ordered `std::map<int, EngineCoreOutput>` into `std::unordered_map<int, EngineCoreOutput>`.
 
-The boolean return value is true when the scheduler had at least one scheduled token in this step. This is used by `LLMEngine` to verify the cleanup step does not unexpectedly run more work.
+The boolean return value is true when the scheduler had at least one scheduled token in this step. Callers can use it to distinguish a no-op step from chunked prefill work that has not emitted user-visible tokens yet.
 
 ## Request Conversion
 

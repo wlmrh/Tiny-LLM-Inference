@@ -8,7 +8,6 @@
 
 namespace tiny_llm {
 
-class Model;
 class Tokenizer;
 class TokenizerRegistry;
 struct EngineArgs;
@@ -116,7 +115,6 @@ private:
     void validate_sampling_params(const SamplingParams& sampling_params) const;
 
     Tokenizer* tokenizer_ = nullptr;
-    const Model* model_ = nullptr;
     int32_t default_max_tokens_ = 32;
     mutable uint64_t next_internal_id_ = 1;
     mutable std::unordered_map<std::string, uint64_t> external_to_internal_id_;

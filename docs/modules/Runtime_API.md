@@ -10,7 +10,7 @@ The runtime API module is the user-facing layer for offline generation. It hides
 - `src/runtime/engine.cpp`
 - `include/tiny_llm/runtime/engine_args.h`
 
-Class-level details for the high-level facade are maintained in [LLM](LLM.md).
+Class-level details for the high-level facade are maintained in [LLM](LLM.md), and the text-level engine frontend is documented in [LLMEngine](LLMEngine.md).
 
 ## Responsibilities
 
@@ -73,23 +73,22 @@ Construction behavior:
 
 ## `LLMEngine`
 
-`LLMEngine` is the string/token bridge over `EngineCore`.
+`LLMEngine` is the string/token bridge over `EngineCore`. Class-level details are maintained in [LLMEngine](LLMEngine.md).
 
 Important attributes:
 
 - `core_`: owned `EngineCore`.
-- `input_preprocessor_`: prompt tokenization, request ID assignment, and sampling normalization.
+- `input_preprocessor_`: prompt tokenization, request ID assignment, external-ID tracking, and sampling normalization.
 - `output_preprocessor_`: incremental decoding, output state, and finish detection.
-- `last_step_profile_`: profiling for the last engine step.
 
 Main interfaces:
 
 - `add_request(prompt, user_params, ext_request_id)`: tokenizes and validates a prompt, adds it to core runtime, and registers output state.
 - `has_unfinished_requests()`: checks frontend output state.
 - `step()`: advances the runtime once and returns user-facing outputs.
-- `last_step_profile()`: returns the most recent step profile.
+- `last_step_profile()`: returns the most recent profile from `EngineCore`.
 
-`LLMEngine::step()` triggers one extra core step after the frontend observes all requests as finished. That cleanup step lets the scheduler release finished scheduler/KV state and must not produce user outputs.
+Finished scheduler/KV state is released during `Scheduler::update_from_output()`. `LLMEngine::step()` does not run a hidden cleanup step after final user output.
 
 ## `EngineArgs`
 
