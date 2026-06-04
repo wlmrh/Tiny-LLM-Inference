@@ -14,44 +14,114 @@ option(TINYLLM_ENABLE_CUDA "Enable CUDA backend" OFF)
 # -------- 第一步：寻找 PyTorch --------
 find_package(Python3 COMPONENTS Interpreter QUIET)
 
+function(tinyllm_torch_prefix_from_cmake_path cmake_path out_var)
+    set(_torch_prefix "")
+    if (cmake_path AND EXISTS "${cmake_path}/TorchConfig.cmake")
+        get_filename_component(_torch_prefix "${cmake_path}/../../.." ABSOLUTE)
+    elseif (cmake_path AND EXISTS "${cmake_path}/Torch/TorchConfig.cmake")
+        get_filename_component(_torch_prefix "${cmake_path}/../.." ABSOLUTE)
+    elseif (cmake_path AND EXISTS "${cmake_path}/share/cmake/Torch/TorchConfig.cmake")
+        get_filename_component(_torch_prefix "${cmake_path}" ABSOLUTE)
+    endif()
+    set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+endfunction()
+
+function(tinyllm_torch_prefix_from_torch_dir out_var)
+    set(_torch_prefix "")
+    if (Torch_DIR AND EXISTS "${Torch_DIR}/TorchConfig.cmake")
+        tinyllm_torch_prefix_from_cmake_path("${Torch_DIR}" _torch_prefix)
+    endif()
+    set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+endfunction()
+
+function(tinyllm_torch_prefix_from_cmake_prefix_path out_var)
+    set(_torch_prefix "")
+    foreach(_cmake_prefix IN LISTS CMAKE_PREFIX_PATH)
+        tinyllm_torch_prefix_from_cmake_path("${_cmake_prefix}" _candidate_prefix)
+        if (_candidate_prefix)
+            set(_torch_prefix "${_candidate_prefix}")
+            break()
+        endif()
+    endforeach()
+    set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+endfunction()
+
+function(tinyllm_python_torch_prefix out_var)
+    set(_torch_prefix "")
+    if (Python3_Interpreter_FOUND)
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" -c "import torch, sys; sys.stdout.write(torch.utils.cmake_prefix_path)"
+            RESULT_VARIABLE _torch_prefix_result
+            OUTPUT_VARIABLE _torch_cmake_prefix
+            ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if (_torch_prefix_result EQUAL 0 AND _torch_cmake_prefix)
+            tinyllm_torch_prefix_from_cmake_path("${_torch_cmake_prefix}" _torch_prefix)
+        endif()
+    endif()
+    set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+endfunction()
+
 macro(tinyllm_clear_torch_package_cache)
     foreach(_torch_cache_var IN ITEMS
         TORCH_LIBRARY
+        TORCH_CPU_LIBRARY
+        TORCH_CUDA_LIBRARY
         c10_LIBRARY
+        C10_LIBRARY
+        C10_CUDA_LIBRARY
         kineto_LIBRARY
         Caffe2_DIR
+        CAFFE2_NVRTC_LIBRARY
     )
         unset(${_torch_cache_var})
         unset(${_torch_cache_var} CACHE)
     endforeach()
+    unset(Torch_FOUND)
 endmacro()
 
-function(tinyllm_get_torch_candidate_prefix out_var)
-    if (Torch_DIR AND EXISTS "${Torch_DIR}/TorchConfig.cmake")
-        get_filename_component(_torch_prefix "${Torch_DIR}/../../.." ABSOLUTE)
-        set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+function(tinyllm_prepare_torch_cuda_compiler torch_prefix)
+    if (CMAKE_CUDA_COMPILER)
         return()
     endif()
 
-    foreach(_cmake_prefix IN LISTS CMAKE_PREFIX_PATH)
-        if (EXISTS "${_cmake_prefix}/Torch/TorchConfig.cmake")
-            get_filename_component(_torch_prefix "${_cmake_prefix}/../.." ABSOLUTE)
-            set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
-            return()
-        elseif (EXISTS "${_cmake_prefix}/share/cmake/Torch/TorchConfig.cmake")
-            get_filename_component(_torch_prefix "${_cmake_prefix}" ABSOLUTE)
-            set(${out_var} "${_torch_prefix}" PARENT_SCOPE)
+    set(_nvcc_candidates "")
+    if (DEFINED ENV{CUDACXX})
+        list(APPEND _nvcc_candidates "$ENV{CUDACXX}")
+    endif()
+    foreach(_cuda_root IN ITEMS
+        "${CUDAToolkit_ROOT}"
+        "$ENV{CUDAToolkit_ROOT}"
+        "$ENV{CUDA_HOME}"
+        "$ENV{CUDA_PATH}"
+        "/usr/local/cuda")
+        if (_cuda_root)
+            list(APPEND _nvcc_candidates "${_cuda_root}/bin/nvcc")
+        endif()
+    endforeach()
+
+    foreach(_nvcc IN LISTS _nvcc_candidates)
+        if (_nvcc AND EXISTS "${_nvcc}")
+            set(CMAKE_CUDA_COMPILER "${_nvcc}" CACHE FILEPATH "CUDA compiler used when a CUDA-enabled Torch package configures Caffe2." FORCE)
             return()
         endif()
     endforeach()
 
-    set(${out_var} "" PARENT_SCOPE)
+    if (torch_prefix AND EXISTS "${torch_prefix}/lib/libtorch_cuda.so")
+        message(FATAL_ERROR
+            "The Torch package at ${torch_prefix} includes CUDA libraries, so its CMake package may need a CUDA compiler even when TINYLLM_ENABLE_CUDA=OFF. "
+            "Set CUDACXX or CMAKE_CUDA_COMPILER to nvcc, install CUDA toolkit, or use a CPU-only libtorch package.")
+    endif()
 endfunction()
 
-function(tinyllm_prepare_missing_torch_optional_libraries)
-    tinyllm_get_torch_candidate_prefix(_torch_prefix)
+function(tinyllm_prepare_missing_torch_optional_libraries torch_prefix)
+    if (NOT torch_prefix)
+        return()
+    endif()
 
-    if (NOT _torch_prefix OR EXISTS "${_torch_prefix}/lib/libkineto.a")
+    get_filename_component(_torch_prefix "${torch_prefix}" ABSOLUTE)
+    if (EXISTS "${_torch_prefix}/lib/libkineto.a")
         return()
     endif()
 
@@ -81,51 +151,100 @@ function(tinyllm_prepare_missing_torch_optional_libraries)
     endif()
 endfunction()
 
-macro(tinyllm_find_torch)
-    tinyllm_clear_torch_package_cache()
-    tinyllm_prepare_missing_torch_optional_libraries()
-    find_package(Torch QUIET)
-endmacro()
+function(tinyllm_check_torch_prefix_consistency torch_prefix)
+    get_filename_component(_torch_prefix "${torch_prefix}" ABSOLUTE)
+    set(_mismatches "")
+    foreach(_torch_path_var IN ITEMS
+        Torch_DIR
+        Caffe2_DIR
+        TORCH_LIBRARY
+        c10_LIBRARY
+        C10_CUDA_LIBRARY)
+        if (DEFINED ${_torch_path_var} AND ${_torch_path_var})
+            set(_torch_path_value "${${_torch_path_var}}")
+            if (_torch_path_value MATCHES "-NOTFOUND$")
+                continue()
+            endif()
+            get_filename_component(_torch_path_abs "${_torch_path_value}" ABSOLUTE)
+            string(FIND "${_torch_path_abs}" "${_torch_prefix}/" _prefix_pos)
+            if (NOT _prefix_pos EQUAL 0 AND NOT _torch_path_abs STREQUAL "${_torch_prefix}")
+                list(APPEND _mismatches "${_torch_path_var}=${_torch_path_value}")
+            endif()
+        endif()
+    endforeach()
 
-tinyllm_find_torch()
-if (NOT Torch_FOUND)
-    # 尝试从 Python 虚拟环境提取 Torch CMake 路径
-    if (Python3_Interpreter_FOUND)
-        execute_process(
-            COMMAND "${Python3_EXECUTABLE}" -c "import torch, sys; sys.stdout.write(torch.utils.cmake_prefix_path)"
-            RESULT_VARIABLE _torch_prefix_result
-            OUTPUT_VARIABLE _torch_cmake_prefix
-            ERROR_QUIET
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        if (_torch_prefix_result EQUAL 0 AND _torch_cmake_prefix)
-            list(PREPEND CMAKE_PREFIX_PATH "${_torch_cmake_prefix}")
-            tinyllm_find_torch()
+    if (_mismatches)
+        string(REPLACE ";" "\n  " _mismatch_text "${_mismatches}")
+        message(FATAL_ERROR
+            "Torch dependency pollution detected. Canonical Torch prefix is ${_torch_prefix}, but these cached paths point elsewhere:\n  ${_mismatch_text}\n"
+            "Reconfigure with a single -DTorch_DIR=<torch-prefix>/share/cmake/Torch, or remove stale CMakeCache.txt/CMakeFiles entries.")
+    endif()
+endfunction()
+
+macro(tinyllm_find_torch_at_prefix torch_prefix)
+    if (NOT "${torch_prefix}" STREQUAL "")
+        get_filename_component(_tinyllm_torch_prefix "${torch_prefix}" ABSOLUTE)
+        set(TINYLLM_TORCH_PREFIX "${_tinyllm_torch_prefix}" CACHE PATH "Canonical Torch installation prefix used by TinyLLM." FORCE)
+        tinyllm_clear_torch_package_cache()
+        set(Torch_DIR "${TINYLLM_TORCH_PREFIX}/share/cmake/Torch" CACHE PATH "Torch CMake package directory." FORCE)
+        set(Caffe2_DIR "${TINYLLM_TORCH_PREFIX}/share/cmake/Caffe2" CACHE PATH "Caffe2 CMake package directory matching Torch_DIR." FORCE)
+        tinyllm_prepare_missing_torch_optional_libraries("${TINYLLM_TORCH_PREFIX}")
+        tinyllm_prepare_torch_cuda_compiler("${TINYLLM_TORCH_PREFIX}")
+        find_package(Torch QUIET CONFIG)
+        if (Torch_FOUND)
+            tinyllm_check_torch_prefix_consistency("${TINYLLM_TORCH_PREFIX}")
+            message(STATUS "Using Torch from ${TINYLLM_TORCH_PREFIX}")
         endif()
     endif()
-endif()
+endmacro()
 
-# 备用方案：在 HOME 目录寻找
-if (NOT Torch_FOUND AND DEFINED ENV{HOME})
-    set(_torch_home "$ENV{HOME}")
-    set(_torch_home_default "${_torch_home}/libtorch")
-    if (EXISTS "${_torch_home_default}/share/cmake/Torch/TorchConfig.cmake")
-        list(PREPEND CMAKE_PREFIX_PATH "${_torch_home_default}")
-        tinyllm_find_torch()
+macro(tinyllm_find_torch_from_candidates)
+    set(_tinyllm_torch_candidate "")
+
+    # 1. Respect an explicit Torch_DIR first. This also repairs stale Caffe2/c10 cache entries.
+    tinyllm_torch_prefix_from_torch_dir(_tinyllm_torch_candidate)
+    if (_tinyllm_torch_candidate)
+        tinyllm_find_torch_at_prefix("${_tinyllm_torch_candidate}")
     endif()
+
+    # 2. Then honor explicit CMAKE_PREFIX_PATH entries without permanently appending Python paths to it.
     if (NOT Torch_FOUND)
-        file(GLOB _torch_home_candidates "${_torch_home}/libtorch*")
-        foreach(_torch_candidate IN LISTS _torch_home_candidates)
-            if (EXISTS "${_torch_candidate}/share/cmake/Torch/TorchConfig.cmake")
-                list(PREPEND CMAKE_PREFIX_PATH "${_torch_candidate}")
-                tinyllm_find_torch()
-                if (Torch_FOUND)
-                    break()
-                endif()
-            endif()
-        endforeach()
+        tinyllm_torch_prefix_from_cmake_prefix_path(_tinyllm_torch_candidate)
+        if (_tinyllm_torch_candidate)
+            tinyllm_find_torch_at_prefix("${_tinyllm_torch_candidate}")
+        endif()
     endif()
-endif()
+
+    # 3. Fall back to the active Python torch package.
+    if (NOT Torch_FOUND)
+        tinyllm_python_torch_prefix(_tinyllm_torch_candidate)
+        if (_tinyllm_torch_candidate)
+            tinyllm_find_torch_at_prefix("${_tinyllm_torch_candidate}")
+        endif()
+    endif()
+
+    # 4. Finally search common libtorch installs under HOME.
+    if (NOT Torch_FOUND AND DEFINED ENV{HOME})
+        set(_torch_home "$ENV{HOME}")
+        set(_torch_home_default "${_torch_home}/libtorch")
+        if (EXISTS "${_torch_home_default}/share/cmake/Torch/TorchConfig.cmake")
+            tinyllm_find_torch_at_prefix("${_torch_home_default}")
+        endif()
+        if (NOT Torch_FOUND)
+            file(GLOB _torch_home_candidates "${_torch_home}/libtorch*")
+            foreach(_torch_candidate IN LISTS _torch_home_candidates)
+                if (EXISTS "${_torch_candidate}/share/cmake/Torch/TorchConfig.cmake")
+                    tinyllm_find_torch_at_prefix("${_torch_candidate}")
+                    if (Torch_FOUND)
+                        break()
+                    endif()
+                endif()
+            endforeach()
+        endif()
+    endif()
+endmacro()
+
+tinyllm_find_torch_from_candidates()
 
 if (NOT Torch_FOUND)
     message(FATAL_ERROR "Torch not found. Set Torch_DIR/CMAKE_PREFIX_PATH to libtorch, or install Python torch.")
