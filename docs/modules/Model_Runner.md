@@ -23,23 +23,19 @@
 ## Attributes
 
 - `owned_model_`: model constructed from `EngineArgs` when no prebuilt model is supplied.
-- `owned_hf_loader_`: legacy single-loader ownership slot.
 - `owned_hf_loaders_`: loaders for one or more safetensor shards.
 - `model_`: active model pointer.
 - `kv_`: scheduler-owned KV cache pointer.
 - `kv_block_size_tokens_`: token capacity per KV block.
-- `prepared_req_ids_`: request IDs corresponding to sample rows.
-- `prepared_sampling_params_`: per-sample sampling parameters.
-- `prepared_token_histories_`: per-sample histories used for repetition penalty.
+- `PreparedBatch`: private per-step package containing `PreparedInputs` plus request IDs, sampling parameters, and token histories needed only by `run()`.
 - `debug_step_index_`: index used for optional debug log output.
 
 ## Interfaces
 
 - `ModelRunner(const EngineArgs&, KVCache*)`: runtime constructor used by `EngineCore`.
-- `ModelRunner(Model*, ExecutionContext*, KVCache*)`: test/prebuilt constructor.
 - `vocab_size()`: returns active model vocabulary size.
-- `prepare_inputs(const SchedulerOutput&)`: builds `PreparedInputs`.
-- `run(const SchedulerOutput&)`: prepares inputs, runs model, samples logits, and returns `ModelRunnerOutput`.
+- `prepare_inputs(const SchedulerOutput&)`: builds model-facing `PreparedInputs` without retaining request metadata on the runner.
+- `run(const SchedulerOutput&)`: prepares a private per-step batch, runs model, samples logits, and returns `ModelRunnerOutput`.
 
 ## HF Model Construction
 
@@ -101,17 +97,9 @@ The metadata includes tensor pointers for paged attention and, when valid, a poi
 
 ## Sampling and Output
 
-`run()` calls:
+`run()` calls `prepare_batch()` to keep request IDs, sampling parameters, and token histories local to the current step. The public `prepare_inputs()` API returns only the model-facing tensor package.
 
-```cpp
-sample_greedy_rows(logits,
-                   inputs.sample_row_offsets,
-                   model_->vocab_size(),
-                   &prepared_token_histories_,
-                   &prepared_sampling_params_);
-```
-
-It then maps sampled token IDs back to request IDs through `req_id_to_index`.
+Sampling uses the rows selected by `PreparedInputs::sample_row_offsets`, or dense sample-row indices when a model returns compact logits with one row per sample. `run()` then maps sampled token IDs back to request IDs through `req_id_to_index`.
 
 ## Profiling
 

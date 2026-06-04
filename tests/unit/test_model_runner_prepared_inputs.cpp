@@ -1,5 +1,6 @@
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/models/model.h"
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/model_runner.h"
 #include "tiny_llm/runtime/prepared_inputs.h"
 
@@ -66,6 +67,15 @@ void expect_tensor_values(const tiny_llm::Tensor& tensor, const std::vector<int3
     }
 }
 
+tiny_llm::EngineArgs make_engine_args(tiny_llm::Model* model, tiny_llm::ExecutionContext* exec_ctx)
+{
+    tiny_llm::EngineArgs args;
+    args.model = model;
+    args.ctx = exec_ctx;
+    args.kv_block_size_tokens = 16;
+    return args;
+}
+
 tiny_llm::SchedulerOutput make_valid_output()
 {
     tiny_llm::SchedulerOutput output;
@@ -127,7 +137,8 @@ TEST(ModelRunnerPreparedInputsTest, FlattensSchedulerOutputIntoRuntimeTensors)
 {
     FakeModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
-    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+    tiny_llm::EngineArgs args = make_engine_args(&model, &exec_ctx);
+    tiny_llm::ModelRunner runner(args, nullptr);
 
     tiny_llm::PreparedInputs prepared = runner.prepare_inputs(make_valid_output());
     EXPECT_EQ(prepared.input_ids.numel(), 4);
@@ -150,7 +161,8 @@ TEST(ModelRunnerPreparedInputsTest, PrecomputesFullPrefillSegments)
 {
     FakeModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
-    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+    tiny_llm::EngineArgs args = make_engine_args(&model, &exec_ctx);
+    tiny_llm::ModelRunner runner(args, nullptr);
 
     tiny_llm::PreparedInputs prepared = runner.prepare_inputs(make_full_prefill_output());
     ASSERT_TRUE(prepared.prefill_segments_valid);
@@ -167,7 +179,8 @@ TEST(ModelRunnerPreparedInputsTest, SamplesOnlyFinalRowForEachRequest)
 {
     FakeModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
-    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+    tiny_llm::EngineArgs args = make_engine_args(&model, &exec_ctx);
+    tiny_llm::ModelRunner runner(args, nullptr);
 
     tiny_llm::ModelRunnerOutput output = runner.run(make_valid_output());
     EXPECT_EQ(output.req_ids, std::vector<uint64_t>({7, 9}));
@@ -181,7 +194,8 @@ TEST(ModelRunnerPreparedInputsTest, AcceptsCompactSampleRowLogits)
 {
     CompactLogitsModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
-    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+    tiny_llm::EngineArgs args = make_engine_args(&model, &exec_ctx);
+    tiny_llm::ModelRunner runner(args, nullptr);
 
     tiny_llm::ModelRunnerOutput output = runner.run(make_valid_output());
     EXPECT_EQ(output.req_ids, std::vector<uint64_t>({7, 9}));
@@ -195,7 +209,8 @@ TEST(ModelRunnerPreparedInputsTest, RejectsMalformedSchedulerOutput)
 {
     FakeModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
-    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+    tiny_llm::EngineArgs args = make_engine_args(&model, &exec_ctx);
+    tiny_llm::ModelRunner runner(args, nullptr);
 
     tiny_llm::SchedulerOutput missing_budget = make_valid_output();
     missing_budget.num_scheduled_tokens.erase(7);
@@ -218,7 +233,8 @@ TEST(ModelRunnerPreparedInputsTest, RejectsInvalidTokensDuringRun)
 {
     FakeModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
-    tiny_llm::ModelRunner runner(&model, &exec_ctx, nullptr);
+    tiny_llm::EngineArgs args = make_engine_args(&model, &exec_ctx);
+    tiny_llm::ModelRunner runner(args, nullptr);
 
     tiny_llm::SchedulerOutput output = make_valid_output();
     output.scheduled_reqs[0].new_token_ids[2] = model.vocab_size();

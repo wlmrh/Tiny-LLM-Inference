@@ -386,16 +386,6 @@ void validate_prepared_tensor_pack(const PreparedInputs& inputs,
 
 } // namespace
 
-ModelRunner::ModelRunner(Model* model, ExecutionContext* ctx, KVCache* kv)
-    : model_(model), kv_(kv)
-{
-    if (kv_ != nullptr)
-    {
-        kv_block_size_tokens_ = kv_->block_size_tokens();
-    }
-    set_global_execution_context(ctx);
-}
-
 ModelRunner::ModelRunner(const EngineArgs& args, KVCache* kv)
     : kv_(kv)
 {
@@ -409,7 +399,6 @@ ModelRunner::~ModelRunner()
 
 void ModelRunner::init_from_args(const EngineArgs& args)
 {
-    owned_hf_loader_.reset();
     owned_hf_loaders_.clear();
     args.parallel_config.validate();
 
@@ -478,16 +467,14 @@ int32_t ModelRunner::vocab_size() const
     return model_->vocab_size();
 }
 
-PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
+ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& output)
 {
     validate_handles();
     ExecutionContext& ctx = require_global_execution_context("ModelRunner::prepare_inputs");
     const c10::Device runtime_device = ctx.device();
 
-    PreparedInputs prepared;
-    prepared_req_ids_.clear();
-    prepared_sampling_params_.clear();
-    prepared_token_histories_.clear();
+    PreparedBatch batch;
+    PreparedInputs& prepared = batch.inputs;
 
     const int64_t request_count = static_cast<int64_t>(output.scheduled_reqs.size());
     const int64_t total_tokens = static_cast<int64_t>(std::max(0, output.total_num_scheduled_tokens));
@@ -499,7 +486,7 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
         prepared.seq_indices = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
         prepared.context_lens = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
         prepared.block_tables = make_int32_tensor_from_host({}, {model_->num_layers(), 0, 0}, runtime_device, "ModelRunner::prepare_inputs");
-        return prepared;
+        return batch;
     }
 
     int64_t max_blocks_per_seq = 0;
@@ -555,9 +542,9 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
     int64_t flat_token_index = 0;
     int64_t seq_index = 0;
     prepared.sample_row_offsets.reserve(static_cast<size_t>(request_count));
-    prepared_req_ids_.reserve(static_cast<size_t>(request_count));
-    prepared_sampling_params_.reserve(static_cast<size_t>(request_count));
-    prepared_token_histories_.reserve(static_cast<size_t>(request_count));
+    batch.req_ids.reserve(static_cast<size_t>(request_count));
+    batch.sampling_params.reserve(static_cast<size_t>(request_count));
+    batch.token_histories.reserve(static_cast<size_t>(request_count));
 
     for (const RequestData& req_data : output.scheduled_reqs)
     {
@@ -599,9 +586,9 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
         }
 
         prepared.sample_row_offsets.push_back(static_cast<int32_t>(flat_token_index - 1));
-        prepared_req_ids_.push_back(req_data.req_id);
-        prepared_sampling_params_.push_back(req_data.sampling_params);
-        prepared_token_histories_.push_back(req_data.all_token_ids);
+        batch.req_ids.push_back(req_data.req_id);
+        batch.sampling_params.push_back(req_data.sampling_params);
+        batch.token_histories.push_back(req_data.all_token_ids);
         ++seq_index;
     }
 
@@ -621,7 +608,12 @@ PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
         runtime_device,
         "ModelRunner::prepare_inputs");
     populate_prefill_segments(output, total_tokens, prepared);
-    return prepared;
+    return batch;
+}
+
+PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
+{
+    return prepare_batch(output).inputs;
 }
 
 Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStats* profiling) const
@@ -702,7 +694,8 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
     synchronize_for_profile(runtime_device);
     const auto prepare_start = ProfileClock::now();
-    PreparedInputs inputs = prepare_inputs(scheduler_output);
+    PreparedBatch batch = prepare_batch(scheduler_output);
+    PreparedInputs& inputs = batch.inputs;
     synchronize_for_profile(runtime_device);
     const auto prepare_end = ProfileClock::now();
 
@@ -716,9 +709,9 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     output.profiling.decode_requests = decode_requests;
     output.profiling.max_context_len = max_context_len;
     output.profiling.profiled_steps = (prefill_tokens + decode_tokens) > 0 ? 1 : 0;
-    output.req_ids.reserve(prepared_req_ids_.size());
-    output.sampled_token_ids.reserve(prepared_req_ids_.size());
-    output.req_id_to_index.reserve(prepared_req_ids_.size());
+    output.req_ids.reserve(batch.req_ids.size());
+    output.sampled_token_ids.reserve(batch.req_ids.size());
+    output.req_id_to_index.reserve(batch.req_ids.size());
     if (inputs.input_ids.numel() == 0)
     {
         debug_step_index_ = 0;
@@ -765,7 +758,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         const int64_t num_seqs = block_shape.size() == 3 ? block_shape[1] : 0;
         const int64_t max_blocks_per_seq = block_shape.size() == 3 ? block_shape[2] : 0;
 
-        for (size_t i = 0; i < prepared_req_ids_.size(); ++i)
+        for (size_t i = 0; i < batch.req_ids.size(); ++i)
         {
             const int32_t input_row = inputs.sample_row_offsets[i];
             const int32_t logit_row = logit_sample_rows[i];
@@ -777,7 +770,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
             std::cerr << "{\"event\":\"tinyllm_model_runner_logits\",";
             std::cerr << "\"step\":" << debug_step_index_ << ",";
-            std::cerr << "\"req_id\":" << prepared_req_ids_[i] << ",";
+            std::cerr << "\"req_id\":" << batch.req_ids[i] << ",";
             std::cerr << "\"sample_index\":" << i << ",";
             std::cerr << "\"sample_row\":" << input_row << ",";
             std::cerr << "\"logit_row\":" << logit_row << ",";
@@ -787,7 +780,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
             std::cerr << "\"context_len\":"
                       << ((seq_index >= 0 && seq_index < context_lens_cpu.numel()) ? context_ptr[seq_index] : -1)
                       << ",";
-            std::cerr << "\"repetition_penalty\":" << prepared_sampling_params_[i].repetition_penalty << ",";
+            std::cerr << "\"repetition_penalty\":" << batch.sampling_params[i].repetition_penalty << ",";
             std::cerr << "\"top_tokens\":[";
             for (size_t j = 0; j < top_tokens.size(); ++j)
             {
@@ -804,7 +797,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
             for (size_t j = 0; j < top_tokens.size(); ++j)
             {
                 if (j != 0) std::cerr << ",";
-                std::cerr << (token_in_history(top_tokens[j], prepared_token_histories_[i]) ? "true" : "false");
+                std::cerr << (token_in_history(top_tokens[j], batch.token_histories[i]) ? "true" : "false");
             }
             std::cerr << "],\"layer0_blocks\":[";
             if (seq_index >= 0 && seq_index < num_seqs)
@@ -847,17 +840,17 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         logits,
         logit_sample_rows,
         model_->vocab_size(),
-        &prepared_token_histories_,
-        &prepared_sampling_params_,
-        &prepared_req_ids_);
+        &batch.token_histories,
+        &batch.sampling_params,
+        &batch.req_ids);
     synchronize_for_profile(runtime_device);
     const auto sampling_end = ProfileClock::now();
     output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);
     output.profiling.sampled_tokens = static_cast<int64_t>(inputs.sample_row_offsets.size());
 
-    for (size_t i = 0; i < prepared_req_ids_.size(); ++i)
+    for (size_t i = 0; i < batch.req_ids.size(); ++i)
     {
-        const uint64_t req_id = prepared_req_ids_[i];
+        const uint64_t req_id = batch.req_ids[i];
         const int32_t row = logit_sample_rows[i];
         if (row < 0 || static_cast<size_t>(row) >= sampled_rows.size())
         {
