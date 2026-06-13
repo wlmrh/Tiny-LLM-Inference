@@ -531,7 +531,9 @@ The CPU and CUDA smoke command both generated:
 hello, "I'm sorry, I didn
 ```
 
-## Current Full Baseline Comparison on RTX 3090
+## Historical Pre-Optimization Full Baseline Comparison on RTX 3090
+
+This section is kept only as optimization history. The current canonical full comparison report has been replaced by the RTX 5090 rerun in the Optimization 12 section below.
 
 ### Scope
 
@@ -623,7 +625,7 @@ The Qwen2.5-1.5B baseline above showed that TinyLLM was strong on short interact
 
 The two concrete issues found in code were:
 
-- `LLMOptions.max_num_batched_tokens` was set by the benchmark but did not override the default scheduler prefill budget, so Qwen long prefill still ran in `256`-token chunks.
+- The benchmark batch-token setting did not override the default scheduler prefill budget, so Qwen long prefill still ran in `256`-token chunks.
 - The CUDA paged-attention fast path only covered `rows <= 8` and short context, so Qwen batch decode and most long-prefill rows used the slower atomic fallback.
 
 ### Changes
@@ -631,7 +633,7 @@ The two concrete issues found in code were:
 - Added benchmark controls for `--max-num-batched-tokens` and `--max-num-batched-token-cap`; the benchmark now auto-sets the batch token budget from prompt token count up to a default cap of `4096`.
 - Added runtime profile counters for scheduled requests/tokens, prefill/decode request counts, profiled steps, and max context length.
 - Changed scheduler prefill admission to spread token budget across eligible prefill requests instead of letting the first request consume the entire step.
-- Fixed the `LLMOptions.max_num_batched_tokens` to scheduler-config mapping so the high-level option actually controls default prefill budget.
+- Mapped the benchmark batch-token setting directly to `SchedulerConfig.max_prefill_tokens_per_step`, so the scheduler prefill budget has one runtime source of truth.
 - Expanded the CUDA paged-attention non-atomic path to use `1024` attention threads and cover Qwen contexts up to `1024` tokens without the previous `rows <= 8` gate.
 - Added a full-prefill CUDA SDPA fast path: paged KV is still written into the KV cache, while complete position-0 causal prefill segments use `at::scaled_dot_product_attention`.
 - Bound the SDPA fast path to `ExecutionContext`'s CUDA stream with a `CUDAStreamGuard`, so external streams remain ordered with paged KV writes.
@@ -721,7 +723,7 @@ python3 benchmark/industrial_benchmark.py \
 ### Interpretation
 
 - The main long-prefill issue was a combination of an ineffective prefill budget option and the lack of a full-prefill attention path. After the fix, Qwen long-prefill throughput improved from `0.277x` to `0.745x` of Transformers.
-- Decode-heavy and throughput workloads now exceed Transformers e2e throughput on this RTX 3090 run.
+- In this historical RTX 3090 run, decode-heavy and throughput workloads exceeded Transformers e2e throughput.
 - Remaining prefill gap is mostly first-token latency: TinyLLM is still `887.946ms` vs Transformers `701.360ms` on `long_prefill`. The next target should be reducing prefill metadata checks/copies and replacing the temporary SDPA bridge with a native tiled prefill kernel.
 
 ## Optimization 12: Qwen End-to-End Parity Cleanup
@@ -773,7 +775,7 @@ An address-keyed thread-local cache for full-prefill segment parsing was also re
 
 ### Verification
 
-The following checks passed on the remote RTX 3090 server:
+The implementation checks below were recorded during the original optimization pass. The full comparison report in this section has now been rerun on the remote RTX 5090 server:
 
 | Check | Result |
 | --- | --- |
@@ -795,12 +797,14 @@ Qwen CUDA smoke output:
 
 ### Report
 
-The generated report is:
+The canonical full comparison report has been replaced with the RTX 5090 rerun:
 
 ```text
 benchmark/results_qwen_baseline_compare/qwen25_after_stable_add_sampler_full_20260531_192324.json
 benchmark/results_qwen_baseline_compare/qwen25_after_stable_add_sampler_full_20260531_192324.md
 ```
+
+The rerun keeps the same TinyLLM + Transformers comparison semantics as the earlier RTX 3090 report. The current benchmark wrapper can also select vLLM for `--backend all`, so this command explicitly omits vLLM for an apples-to-apples replacement.
 
 Benchmark command:
 
@@ -812,40 +816,55 @@ python3 benchmark/industrial_benchmark.py \
   --backend all \
   --scenarios all \
   --transformers-scenarios all \
+  --vllm-scenarios none \
   --warmup 1 \
   --repeat 3 \
   --output-dir benchmark/results_qwen_baseline_compare \
   --label qwen25_after_stable_add_sampler_full
 ```
 
+Hardware:
+
+| Field | Value |
+| --- | --- |
+| generated_at | `2026-06-13T22:36:22+08:00` |
+| GPU | `NVIDIA GeForce RTX 5090` |
+| GPU memory | `32607 MiB` |
+| Driver | `580.76.05` |
+| Device | `cuda:0` |
+| warmup/repeat | `1/3` |
+
 ### Results After Optimization
 
 | Scenario | Batch | ISL | OSL | TinyLLM latency ms | Transformers latency ms | TinyLLM e2e tok/s | Transformers e2e tok/s | TinyLLM / Transformers e2e |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `interactive` | `1` | `128` | `64` | `732.568` | `1673.869` | `87.364` | `38.235` | `2.285x` |
-| `chat_serving` | `8` | `128` | `128` | `2307.694` | `3567.818` | `443.733` | `287.010` | `1.546x` |
-| `long_prefill` | `4` | `1024` | `64` | `2377.187` | `2428.604` | `107.690` | `105.410` | `1.022x` |
-| `decode_heavy` | `4` | `256` | `256` | `4358.113` | `7278.441` | `234.964` | `140.689` | `1.670x` |
-| `throughput` | `16` | `128` | `128` | `2951.499` | `3768.359` | `693.885` | `543.473` | `1.277x` |
+| `interactive` | `1` | `128` | `64` | `457.434` | `949.611` | `139.911` | `67.396` | `2.076x` |
+| `chat_serving` | `8` | `128` | `128` | `1520.862` | `1926.638` | `673.302` | `531.496` | `1.267x` |
+| `long_prefill` | `4` | `1024` | `64` | `1673.437` | `1215.402` | `152.979` | `210.630` | `0.726x` |
+| `decode_heavy` | `4` | `256` | `256` | `3206.501` | `3816.267` | `319.351` | `268.325` | `1.190x` |
+| `throughput` | `16` | `128` | `128` | `2063.388` | `1993.302` | `992.543` | `1027.441` | `0.966x` |
 
 | Scenario | TinyLLM TTFT ms | Transformers TTFT ms | TinyLLM decode tok/s | Transformers decode tok/s | Token IDs match |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `interactive` | `36.979` | `34.031` | `90.285` | `38.305` | yes |
-| `chat_serving` | `178.701` | `162.603` | `483.529` | `302.424` | yes |
-| `long_prefill` | `738.732` | `705.515` | `154.127` | `146.502` | yes |
-| `decode_heavy` | `178.566` | `163.396` | `245.241` | `144.053` | yes |
-| `throughput` | `338.175` | `320.367` | `786.120` | `596.115` | yes |
+| `interactive` | `21.875` | `21.418` | `144.642` | `67.874` | yes |
+| `chat_serving` | `68.113` | `60.648` | `699.364` | `544.483` | yes |
+| `long_prefill` | `289.671` | `268.124` | `182.112` | `266.025` | yes |
+| `decode_heavy` | `69.535` | `61.552` | `325.155` | `271.658` | yes |
+| `throughput` | `126.212` | `119.599` | `1048.950` | `1084.483` | yes |
 
-### Improvement Summary
+### 5090 Comparison Summary
 
-| Scenario | Before Opt 11 e2e tok/s | After Opt 11 e2e tok/s | After Opt 12 e2e tok/s | Opt 12 vs Opt 11 |
+| Scenario | TinyLLM / Transformers latency | TinyLLM / Transformers TTFT | TinyLLM / Transformers e2e | TinyLLM / Transformers decode |
 | --- | ---: | ---: | ---: | ---: |
-| `long_prefill` | `30.086` | `80.752` | `107.690` | `1.334x` |
-| `decode_heavy` | `120.222` | `224.318` | `234.964` | `1.047x` |
-| `throughput` | `472.566` | `605.751` | `693.885` | `1.146x` |
+| `interactive` | `0.482` | `1.021` | `2.076x` | `2.131x` |
+| `chat_serving` | `0.789` | `1.123` | `1.267x` | `1.284x` |
+| `long_prefill` | `1.377` | `1.080` | `0.726x` | `0.685x` |
+| `decode_heavy` | `0.840` | `1.130` | `1.190x` | `1.197x` |
+| `throughput` | `1.035` | `1.055` | `0.966x` | `0.967x` |
 
 ### Interpretation
 
-- TinyLLM now exceeds the Transformers baseline in all five Qwen benchmark scenarios on this RTX 3090 run.
-- The largest new win came from avoiding full-row LM-head work during long prefill. Smaller repeated savings came from reducing Torch temporary tensors in linear projections, sampling, and residual add.
-- TTFT remains higher than Transformers in every scenario, so the next major optimization should still be native tiled prefill attention and a lower-overhead model-step path rather than more wrapper-level cleanup.
+- On the RTX 5090 rerun, TinyLLM exceeds Transformers e2e throughput on `interactive`, `chat_serving`, and `decode_heavy`.
+- TinyLLM trails Transformers on `long_prefill` (`0.726x` e2e throughput) and is slightly behind on `throughput` (`0.966x` e2e throughput). These are the remaining performance gaps on this hardware.
+- TTFT is close on `interactive`, but TinyLLM is still higher than Transformers on the other four scenarios, so prefill/setup overhead remains the main optimization target.
+- Token IDs match Transformers in all five benchmark scenarios.
