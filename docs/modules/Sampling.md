@@ -4,7 +4,6 @@ The sampling module implements greedy token selection and seeded non-greedy samp
 
 ## Main Files
 
-- `include/tiny_llm/runtime/sampling.h`
 - `include/tiny_llm/runtime/sampler.h`
 - `src/runtime/sampler.cpp`
 - `include/tiny_llm/runtime/generation_config.h`
@@ -39,8 +38,6 @@ Prefer default construction plus field assignment for public sampling params ins
 
 ## Interfaces
 
-- `sample_argmax(logits, vocab)`: inline CPU pointer argmax helper.
-- `apply_repetition_penalty_to_logit(logit, penalty)`: adjusts one logit using HF repetition penalty semantics.
 - `sample_greedy_rows(logits, sample_rows, vocab_size, token_histories, sampling_params)`: samples selected rows from a logits tensor.
 
 `sample_greedy_rows()` returns a vector with length equal to `logits.size(0)`. Non-sampled rows are `-1`.
@@ -75,7 +72,6 @@ This avoids full-logit CPU transfer for Qwen generation configs that use repetit
 Interfaces:
 
 - `load_generation_config_from_dir(model_dir)`: loads `generation_config.json` when present, otherwise returns defaults.
-- `load_generation_config_file(path)`: parses a specific config file.
 
 The generation tools and benchmarks can use this config to match HuggingFace greedy defaults.
 

@@ -28,16 +28,20 @@ Resolved for completed requests: `OutPreprocessor` removes completed request sta
 
 Resolved: `KVCache::start_sequence()` rejects duplicate sequence IDs, and `BlockAllocator` tracks allocation state to reject invalid or duplicate frees.
 
+### ModelRunner Public Surface and Step Scratch
+
+Resolved: `ModelRunner` no longer exposes input preparation or raw vocabulary lookup. It keeps a narrow token-validation entry point for `EngineCore`, while per-step request IDs, sampling parameters, and token histories are carried by a local prepared batch instead of persistent runner members.
+
 ## Remaining Architecture Constraints
 
 ### Global Execution Context Limits Multi-Engine Safety
 
-`ModelRunner` initializes and resets `g_execution_context`. This couples model execution to process/thread-local global state and makes multiple simultaneous engine instances risky.
+`ModelRunner` initializes and resets an internal process-wide execution context. This keeps operator compatibility but makes multiple simultaneous engine instances risky.
 
 Suggested direction:
 
 - Move all model/operator paths to explicit `ExecutionContext`/`RuntimeContext` passing.
-- Keep `g_execution_context` only as a compatibility fallback until removed.
+- Keep the internal global execution context only as a compatibility fallback until removed.
 
 ### Legacy Thread-Local Paged Attention Metadata
 
@@ -46,14 +50,6 @@ Suggested direction:
 Suggested cleanup:
 
 - Remove the thread-local API after tests and helper tools use explicit metadata.
-
-### Scheduler Policy Placeholder Removed
-
-Resolved: `SchedulerConfig` no longer exposes a policy selector until a real scheduling policy dispatch exists.
-
-Suggested direction:
-
-- Keep the enum as a future extension point but avoid documenting non-existent policy behavior.
 
 ### Model Buffers Are Max-Batch Preallocated
 

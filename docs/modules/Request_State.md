@@ -5,7 +5,6 @@ The request-state module defines the lifecycle and token accounting used by the 
 ## Main Files
 
 - `include/tiny_llm/runtime/request.h`
-- `src/runtime/request.cpp`
 - `include/tiny_llm/runtime/processors.h`
 - `src/runtime/processors.cpp`
 
@@ -16,18 +15,11 @@ The request-state module defines the lifecycle and token accounting used by the 
 Attributes:
 
 - `request_id`: internal numeric request ID.
-- `priority`: reserved for future scheduling policies.
 - `sampling_params`: normalized `SamplingParams`.
 - `status`: `WAITING`, `RUNNING`, or `FINISHED`.
 - `num_computed`: number of tokens whose KV cache has been computed.
 - `prompt_token_ids`: immutable prompt tokens.
 - `_all_token_ids`: full context, initialized to prompt tokens and extended with generated tokens.
-
-Interfaces:
-
-- `reset_generated_tokens()`: resets `_all_token_ids` to the prompt.
-- `generated_tokens()`: returns `_all_token_ids.size() - prompt_token_ids.size()`.
-- `has_valid_token_layout()`: checks that `_all_token_ids` begins with the prompt.
 
 ## Lifecycle
 

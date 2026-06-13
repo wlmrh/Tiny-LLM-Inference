@@ -51,6 +51,7 @@ Attributes:
 
 Interfaces:
 
+- `BlockAllocator(num_blocks, block_size_bytes, memory_pool, ParallelConfig)`: binds an external block pool on an explicit device.
 - `allocate_block()`: returns a block ID or `-1` when exhausted.
 - `free_block(int32_t block_id)`: returns a block to the free list.
 - `get_block_ptr(int32_t block_id)`: maps block ID to raw pointer.
@@ -77,6 +78,8 @@ Attributes:
 
 Interfaces:
 
+- `KVCache(Config, BlockAllocator*)`: binds an existing block allocator.
+- `KVCache(Config, ..., ParallelConfig)`: owns a block allocator over a raw pool on an explicit device.
 - `start_sequence(seq_id)`: initializes per-layer page tables and rejects duplicate active sequence IDs.
 - `end_sequence(seq_id)`: releases all blocks used by a sequence.
 - `ensure_capacity(seq_id, layer_id, token_pos)`: allocates blocks so `token_pos` can be stored.
@@ -96,12 +99,11 @@ Attributes:
 Interfaces:
 
 - `bind(KVCache*)`: binds external cache.
-- `init_owned(...)`: constructs an owned cache from raw pool parameters.
+- `init_owned(..., ParallelConfig)`: constructs an owned cache from raw pool parameters on an explicit device.
 - `start_sequence(core_seq_id)` / `end_sequence(core_seq_id)`: sequence lifecycle.
 - `estimate_append_new_blocks(...)`: estimate blocks needed for one decode append.
 - `estimate_prefill_new_blocks(...)`: estimate blocks needed for a prefill chunk.
 - `allocate_slots(...)`: ensure enough blocks exist for a scheduled token range.
-- `refresh_block_table(...)`: legacy layer-0 block table.
 - `refresh_block_tables(...)`: all-layer block tables used by `ModelRunner`.
 - `free_block_count()`, `num_layers()`, `kv_cache()`: metadata and bound cache access.
 

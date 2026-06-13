@@ -35,7 +35,7 @@ LLM::generate / generate_stream
             -> EngineCore::step
                  -> Scheduler::schedule
                  -> ModelRunner::run
-                      -> ModelRunner::prepare_inputs
+                      -> private input preparation
                       -> Model::forward(PreparedInputs, RuntimeContext)
                       -> sample_greedy_rows
                  -> Scheduler::update_from_output
@@ -72,7 +72,7 @@ The runtime separates request state from model inputs:
 - `EngineCoreOutput` returns per-request token results to the frontend.
 - `UserOutput` returns decoded text deltas and finish metadata to users.
 
-The important tensor package produced by `ModelRunner::prepare_inputs` is:
+The important tensor package produced inside `ModelRunner::run` is:
 
 ```text
 input_ids     [num_total_tokens]                         int32

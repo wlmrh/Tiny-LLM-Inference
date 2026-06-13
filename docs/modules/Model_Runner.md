@@ -11,7 +11,7 @@
 
 ## Responsibilities
 
-- Construct or bind the runtime model.
+- Construct an HF runtime model or bind a prebuilt model from `EngineArgs`.
 - Keep safetensor loaders alive when zero-copy or memory-backed tensor views require them.
 - Convert `SchedulerOutput` into `PreparedInputs`.
 - Build paged-attention runtime metadata.
@@ -27,15 +27,15 @@
 - `model_`: active model pointer.
 - `kv_`: scheduler-owned KV cache pointer.
 - `kv_block_size_tokens_`: token capacity per KV block.
-- `PreparedBatch`: private per-step package containing `PreparedInputs` plus request IDs, sampling parameters, and token histories needed only by `run()`.
 - `debug_step_index_`: index used for optional debug log output.
 
 ## Interfaces
 
-- `ModelRunner(const EngineArgs&, KVCache*)`: runtime constructor used by `EngineCore`.
-- `vocab_size()`: returns active model vocabulary size.
-- `prepare_inputs(const SchedulerOutput&)`: builds model-facing `PreparedInputs` without retaining request metadata on the runner.
-- `run(const SchedulerOutput&)`: prepares a private per-step batch, runs model, samples logits, and returns `ModelRunnerOutput`.
+- `ModelRunner(const EngineArgs&, KVCache*)`: single construction path used by `EngineCore` and tests. Prebuilt models are supplied through `args.model` and `args.ctx`.
+- `validate_token_ids(const std::vector<int32_t>&, const char*)`: validates frontend prompt tokens against the active model vocabulary before scheduling.
+- `run(const SchedulerOutput&)`: prepares inputs, runs model, samples logits, and returns `ModelRunnerOutput`.
+
+Input preparation and model invocation are private implementation steps. Per-step request IDs, sampling parameters, and token histories are carried in a local prepared batch instead of persistent runner members.
 
 ## HF Model Construction
 
@@ -62,14 +62,12 @@ Attributes:
 - `context_lens`: context length per scheduled sequence, shape `[num_seqs]`, int32.
 - `block_tables`: per-layer page tables, shape `[num_layers, num_seqs, max_blocks_per_seq]`, int32.
 - `sample_row_offsets`: final row offset for each scheduled request.
-- `prefill_segments`: optional derived descriptors `{row_start, seq_index, length}` for contiguous full-prefill rows.
-- `prefill_segments_valid`: true only when the current step is entirely full prefill from position zero.
 
 For an empty scheduler step, `PreparedInputs` contains defined zero-length tensors so downstream validation can stay uniform.
 
 ## Flattening Rules
 
-For each scheduled request, `prepare_inputs()`:
+For each scheduled request, the private preparation step:
 
 - validates scheduled token counts and block table layer count;
 - sets `context_len = num_computed_tokens + scheduled_tokens`;
@@ -78,14 +76,13 @@ For each scheduled request, `prepare_inputs()`:
 - computes `position = num_computed_tokens + token_index`;
 - computes `logical_block_index = position / kv_block_size_tokens`;
 - computes `slot = physical_block_id * kv_block_size_tokens + (position % kv_block_size_tokens)`;
-- appends the final token row to `sample_row_offsets`;
-- precomputes full-prefill segments only when all scheduled requests are full prefill chunks with `num_computed_tokens == 0` and the flattened token count is large enough for the CUDA SDPA prefill path.
+- appends the final token row to `sample_row_offsets`.
 
 `sample_row_offsets` is the reason prefill can emit the first generated token from the last prefill row.
 
 ## Runtime Context and Model Invocation
 
-`run_model()` builds `ops::PagedAttentionRuntimeMetadata` from the prepared tensors and then creates:
+The private model invocation step builds `ops::PagedAttentionRuntimeMetadata` from the prepared tensors and then creates:
 
 ```cpp
 RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, detail_profile_enabled);
@@ -93,13 +90,20 @@ RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, detail_profile_enabled
 
 The model receives `PreparedInputs` plus this context. Attention modules read paged metadata from `RuntimeContext::attention_metadata()`.
 
-The metadata includes tensor pointers for paged attention and, when valid, a pointer/count view over `PreparedInputs::prefill_segments`. The segment view is step-local and must not outlive `PreparedInputs`.
-
 ## Sampling and Output
 
-`run()` calls `prepare_batch()` to keep request IDs, sampling parameters, and token histories local to the current step. The public `prepare_inputs()` API returns only the model-facing tensor package.
+`run()` calls:
 
-Sampling uses the rows selected by `PreparedInputs::sample_row_offsets`, or dense sample-row indices when a model returns compact logits with one row per sample. `run()` then maps sampled token IDs back to request IDs through `req_id_to_index`.
+```cpp
+sample_greedy_rows(logits,
+                   logit_sample_rows,
+                   model_->vocab_size(),
+                   &batch.token_histories,
+                   &batch.sampling_params,
+                   &batch.req_ids);
+```
+
+It then maps sampled token IDs back to request IDs through `req_id_to_index`.
 
 ## Profiling
 

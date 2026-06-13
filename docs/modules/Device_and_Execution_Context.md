@@ -11,25 +11,23 @@ This module centralizes CPU/CUDA device selection and per-step execution resourc
 - `include/tiny_llm/runtime/execution_context.h`
 - `src/runtime/execution_context.cpp`
 - `include/tiny_llm/runtime/runtime_context.h`
+- `include/tiny_llm/runtime/profiling_stats.h`
 - `include/tiny_llm/runtime/profiling.h`
 
 ## `ParallelConfig`
 
-`ParallelConfig` is the runtime device and future-parallelism configuration.
+`ParallelConfig` is the runtime device configuration.
 
 Attributes:
 
 - `device_type_`: `kCPU` or `kCUDA`.
 - `device_id_`: CPU must be `0`; CUDA must be non-negative.
-- `tensor_parallel_size_`: currently must be `1`.
-- `pipeline_parallel_size_`: currently must be `1`.
 
 Interfaces:
 
 - `cpu()`
 - `cuda(device_id)`
 - `device_type()`, `device_id()`
-- `tensor_parallel_size()`, `pipeline_parallel_size()`
 - `is_cpu()`, `is_cuda()`
 - `torch_device()`
 - `validate()`
@@ -62,16 +60,14 @@ Interfaces:
 
 ## Runtime Global Execution Context
 
-`include/tiny_llm/runtime/execution_context.h` exposes a global context compatibility layer:
+`include/tiny_llm/runtime/execution_context.h` exposes a small compatibility layer around an internal process-wide context:
 
-- `g_execution_context`
-- `set_global_execution_context(ctx)`
 - `initialize_global_execution_context(args, kv)`
 - `require_global_execution_context(caller)`
 - `resolve_execution_context(fallback_ctx)`
 - `reset_global_execution_context()`
 
-`ModelRunner` uses this global context to access execution resources. New model/operator code should still prefer explicit `RuntimeContext` data where available.
+`ModelRunner` initializes this context to access execution resources. New model/operator code should still prefer explicit `RuntimeContext` data where available.
 
 ## `RuntimeContext`
 
@@ -87,8 +83,6 @@ Attributes:
 Interfaces:
 
 - `execution()`
-- `kv()`
-- `parallel_config()`
 - `device()`
 - `attention_metadata()`
 - `profiling_stats()`

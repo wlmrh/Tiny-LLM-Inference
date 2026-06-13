@@ -9,6 +9,7 @@ The runtime API module is the user-facing layer for offline generation. It hides
 - `include/tiny_llm/runtime/engine.h`
 - `src/runtime/engine.cpp`
 - `include/tiny_llm/runtime/engine_args.h`
+- `include/tiny_llm/runtime/scheduler_config.h`
 
 Class-level details for the high-level facade are maintained in [LLM](LLM.md), and the text-level engine frontend is documented in [LLMEngine](LLMEngine.md).
 
@@ -30,12 +31,11 @@ Key attributes:
 - `parallel_config`: CPU or CUDA device configuration.
 - `weight_file`: requested safetensors weight file, defaulting to `model.safetensors`.
 - `max_num_seqs`: maximum logical active sequence count used to fill scheduler defaults.
-- `max_num_batched_tokens`: default prefill token budget per scheduler step.
 - `max_tokens`: default maximum generated tokens when user params do not override it.
 - `block_size_tokens`: tokens per KV cache block.
 - `kv_num_blocks`: physical KV block count.
 - `workspace_pool_size`: bytes reserved for per-step workspace.
-- `scheduler_config`: low-level scheduler options.
+- `scheduler_config`: low-level scheduler options, including the prefill token budget.
 
 ## `LLM`
 
@@ -99,8 +99,8 @@ Important fields:
 - Prebuilt handles: `model`, `ctx`, `kv`, `tokenizer`.
 - Device: `parallel_config`.
 - Model construction: `model_type`, `hf_model_dir`, `hf_weight_file`, `max_batch_size`.
-- Execution construction: `execution_stream`, `workspace`, `workspace_pool_size`.
+- Execution construction: `execution_stream`, `workspace`.
 - KV construction: `kv_num_layers`, `kv_block_size_tokens`, `kv_num_blocks`, `kv_block_size_bytes`, `kv_memory_pool`.
 - Generation/scheduling: `max_generated_tokens`, `scheduler_config`.
 
-If `model` is null and `model_type` is `kHFLlamaSafeTensor`, `ModelRunner` constructs the model from the HF directory. If `ctx` or `kv` is null, the runtime path constructs/binds the missing pieces from the resource fields.
+If `model` is null and `model_type` is `kHFLlamaSafeTensor`, `ModelRunner` constructs the model from the HF directory. If `ctx` is null, the runtime path creates an `ExecutionContext` over the provided non-owning `workspace`; if `kv` is null, the scheduler constructs/binds KV cache resources from the KV fields.

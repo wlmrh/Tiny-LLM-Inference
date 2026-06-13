@@ -19,21 +19,7 @@ Interfaces:
 - `decode(ids)`: convert token IDs to text.
 - `vocab_size()`: tokenizer/model vocabulary size used for validation.
 - `bos_id()`, `eos_id()`, `unk_id()`: special token IDs.
-- `is_fixed_vocab()`: true when valid token IDs cannot grow dynamically.
 - `is_valid_token_id(id)`: token ID validation.
-
-## `TokenizerRegistry`
-
-`TokenizerRegistry` is a small dependency-injection holder.
-
-Attribute:
-
-- `tokenizer_`: non-owning tokenizer pointer.
-
-Interfaces:
-
-- `mutable_tokenizer()`
-- `tokenizer()`
 
 ## `HFLlamaTokenizer`
 
@@ -66,7 +52,6 @@ Interfaces:
 Attributes:
 
 - `tokenizer_`: non-owning tokenizer pointer.
-- `model_`: currently unused non-owning model pointer slot.
 - `default_max_tokens_`: fallback max generation length.
 - `next_internal_id_`: monotonically increasing internal ID.
 - `external_to_internal_id_`: duplicate external ID guard.
@@ -80,10 +65,9 @@ Internal steps:
 
 1. Assign a new internal ID.
 2. Bind or synthesize an external ID.
-3. Apply chat template. Current implementation is a no-op.
-4. Tokenize the prompt.
-5. Normalize sampling parameters.
-6. Validate prompt tokens and sampling settings.
+3. Tokenize the prompt.
+4. Normalize sampling parameters.
+5. Validate prompt tokens and sampling settings.
 
 Sampling normalization copies user fields and appends tokenizer EOS to `stop_token_ids` when missing.
 
