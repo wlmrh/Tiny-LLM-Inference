@@ -42,10 +42,6 @@ public:
     KVCache(Config cfg,
             size_t num_blocks,
             size_t block_size_bytes,
-            void* gpu_pool);
-    KVCache(Config cfg,
-            size_t num_blocks,
-            size_t block_size_bytes,
             void* memory_pool,
             ParallelConfig parallel_config);
 

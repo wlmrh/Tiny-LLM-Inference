@@ -16,7 +16,7 @@ TEST(KVCacheManagerTest, AllocatesAndRefreshesPerLayerBlockTables)
 {
     std::vector<unsigned char> pool(4 * kBlockBytes);
     tiny_llm::KVCacheManager manager;
-    manager.init_owned(kNumLayers, kBlockSizeTokens, 4, kBlockBytes, pool.data());
+    manager.init_owned(kNumLayers, kBlockSizeTokens, 4, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu());
 
     EXPECT_EQ(manager.free_block_count(), 4u);
     EXPECT_TRUE(manager.allocate_slots(1, false, 0, 3));
@@ -28,17 +28,13 @@ TEST(KVCacheManagerTest, AllocatesAndRefreshesPerLayerBlockTables)
     EXPECT_EQ(block_tables[0].size(), 2u);
     EXPECT_EQ(block_tables[1].size(), 2u);
     EXPECT_NE(block_tables[0][0], block_tables[1][0]);
-
-    std::vector<int32_t> first_layer;
-    manager.refresh_block_table(1, true, first_layer);
-    EXPECT_EQ(first_layer, block_tables[0]);
 }
 
 TEST(KVCacheManagerTest, ReleasesBlocksAndAllowsReuse)
 {
     std::vector<unsigned char> pool(4 * kBlockBytes);
     tiny_llm::KVCacheManager manager;
-    manager.init_owned(kNumLayers, kBlockSizeTokens, 4, kBlockBytes, pool.data());
+    manager.init_owned(kNumLayers, kBlockSizeTokens, 4, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu());
 
     ASSERT_TRUE(manager.allocate_slots(1, false, 0, 3));
     EXPECT_EQ(manager.free_block_count(), 0u);
@@ -52,7 +48,7 @@ TEST(KVCacheManagerTest, ReportsCapacityFailureWithoutLeakingBlocks)
 {
     std::vector<unsigned char> pool(2 * kBlockBytes);
     tiny_llm::KVCacheManager manager;
-    manager.init_owned(kNumLayers, kBlockSizeTokens, 2, kBlockBytes, pool.data());
+    manager.init_owned(kNumLayers, kBlockSizeTokens, 2, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu());
 
     EXPECT_FALSE(manager.allocate_slots(1, false, 0, 3));
     EXPECT_EQ(manager.free_block_count(), 2u);
@@ -64,7 +60,7 @@ TEST(KVCacheManagerTest, EstimatesAdditionalBlocksForPrefillAndDecode)
 {
     std::vector<unsigned char> pool(6 * kBlockBytes);
     tiny_llm::KVCacheManager manager;
-    manager.init_owned(kNumLayers, kBlockSizeTokens, 6, kBlockBytes, pool.data());
+    manager.init_owned(kNumLayers, kBlockSizeTokens, 6, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu());
 
     EXPECT_EQ(manager.estimate_prefill_new_blocks(1, false, 3, 0, 2), 2u);
     ASSERT_TRUE(manager.allocate_slots(1, false, 0, 2));

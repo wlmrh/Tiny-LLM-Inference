@@ -35,7 +35,6 @@ struct LLMOptions {
     std::string weight_file = "model.safetensors";
 
     int32_t max_num_seqs = 16;
-    int32_t max_num_batched_tokens = 256;
     int32_t max_tokens = 32;
 
     int32_t block_size_tokens = 16;

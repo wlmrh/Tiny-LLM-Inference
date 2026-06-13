@@ -5,6 +5,7 @@
 #include <tuple>
 #include <unordered_map>
 
+#include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/runtime_stats.h"
 
@@ -12,14 +13,14 @@ namespace tiny_llm {
 
 class ModelRunner;
 class Scheduler;
-struct EngineArgs;
 
 /**
- * @brief Token-level runtime core: scheduling, model execution and scheduler state update.
+ * @brief Inner runtime core: scheduler, KV binding and model forward.
  */
 class EngineCore {
 public:
     explicit EngineCore(const EngineArgs& args);
+
     ~EngineCore();
 
     void add_request(const EngineCoreRequest& request);

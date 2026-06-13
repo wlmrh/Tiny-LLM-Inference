@@ -19,21 +19,6 @@ KVCache::KVCache(Config cfg, BlockAllocator* blocks)
 KVCache::KVCache(Config cfg,
                  size_t num_blocks,
                  size_t block_size_bytes,
-                 void* memory_pool)
-    : cfg_(cfg),
-      owned_blocks_(std::make_unique<BlockAllocator>(
-          num_blocks,
-          block_size_bytes,
-          memory_pool)),
-      blocks_(owned_blocks_.get()),
-      parallel_config_(blocks_->parallel_config())
-{
-    parallel_config_.validate();
-}
-
-KVCache::KVCache(Config cfg,
-                 size_t num_blocks,
-                 size_t block_size_bytes,
                  void* memory_pool,
                  ParallelConfig parallel_config)
     : cfg_(cfg),

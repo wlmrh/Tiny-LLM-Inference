@@ -1020,7 +1020,7 @@ int main(int argc, char** argv)
         const auto load_start = Clock::now();
         tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
         llm_options.max_tokens = options.max_new_tokens;
-        llm_options.max_num_batched_tokens = options.max_num_batched_tokens;
+        llm_options.scheduler_config.max_prefill_tokens_per_step = options.max_num_batched_tokens;
         llm_options.block_size_tokens = kBlockSizeTokens;
         llm_options.kv_num_blocks = options.kv_num_blocks;
         tiny_llm::LLM llm(llm_options);

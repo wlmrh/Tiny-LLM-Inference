@@ -27,7 +27,6 @@ TEST(SamplerTest, AppliesPositiveRepetitionPenaltyBeforeArgmax)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 2.0f;
 
-    EXPECT_FLOAT_EQ(tiny_llm::apply_repetition_penalty_to_logit(5.0f, 2.0f), 2.5f);
     const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 2);
 }
@@ -42,7 +41,6 @@ TEST(SamplerTest, AppliesNegativeRepetitionPenaltyBeforeArgmax)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 2.0f;
 
-    EXPECT_FLOAT_EQ(tiny_llm::apply_repetition_penalty_to_logit(-0.5f, 2.0f), -1.0f);
     const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 2);
 }
@@ -59,7 +57,6 @@ TEST(SamplerTest, PenalizesPromptHistoryBeforeAnyGeneratedToken)
     EXPECT_EQ(sampled[0], 2);
 }
 
-
 TEST(SamplerTest, AppliesRepetitionRewardBelowOneBeforeArgmax)
 {
     tiny_llm::Tensor logits = torch::tensor(
@@ -70,7 +67,6 @@ TEST(SamplerTest, AppliesRepetitionRewardBelowOneBeforeArgmax)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 0.5f;
 
-    EXPECT_FLOAT_EQ(tiny_llm::apply_repetition_penalty_to_logit(4.0f, 0.5f), 8.0f);
     const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 1);
 }

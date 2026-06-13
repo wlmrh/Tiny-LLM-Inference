@@ -10,24 +10,16 @@
 
 namespace tiny_llm {
 
-ExecutionContext* g_execution_context = nullptr;
-
 namespace {
 
+ExecutionContext* g_execution_context = nullptr;
 std::unique_ptr<ExecutionContext> g_owned_execution_context;
-std::unique_ptr<StackAllocator> g_owned_workspace;
 
 } // namespace
-
-void set_global_execution_context(ExecutionContext* ctx)
-{
-    g_execution_context = ctx;
-}
 
 void initialize_global_execution_context(const EngineArgs& args, KVCache* kv)
 {
     g_owned_execution_context.reset();
-    g_owned_workspace.reset();
     args.parallel_config.validate();
 
     if (args.ctx != nullptr)
@@ -42,14 +34,6 @@ void initialize_global_execution_context(const EngineArgs& args, KVCache* kv)
         throw std::runtime_error(
             "initialize_global_execution_context: workspace device does not match EngineArgs parallel_config.");
     }
-    if (workspace == nullptr && args.workspace_pool_size > 0)
-    {
-        g_owned_workspace = std::make_unique<StackAllocator>(
-            args.workspace_pool_size,
-            args.parallel_config);
-        workspace = g_owned_workspace.get();
-    }
-
     g_owned_execution_context = std::make_unique<ExecutionContext>(
         args.execution_stream,
         workspace,
@@ -80,7 +64,6 @@ void reset_global_execution_context()
 {
     g_execution_context = nullptr;
     g_owned_execution_context.reset();
-    g_owned_workspace.reset();
 }
 
 } // namespace tiny_llm

@@ -23,28 +23,9 @@ public:
     virtual int32_t unk_id() const = 0;
 
     /**
-     * @brief Returns true when tokenizer vocabulary cannot grow at runtime.
-     */
-    virtual bool is_fixed_vocab() const = 0;
-
-    /**
      * @brief Returns true when id is valid for this tokenizer.
      */
     virtual bool is_valid_token_id(int32_t id) const = 0;
-};
-
-/**
- * @brief Lightweight tokenizer holder for dependency injection.
- */
-class TokenizerRegistry {
-public:
-    explicit TokenizerRegistry(Tokenizer* tokenizer);
-
-    Tokenizer* mutable_tokenizer() const { return tokenizer_; }
-    const Tokenizer* tokenizer() const { return tokenizer_; }
-
-private:
-    Tokenizer* tokenizer_ = nullptr;
 };
 
 /**
@@ -67,7 +48,6 @@ public:
     int32_t bos_id() const override;
     int32_t eos_id() const override;
     int32_t unk_id() const override;
-    bool is_fixed_vocab() const override;
     bool is_valid_token_id(int32_t id) const override;
 
 private:

@@ -5,7 +5,7 @@
 #include <string>
 
 #include "tiny_llm/runtime/parallel_config.h"
-#include "tiny_llm/runtime/scheduler.h"
+#include "tiny_llm/runtime/scheduler_config.h"
 #include "utils/cuda_compat.h"
 
 namespace tiny_llm {
@@ -41,7 +41,6 @@ struct EngineArgs {
     // ExecutionContext construction inputs (used when ctx == nullptr).
     cudaStream_t execution_stream = nullptr;
     StackAllocator* workspace = nullptr;
-    size_t workspace_pool_size = 0;
 
     // KV recursive construction inputs.
     int32_t kv_num_layers = 0;

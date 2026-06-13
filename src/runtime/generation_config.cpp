@@ -39,8 +39,6 @@ float read_optional_float(const hf_json::Value& root,
     return static_cast<float>(value->as_number(error_prefix + ": " + key));
 }
 
-} // namespace
-
 GenerationConfig load_generation_config_file(const std::string& path)
 {
     const std::string error_prefix = "load_generation_config_file";
@@ -51,6 +49,8 @@ GenerationConfig load_generation_config_file(const std::string& path)
     config.repetition_penalty = read_optional_float(root, "repetition_penalty", 1.0f, error_prefix);
     return config;
 }
+
+} // namespace
 
 GenerationConfig load_generation_config_from_dir(const std::string& model_dir)
 {

@@ -26,8 +26,6 @@ public:
           profile_detail_enabled_(profile_detail_enabled) {}
 
     ExecutionContext& execution() const { return execution_; }
-    KVCache* kv() const { return execution_.kv(); }
-    const ParallelConfig& parallel_config() const { return execution_.parallel_config(); }
     c10::Device device() const { return execution_.device(); }
 
     const ops::PagedAttentionRuntimeMetadata& attention_metadata() const

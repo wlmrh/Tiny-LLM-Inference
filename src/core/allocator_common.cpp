@@ -19,10 +19,6 @@ size_t dtype_size(DType dtype) {
     return 0;
 }
 
-ParallelConfig default_allocator_parallel_config() {
-    return ParallelConfig::cpu();
-}
-
 }
 
 Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
@@ -36,10 +32,6 @@ Tensor StackAllocator::make_tensor(std::vector<int64_t> shape, DType dtype) {
         throw std::runtime_error("StackAllocator: out of memory");
     }
     return make_tensor_from_blob(ptr, shape, dtype);
-}
-
-BlockAllocator::BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* memory_pool)
-    : BlockAllocator(num_blocks, block_size_bytes, memory_pool, default_allocator_parallel_config()) {
 }
 
 BlockAllocator::BlockAllocator(size_t num_blocks,

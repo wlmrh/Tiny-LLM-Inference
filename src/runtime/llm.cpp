@@ -239,10 +239,6 @@ void LLM::initialize()
     {
         throw std::runtime_error(std::string(kErr) + ": max_num_seqs must be positive.");
     }
-    if (options_.max_num_batched_tokens <= 0)
-    {
-        throw std::runtime_error(std::string(kErr) + ": max_num_batched_tokens must be positive.");
-    }
     if (options_.max_tokens <= 0)
     {
         throw std::runtime_error(std::string(kErr) + ": max_tokens must be positive.");
@@ -275,10 +271,9 @@ void LLM::initialize()
         {
             scheduler_config.max_running_requests = options_.max_num_seqs;
         }
-        if (scheduler_config.max_prefill_tokens_per_step <= 0
-            || scheduler_config.max_prefill_tokens_per_step == SchedulerConfig{}.max_prefill_tokens_per_step)
+        if (scheduler_config.max_prefill_tokens_per_step <= 0)
         {
-            scheduler_config.max_prefill_tokens_per_step = options_.max_num_batched_tokens;
+            throw std::runtime_error(std::string(kErr) + ": scheduler_config.max_prefill_tokens_per_step must be positive.");
         }
 
         EngineArgs args;
@@ -287,9 +282,8 @@ void LLM::initialize()
         args.model_type = EngineModelType::kHFLlamaSafeTensor;
         args.hf_model_dir = options_.model;
         args.hf_weight_file = options_.weight_file;
-        args.max_batch_size = std::max(options_.max_num_seqs, options_.max_num_batched_tokens);
+        args.max_batch_size = std::max(options_.max_num_seqs, scheduler_config.max_prefill_tokens_per_step);
         args.workspace = workspace_.get();
-        args.workspace_pool_size = options_.workspace_pool_size;
         args.kv_num_layers = config.num_hidden_layers;
         args.kv_block_size_tokens = options_.block_size_tokens;
         args.kv_num_blocks = options_.kv_num_blocks;

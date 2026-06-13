@@ -9,9 +9,7 @@
 namespace tiny_llm {
 
 class Tokenizer;
-class TokenizerRegistry;
 struct EngineArgs;
-struct Request;
 
 /**
  * @brief Sampling fields shared by user-facing and normalized engine parameters.
@@ -58,10 +56,6 @@ struct EngineCoreRequest {
 struct EngineCoreOutput {
     uint64_t internal_id = 0;
     int32_t new_token_id = -1;
-    int32_t generated_tokens = 0;
-    Request* sequence = nullptr;
-    bool has_error = false;
-    std::string error_message;
 };
 /**
  * @brief User-facing output emitted by OutPreprocessor.
@@ -107,7 +101,6 @@ public:
 private:
     uint64_t assign_internal_id() const;
     std::vector<int32_t> tokenize(const std::string& text) const;
-    std::string apply_chat_template(const std::string& text) const;
     SamplingParams normalize_sampling_params(const UserSamplingParams& user_params) const;
     void bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id) const;
     void validate_tokenizer_contract() const;

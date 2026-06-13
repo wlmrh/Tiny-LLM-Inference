@@ -25,9 +25,7 @@ public:
     ModelRunner(const EngineArgs& args, KVCache* kv);
     ~ModelRunner();
 
-    int32_t vocab_size() const;
-
-    PreparedInputs prepare_inputs(const SchedulerOutput& scheduler_output);
+    void validate_token_ids(const std::vector<int32_t>& token_ids, const char* context) const;
     ModelRunnerOutput run(const SchedulerOutput& scheduler_output);
 
 private:

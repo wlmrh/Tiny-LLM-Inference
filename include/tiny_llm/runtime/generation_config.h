@@ -9,6 +9,5 @@ struct GenerationConfig {
 };
 
 GenerationConfig load_generation_config_from_dir(const std::string& model_dir);
-GenerationConfig load_generation_config_file(const std::string& path);
 
 } // namespace tiny_llm

@@ -89,9 +89,9 @@ public:
      * @brief Construct a new BlockAllocator using an externally provided memory pool.
      * @param num_blocks Total number of blocks to manage.
      * @param block_size_bytes Size of each individual block in bytes.
-     * @param gpu_pool Pointer to the pre-allocated GPU memory pool.
+     * @param memory_pool Pointer to the pre-allocated CPU/GPU memory pool.
+     * @param parallel_config Runtime device backing the memory pool.
      */
-    BlockAllocator(size_t num_blocks, size_t block_size_bytes, void* gpu_pool);
     BlockAllocator(size_t num_blocks,
                    size_t block_size_bytes,
                    void* memory_pool,

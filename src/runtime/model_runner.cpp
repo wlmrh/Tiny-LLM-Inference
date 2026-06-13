@@ -153,7 +153,10 @@ void populate_prefill_segments(const SchedulerOutput& output,
             return;
         }
         const int32_t scheduled_tokens = count_it->second;
-        if (!req_data.is_prefill || req_data.num_computed_tokens != 0)
+        const bool full_prompt_prefill =
+            req_data.num_computed_tokens == 0
+            && scheduled_tokens == req_data.prompt_token_count;
+        if (!full_prompt_prefill)
         {
             prepared.prefill_segments.clear();
             return;
@@ -455,22 +458,31 @@ int32_t ModelRunner::resolve_model_max_batch_size(const EngineArgs& args) const
 
 void ModelRunner::validate_handles() const
 {
-    if (model_ == nullptr || g_execution_context == nullptr)
+    if (model_ == nullptr)
     {
-        throw std::runtime_error("ModelRunner: model/context must be non-null.");
+        throw std::runtime_error("ModelRunner: model must be non-null.");
     }
+    (void)require_global_execution_context("ModelRunner");
 }
 
-int32_t ModelRunner::vocab_size() const
+void ModelRunner::validate_token_ids(const std::vector<int32_t>& token_ids, const char* context) const
 {
     validate_handles();
-    return model_->vocab_size();
+    const int32_t vocab_size = model_->vocab_size();
+    for (int32_t token_id : token_ids)
+    {
+        if (token_id < 0 || token_id >= vocab_size)
+        {
+            const char* prefix = context != nullptr ? context : "ModelRunner::validate_token_ids";
+            throw std::runtime_error(std::string(prefix) + ": token is out of model vocab range.");
+        }
+    }
 }
 
 ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& output)
 {
     validate_handles();
-    ExecutionContext& ctx = require_global_execution_context("ModelRunner::prepare_inputs");
+    ExecutionContext& ctx = require_global_execution_context("ModelRunner::prepare_batch");
     const c10::Device runtime_device = ctx.device();
 
     PreparedBatch batch;
@@ -480,12 +492,12 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     const int64_t total_tokens = static_cast<int64_t>(std::max(0, output.total_num_scheduled_tokens));
     if (request_count == 0 || total_tokens == 0)
     {
-        prepared.input_ids = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
-        prepared.positions = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
-        prepared.slot_mapping = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
-        prepared.seq_indices = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
-        prepared.context_lens = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_inputs");
-        prepared.block_tables = make_int32_tensor_from_host({}, {model_->num_layers(), 0, 0}, runtime_device, "ModelRunner::prepare_inputs");
+        prepared.input_ids = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
+        prepared.positions = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
+        prepared.slot_mapping = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
+        prepared.seq_indices = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
+        prepared.context_lens = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
+        prepared.block_tables = make_int32_tensor_from_host({}, {model_->num_layers(), 0, 0}, runtime_device, "ModelRunner::prepare_batch");
         return batch;
     }
 
@@ -496,30 +508,30 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
         const auto count_it = output.num_scheduled_tokens.find(req_data.req_id);
         if (count_it == output.num_scheduled_tokens.end())
         {
-            throw std::runtime_error("ModelRunner::prepare_inputs: missing token budget for scheduled request.");
+            throw std::runtime_error("ModelRunner::prepare_batch: missing token budget for scheduled request.");
         }
         const int32_t scheduled_tokens = count_it->second;
         if (scheduled_tokens <= 0)
         {
-            throw std::runtime_error("ModelRunner::prepare_inputs: scheduled token budget must be positive.");
+            throw std::runtime_error("ModelRunner::prepare_batch: scheduled token budget must be positive.");
         }
         if (req_data.num_computed_tokens < 0)
         {
-            throw std::runtime_error("ModelRunner::prepare_inputs: num_computed_tokens must be non-negative.");
+            throw std::runtime_error("ModelRunner::prepare_batch: num_computed_tokens must be non-negative.");
         }
         if (req_data.new_token_ids.size() < static_cast<size_t>(scheduled_tokens))
         {
-            throw std::runtime_error("ModelRunner::prepare_inputs: new_token_ids is shorter than scheduled budget.");
+            throw std::runtime_error("ModelRunner::prepare_batch: new_token_ids is shorter than scheduled budget.");
         }
         if (static_cast<int32_t>(req_data.block_tables.size()) != model_->num_layers())
         {
-            throw std::runtime_error("ModelRunner::prepare_inputs: block_tables layer count must match model.");
+            throw std::runtime_error("ModelRunner::prepare_batch: block_tables layer count must match model.");
         }
         for (const std::vector<int32_t>& layer_blocks : req_data.block_tables)
         {
             if (layer_blocks.empty())
             {
-                throw std::runtime_error("ModelRunner::prepare_inputs: each layer block table must be non-empty.");
+                throw std::runtime_error("ModelRunner::prepare_batch: each layer block table must be non-empty.");
             }
             max_blocks_per_seq = std::max(max_blocks_per_seq, static_cast<int64_t>(layer_blocks.size()));
         }
@@ -527,7 +539,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     }
     if (checked_total_tokens != total_tokens)
     {
-        throw std::runtime_error("ModelRunner::prepare_inputs: total scheduled token count mismatch.");
+        throw std::runtime_error("ModelRunner::prepare_batch: total scheduled token count mismatch.");
     }
 
     std::vector<int32_t> input_values(static_cast<size_t>(total_tokens), 0);
@@ -570,12 +582,12 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
             if (logical_block_index < 0
                 || logical_block_index >= static_cast<int32_t>(req_data.block_tables[0].size()))
             {
-                throw std::runtime_error("ModelRunner::prepare_inputs: logical block index is out of range.");
+                throw std::runtime_error("ModelRunner::prepare_batch: logical block index is out of range.");
             }
             const int32_t physical_block_id = req_data.block_tables[0][static_cast<size_t>(logical_block_index)];
             if (physical_block_id < 0)
             {
-                throw std::runtime_error("ModelRunner::prepare_inputs: physical block id must be non-negative.");
+                throw std::runtime_error("ModelRunner::prepare_batch: physical block id must be non-negative.");
             }
             input_values[static_cast<size_t>(flat_token_index)] = req_data.new_token_ids[static_cast<size_t>(i)];
             position_values[static_cast<size_t>(flat_token_index)] = position;
@@ -594,37 +606,33 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
 
     if (flat_token_index != total_tokens)
     {
-        throw std::runtime_error("ModelRunner::prepare_inputs: flattened token count mismatch.");
+        throw std::runtime_error("ModelRunner::prepare_batch: flattened token count mismatch.");
     }
 
-    prepared.input_ids = make_int32_tensor_from_host(input_values, {total_tokens}, runtime_device, "ModelRunner::prepare_inputs");
-    prepared.positions = make_int32_tensor_from_host(position_values, {total_tokens}, runtime_device, "ModelRunner::prepare_inputs");
-    prepared.slot_mapping = make_int32_tensor_from_host(slot_values, {total_tokens}, runtime_device, "ModelRunner::prepare_inputs");
-    prepared.seq_indices = make_int32_tensor_from_host(seq_index_values, {total_tokens}, runtime_device, "ModelRunner::prepare_inputs");
-    prepared.context_lens = make_int32_tensor_from_host(context_values, {request_count}, runtime_device, "ModelRunner::prepare_inputs");
+    prepared.input_ids = make_int32_tensor_from_host(input_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
+    prepared.positions = make_int32_tensor_from_host(position_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
+    prepared.slot_mapping = make_int32_tensor_from_host(slot_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
+    prepared.seq_indices = make_int32_tensor_from_host(seq_index_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
+    prepared.context_lens = make_int32_tensor_from_host(context_values, {request_count}, runtime_device, "ModelRunner::prepare_batch");
     prepared.block_tables = make_int32_tensor_from_host(
         block_table_values,
         {model_->num_layers(), request_count, max_blocks_per_seq},
         runtime_device,
-        "ModelRunner::prepare_inputs");
+        "ModelRunner::prepare_batch");
     populate_prefill_segments(output, total_tokens, prepared);
     return batch;
-}
-
-PreparedInputs ModelRunner::prepare_inputs(const SchedulerOutput& output)
-{
-    return prepare_batch(output).inputs;
 }
 
 Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStats* profiling) const
 {
     validate_handles();
+    ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run_model");
     validate_prepared_tensor_pack(inputs, model_->vocab_size(), model_->num_layers(), "ModelRunner::run_model");
     if (inputs.input_ids.numel() == 0)
     {
         return torch::empty(
             {0, model_->vocab_size()},
-            torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(g_execution_context->device()));
+            torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(exec_ctx.device()));
     }
 
     ops::PagedAttentionRuntimeMetadata metadata;
@@ -638,7 +646,6 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStat
     metadata.prefill_segments_valid = inputs.prefill_segments_valid;
     metadata.enabled = true;
 
-    ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run_model");
     RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, runtime_detail_profile_enabled());
     auto guard = exec_ctx.step_guard();
     (void)guard;
@@ -695,7 +702,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     synchronize_for_profile(runtime_device);
     const auto prepare_start = ProfileClock::now();
     PreparedBatch batch = prepare_batch(scheduler_output);
-    PreparedInputs& inputs = batch.inputs;
+    const PreparedInputs& inputs = batch.inputs;
     synchronize_for_profile(runtime_device);
     const auto prepare_end = ProfileClock::now();
 
@@ -709,7 +716,6 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     output.profiling.decode_requests = decode_requests;
     output.profiling.max_context_len = max_context_len;
     output.profiling.profiled_steps = (prefill_tokens + decode_tokens) > 0 ? 1 : 0;
-    output.req_ids.reserve(batch.req_ids.size());
     output.sampled_token_ids.reserve(batch.req_ids.size());
     output.req_id_to_index.reserve(batch.req_ids.size());
     if (inputs.input_ids.numel() == 0)
@@ -856,8 +862,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         {
             throw std::runtime_error("ModelRunner::run: sampled row is out of range.");
         }
-        const int32_t output_index = static_cast<int32_t>(output.req_ids.size());
-        output.req_ids.push_back(req_id);
+        const int32_t output_index = static_cast<int32_t>(output.sampled_token_ids.size());
         output.sampled_token_ids.push_back(sampled_rows[static_cast<size_t>(row)]);
         output.req_id_to_index[req_id] = output_index;
     }

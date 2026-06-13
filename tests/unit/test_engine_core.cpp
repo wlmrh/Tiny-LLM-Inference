@@ -52,7 +52,6 @@ public:
     int32_t bos_id() const override { return 1; }
     int32_t eos_id() const override { return 2; }
     int32_t unk_id() const override { return 3; }
-    bool is_fixed_vocab() const override { return true; }
     bool is_valid_token_id(int32_t id) const override { return id >= 0 && id < vocab_size(); }
 };
 
@@ -73,6 +72,22 @@ struct EngineCoreFixture {
           ctx(nullptr, nullptr, &kv),
           core(make_engine_args(&model, &ctx, &kv, &tokenizer, max_prefill_tokens))
     {
+    }
+
+    static tiny_llm::EngineArgs make_engine_args(IncrementTokenModel* model,
+                                                 tiny_llm::ExecutionContext* ctx,
+                                                 tiny_llm::KVCache* kv,
+                                                 FakeTokenizer* tokenizer,
+                                                 int32_t max_prefill_tokens)
+    {
+        tiny_llm::EngineArgs args;
+        args.model = model;
+        args.ctx = ctx;
+        args.kv = kv;
+        args.tokenizer = tokenizer;
+        args.max_generated_tokens = 8;
+        args.scheduler_config = make_scheduler_config(max_prefill_tokens);
+        return args;
     }
 
     static tiny_llm::KVCache::Config make_kv_config()
@@ -190,13 +205,11 @@ TEST(EngineCoreTest, EmitsPrefillSampleAsFirstGeneratedTokenThenDecodes)
     EXPECT_TRUE(did_work);
     ASSERT_EQ(prefill_outputs.size(), 1u);
     EXPECT_EQ(prefill_outputs.at(1).new_token_id, 12);
-    EXPECT_EQ(prefill_outputs.at(1).generated_tokens, 1);
 
     auto [decode_outputs, did_decode] = fixture.core.step();
     EXPECT_TRUE(did_decode);
     ASSERT_EQ(decode_outputs.size(), 1u);
     EXPECT_EQ(decode_outputs.at(1).new_token_id, 13);
-    EXPECT_EQ(decode_outputs.at(1).generated_tokens, 2);
 
     auto [empty_outputs, more_work] = fixture.core.step();
     EXPECT_FALSE(more_work);
@@ -216,7 +229,6 @@ TEST(EngineCoreTest, DoesNotEmitOutputUntilChunkedPrefillCompletes)
     EXPECT_TRUE(second_work);
     ASSERT_EQ(second_outputs.size(), 1u);
     EXPECT_EQ(second_outputs.at(1).new_token_id, 23);
-    EXPECT_EQ(second_outputs.at(1).generated_tokens, 1);
 
     auto [empty_outputs, more_work] = fixture.core.step();
     EXPECT_FALSE(more_work);

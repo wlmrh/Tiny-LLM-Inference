@@ -6,10 +6,7 @@ class ExecutionContext;
 class KVCache;
 struct EngineArgs;
 
-// Global execution context that can be accessed by runtime/model/operator code paths.
-extern ExecutionContext* g_execution_context;
-
-void set_global_execution_context(ExecutionContext* ctx);
+// Process-wide execution context compatibility layer for runtime/model/operator code paths.
 void initialize_global_execution_context(const EngineArgs& args, KVCache* kv);
 ExecutionContext& require_global_execution_context(const char* caller);
 ExecutionContext& resolve_execution_context(ExecutionContext& fallback_ctx);

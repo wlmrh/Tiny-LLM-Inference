@@ -12,19 +12,18 @@
 namespace tiny_llm {
 
 class EngineCore;
+class ExecutionContext;
+class KVCache;
+class Model;
+class Tokenizer;
 
 /**
- * @brief Text-level runtime frontend over the token-only EngineCore.
+ * @brief Frontend wrapper: handles strings/tokenizer/output over token-only EngineCore.
  */
 class LLMEngine {
 public:
     explicit LLMEngine(const EngineArgs& args);
     ~LLMEngine();
-
-    LLMEngine(LLMEngine&&) noexcept;
-    LLMEngine& operator=(LLMEngine&&) noexcept;
-    LLMEngine(const LLMEngine&) = delete;
-    LLMEngine& operator=(const LLMEngine&) = delete;
 
     /**
      * @brief Adds one text request and returns internal request id.
@@ -42,10 +41,11 @@ public:
      * @brief Runs one decode step for active requests and returns user outputs.
      */
     std::vector<UserOutput> step();
-    const RuntimeProfilingStats& last_step_profile() const;
+    const RuntimeProfilingStats& last_step_profile() const { return last_step_profile_; }
 
 private:
     std::unique_ptr<EngineCore> core_;
+    RuntimeProfilingStats last_step_profile_;
     InputPreprocessor input_preprocessor_;
     OutPreprocessor output_preprocessor_;
 };

@@ -10,8 +10,6 @@ TEST(ParallelConfigTest, CpuConfigIsValid)
     EXPECT_TRUE(cpu.is_cpu());
     EXPECT_FALSE(cpu.is_cuda());
     EXPECT_EQ(cpu.device_id(), 0);
-    EXPECT_EQ(cpu.tensor_parallel_size(), 1);
-    EXPECT_EQ(cpu.pipeline_parallel_size(), 1);
     EXPECT_TRUE(cpu.torch_device().is_cpu());
 }
 
@@ -26,10 +24,7 @@ TEST(ParallelConfigTest, CudaConfigCarriesDeviceIndex)
     EXPECT_EQ(cuda.torch_device().index(), 0);
 }
 
-TEST(ParallelConfigTest, RejectsUnsupportedOrInvalidLayouts)
+TEST(ParallelConfigTest, RejectsInvalidCudaDevice)
 {
-    EXPECT_THROW(tiny_llm::ParallelConfig(tiny_llm::DeviceType::kCPU, 0, 2, 1).validate(), std::runtime_error);
-    EXPECT_THROW(tiny_llm::ParallelConfig(tiny_llm::DeviceType::kCPU, 0, 1, 2).validate(), std::runtime_error);
-    EXPECT_THROW(tiny_llm::ParallelConfig(tiny_llm::DeviceType::kCPU, 1, 1, 1).validate(), std::runtime_error);
     EXPECT_THROW(tiny_llm::ParallelConfig::cuda(-1).validate(), std::runtime_error);
 }

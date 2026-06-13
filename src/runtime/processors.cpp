@@ -41,8 +41,7 @@ EngineCoreRequest InputPreprocessor::process_inputs(const std::string& prompt,
     request.internal_id = assign_internal_id();
     bind_external_id(request, ext_request_id);
 
-    const std::string formatted_prompt = apply_chat_template(prompt);
-    request.prompt_token_ids = tokenize(formatted_prompt);
+    request.prompt_token_ids = tokenize(prompt);
     request.sampling_params = normalize_sampling_params(user_params);
 
     validate_prompt_tokens(request.prompt_token_ids);
@@ -108,12 +107,6 @@ void InputPreprocessor::validate_tokenizer_contract() const
 std::vector<int32_t> InputPreprocessor::tokenize(const std::string& text) const
 {
     return tokenizer_->encode(text);
-}
-
-std::string InputPreprocessor::apply_chat_template(const std::string& text) const
-{
-    // Keep no-op behavior for pure text mode and fixed prompt formatting.
-    return text;
 }
 
 SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingParams& user_params) const
@@ -267,17 +260,8 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::unordered_ma
             continue;
         }
 
-        if (core.has_error)
-        {
-            state.is_finished = true;
-            state.finish_reason = "error";
-            out.error_message = core.error_message;
-        }
-        else
-        {
-            out.delta_text = incremental_decode(state, core.new_token_id);
-            check_stop_criteria(state, core.new_token_id);
-        }
+        out.delta_text = incremental_decode(state, core.new_token_id);
+        check_stop_criteria(state, core.new_token_id);
 
         out.text = state.cached_text;
         out.generated_token_ids = state.generated_token_ids;

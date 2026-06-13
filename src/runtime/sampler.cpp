@@ -1,7 +1,6 @@
 #include "tiny_llm/runtime/sampler.h"
 
 #include "tiny_llm/core/tensor.h"
-#include "tiny_llm/runtime/sampling.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,8 +17,6 @@
 #endif
 
 namespace tiny_llm {
-
-float apply_repetition_penalty_to_logit(float logit, float penalty);
 
 #if TINYLLM_ENABLE_CUDA
 namespace cuda {
@@ -273,6 +270,19 @@ int32_t argmax_row(const std::vector<float>& row)
         throw std::runtime_error("sample_greedy_rows: no valid token remains after filtering.");
     }
     return best;
+}
+
+float apply_repetition_penalty_to_logit(float logit, float penalty)
+{
+    if (penalty <= 0.0f)
+    {
+        throw std::runtime_error("sample_greedy_rows: repetition_penalty must be positive.");
+    }
+    if (penalty == 1.0f || logit == 0.0f)
+    {
+        return logit;
+    }
+    return logit > 0.0f ? logit / penalty : logit * penalty;
 }
 
 void apply_repetition_penalty(std::vector<float>& row,
@@ -645,19 +655,28 @@ std::vector<int32_t> sample_cuda_rows_with_repetition_penalty(
 #endif
 }
 
-} // namespace
-
-float apply_repetition_penalty_to_logit(float logit, float penalty)
+int32_t sample_argmax(const float* logits, int32_t vocab_size)
 {
-    if (penalty <= 0.0f)
+    if (logits == nullptr)
     {
-        throw std::runtime_error("apply_repetition_penalty_to_logit: penalty must be positive.");
+        throw std::runtime_error("sample_greedy_rows: logits pointer must be non-null.");
     }
-    if (penalty == 1.0f || logit == 0.0f)
+    if (vocab_size <= 0)
     {
-        return logit;
+        throw std::runtime_error("sample_greedy_rows: vocab_size must be positive.");
     }
-    return logit > 0.0f ? logit / penalty : logit * penalty;
+
+    int32_t best_token = 0;
+    float best_value = logits[0];
+    for (int32_t token = 1; token < vocab_size; ++token)
+    {
+        if (logits[token] > best_value)
+        {
+            best_value = logits[token];
+            best_token = token;
+        }
+    }
+    return best_token;
 }
 
 int32_t sample_argmax_with_repetition_penalty(const float* logits,
@@ -693,6 +712,8 @@ int32_t sample_argmax_with_repetition_penalty(const float* logits,
     }
     return best_token;
 }
+
+} // namespace
 
 std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
                                         const std::vector<int32_t>& sample_rows,

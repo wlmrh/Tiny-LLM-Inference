@@ -173,15 +173,6 @@ int32_t resolve_special_token_id(const char* token_name,
 
 } // namespace
 
-TokenizerRegistry::TokenizerRegistry(Tokenizer* tokenizer)
-    : tokenizer_(tokenizer)
-{
-    if (tokenizer_ == nullptr)
-    {
-        throw std::runtime_error("TokenizerRegistry: tokenizer must be non-null.");
-    }
-}
-
 struct HFLlamaTokenizer::Impl {
     Impl(std::unique_ptr<tokenizers::Tokenizer> tokenizer_handle,
          int32_t vocab,
@@ -299,11 +290,6 @@ int32_t HFLlamaTokenizer::eos_id() const
 int32_t HFLlamaTokenizer::unk_id() const
 {
     return unk_id_;
-}
-
-bool HFLlamaTokenizer::is_fixed_vocab() const
-{
-    return true;
 }
 
 bool HFLlamaTokenizer::is_valid_token_id(int32_t id) const

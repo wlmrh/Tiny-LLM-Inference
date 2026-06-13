@@ -1,7 +1,6 @@
 #include "tiny_llm/runtime/scheduler.h"
 
 #include "tiny_llm/runtime/engine_args.h"
-#include "tiny_llm/runtime/model_runner_output.h"
 #include "tiny_llm/runtime/kv_cache.h"
 
 #include <algorithm>
@@ -24,6 +23,16 @@ int to_output_key(uint64_t request_id)
 int32_t context_token_count(const Request& request)
 {
     return static_cast<int32_t>(request._all_token_ids.size());
+}
+
+int32_t generated_token_count(const Request& request)
+{
+    const size_t prompt_tokens = request.prompt_token_ids.size();
+    if (request._all_token_ids.size() < prompt_tokens)
+    {
+        return 0;
+    }
+    return static_cast<int32_t>(request._all_token_ids.size() - prompt_tokens);
 }
 
 Request* find_request(std::map<int64_t, Request>& requests, uint64_t request_id)
@@ -62,20 +71,6 @@ KVCacheManager::KVCacheManager(KVCache* kv)
     }
 }
 
-KVCacheManager::KVCacheManager(int32_t kv_num_layers,
-                               int32_t kv_block_size_tokens,
-                               size_t kv_num_blocks,
-                               size_t kv_block_size_bytes,
-                               void* kv_memory_pool)
-{
-    init_owned(
-        kv_num_layers,
-        kv_block_size_tokens,
-        kv_num_blocks,
-        kv_block_size_bytes,
-        kv_memory_pool);
-}
-
 KVCacheManager::~KVCacheManager() = default;
 
 void KVCacheManager::bind(KVCache* kv)
@@ -86,21 +81,6 @@ void KVCacheManager::bind(KVCache* kv)
     }
     owned_kv_.reset();
     kv_ = kv;
-}
-
-void KVCacheManager::init_owned(int32_t kv_num_layers,
-                                int32_t kv_block_size_tokens,
-                                size_t kv_num_blocks,
-                                size_t kv_block_size_bytes,
-                                void* kv_memory_pool)
-{
-    init_owned(
-        kv_num_layers,
-        kv_block_size_tokens,
-        kv_num_blocks,
-        kv_block_size_bytes,
-        kv_memory_pool,
-        ParallelConfig::cpu());
 }
 
 void KVCacheManager::init_owned(int32_t kv_num_layers,
@@ -276,26 +256,6 @@ size_t KVCacheManager::estimate_prefill_new_blocks(
     return additional_blocks;
 }
 
-void KVCacheManager::refresh_block_table(
-    int32_t core_seq_id,
-    bool started,
-    std::vector<int32_t>& block_table) const
-{
-    if (kv_ == nullptr)
-    {
-        throw std::runtime_error("KVCacheManager::refresh_block_table: kv must be non-null.");
-    }
-
-    block_table.clear();
-    if (!started || kv_->num_layers() <= 0)
-    {
-        return;
-    }
-
-    const std::vector<int32_t>& page_table = kv_->page_table(core_seq_id, 0);
-    block_table.insert(block_table.end(), page_table.begin(), page_table.end());
-}
-
 void KVCacheManager::refresh_block_tables(
     int32_t core_seq_id,
     bool started,
@@ -315,6 +275,7 @@ void KVCacheManager::refresh_block_tables(
     block_tables.resize(static_cast<size_t>(kv_->num_layers()));
     for (int32_t layer_id = 0; layer_id < kv_->num_layers(); ++layer_id)
     {
+        // Collect physical blocks allocated for each layer of this sequence.
         const std::vector<int32_t>& page_table = kv_->page_table(core_seq_id, layer_id);
         block_tables[static_cast<size_t>(layer_id)].insert(
             block_tables[static_cast<size_t>(layer_id)].end(),
@@ -459,12 +420,7 @@ void Scheduler::add_request(Request request)
         throw std::runtime_error("Scheduler::add_request: duplicated request_id.");
     }
 
-    request.reset_generated_tokens();
-    if (!request.has_valid_token_layout())
-    {
-        throw std::runtime_error("Scheduler::add_request: invalid token layout.");
-    }
-
+    request._all_token_ids = request.prompt_token_ids;
     request.status = RequestStatus::WAITING;
     request.num_computed = 0;
 
@@ -472,71 +428,16 @@ void Scheduler::add_request(Request request)
     waiting.push_back(request.request_id);
 }
 
-int Scheduler::get_num_unfinished_requests() const
+bool Scheduler::has_unfinished_requests()
 {
-    int unfinished = 0;
     for (const auto& item : requests)
     {
         if (item.second.status != RequestStatus::FINISHED)
         {
-            ++unfinished;
+            return true;
         }
     }
-    return unfinished;
-}
-
-bool Scheduler::has_unfinished_requests() const
-{
-    return get_num_unfinished_requests() > 0;
-}
-
-RequestData Scheduler::make_request_data(
-    const Request& request,
-    bool is_prefill,
-    int32_t scheduled_tokens) const
-{
-    if (scheduled_tokens <= 0)
-    {
-        throw std::runtime_error("Scheduler::make_request_data: scheduled_tokens must be positive.");
-    }
-    if (!is_prefill && scheduled_tokens != 1)
-    {
-        throw std::runtime_error("Scheduler::make_request_data: decode steps must schedule one token.");
-    }
-    if (!is_prefill && request._all_token_ids.empty())
-    {
-        throw std::runtime_error("Scheduler::make_request_data: decode request has no token history.");
-    }
-    if (is_prefill && request.num_computed + scheduled_tokens > context_token_count(request))
-    {
-        throw std::runtime_error("Scheduler::make_request_data: prefill chunk exceeds request context.");
-    }
-
-    RequestData req_data;
-    req_data.req_id = request.request_id;
-    req_data.num_computed_tokens = request.num_computed;
-    req_data.prompt_token_count = static_cast<int32_t>(request.prompt_token_ids.size());
-    req_data.is_prefill = is_prefill;
-    req_data.sampling_params = request.sampling_params;
-    req_data.all_token_ids = request._all_token_ids;
-    kvcache_manager.refresh_block_tables(
-        static_cast<int32_t>(request.request_id),
-        true,
-        req_data.block_tables);
-
-    if (!is_prefill)
-    {
-        req_data.new_token_ids.push_back(request._all_token_ids.back());
-        return req_data;
-    }
-
-    req_data.new_token_ids.reserve(static_cast<size_t>(scheduled_tokens));
-    for (int32_t i = 0; i < scheduled_tokens; ++i)
-    {
-        const int32_t token_index = request.num_computed + i;
-        req_data.new_token_ids.push_back(request._all_token_ids[static_cast<size_t>(token_index)]);
-    }
-    return req_data;
+    return false;
 }
 
 size_t Scheduler::running_request_count() const
@@ -557,9 +458,9 @@ bool Scheduler::can_admit_waiting_request() const
     return max_running_requests == 0 || running_request_count() < max_running_requests;
 }
 
-void Scheduler::preempt_request(uint64_t request_id)
+void Scheduler::_preempt_request(Request request)
 {
-    Request* req = find_request(requests, request_id);
+    Request* req = find_request(requests, request.request_id);
     if (req == nullptr || req->status == RequestStatus::FINISHED)
     {
         return;
@@ -644,7 +545,7 @@ SchedulerOutput Scheduler::schedule()
             remaining_prefill,
             static_cast<int32_t>(std::max<int64_t>(1, fair_budget)));
     };
-    // Allocate KV slots, preempting from the running tail when capacity is insufficient.
+    // try to allocate `num_new_tokens` for req, whose current state is is_running.
     auto try_allocate_with_tail_preempt = [&](Request& req, int32_t num_new_tokens, bool is_running) -> bool {
         if (num_new_tokens <= 0)
         {
@@ -664,7 +565,8 @@ SchedulerOutput Scheduler::schedule()
             {
                 return false;
             }
-            // Pick a running tail victim so the current request can make progress.
+            // No enough Space for a the current request
+            // Find a legal Request from the back of the queue and preempt it
             Request* victim = nullptr;
             for (auto it = running.rbegin(); it != running.rend(); ++it)
             {
@@ -683,14 +585,7 @@ SchedulerOutput Scheduler::schedule()
             }
 
             const uint64_t victim_id = victim->request_id;
-            preempt_request(victim_id);
-            if (std::find(
-                    scheduler_output.preempted_req_ids.begin(),
-                    scheduler_output.preempted_req_ids.end(),
-                    victim_id) == scheduler_output.preempted_req_ids.end())
-            {
-                scheduler_output.preempted_req_ids.push_back(victim_id);
-            }
+            _preempt_request(*victim);
             if (is_running)
             {
                 preempted_during_running = true;
@@ -712,7 +607,7 @@ SchedulerOutput Scheduler::schedule()
             break;
         }
 
-        // Skip requests already scheduled by an earlier branch in this step.
+        // 检测该 Request 是否已经被调度
         if (scheduler_output.num_scheduled_tokens.find(request_id) != scheduler_output.num_scheduled_tokens.end())
         {
             continue;
@@ -724,10 +619,11 @@ SchedulerOutput Scheduler::schedule()
             continue;
         }
 
+        const int32_t core_seq_id = static_cast<int32_t>(request_id);
         const int32_t context_tokens = context_token_count(*req);
 
         if (req->num_computed < context_tokens)
-        {
+        {// 处于 prefilling 阶段
             const int32_t remaining_prefill = context_tokens - req->num_computed;
             const int32_t chunk = fair_prefill_chunk(
                 remaining_prefill,
@@ -737,7 +633,22 @@ SchedulerOutput Scheduler::schedule()
                 continue;
             }
 
-            RequestData req_data = make_request_data(*req, true, chunk);
+            std::vector<std::vector<int32_t>> block_tables;
+            kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+
+            RequestData req_data;
+            req_data.req_id = request_id;
+            req_data.num_computed_tokens = req->num_computed;
+            req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
+            req_data.sampling_params = req->sampling_params;
+            req_data.all_token_ids = req->_all_token_ids;
+            req_data.block_tables = std::move(block_tables);
+            req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
+            for (int32_t i = 0; i < chunk; ++i)
+            {
+                const int32_t prompt_index = req->num_computed + i;
+                req_data.new_token_ids.push_back(req->_all_token_ids[static_cast<size_t>(prompt_index)]);
+            }
 
             scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
             scheduler_output.scheduled_reqs.push_back(std::move(req_data));
@@ -756,7 +667,17 @@ SchedulerOutput Scheduler::schedule()
             continue;
         }
 
-        RequestData req_data = make_request_data(*req, false, 1);
+        std::vector<std::vector<int32_t>> block_tables;
+        kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+
+        RequestData req_data;
+        req_data.req_id = request_id;
+        req_data.num_computed_tokens = req->num_computed;
+        req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
+        req_data.sampling_params = req->sampling_params;
+        req_data.all_token_ids = req->_all_token_ids;
+        req_data.block_tables = std::move(block_tables);
+        req_data.new_token_ids.push_back(req->_all_token_ids.back());
 
         scheduler_output.num_scheduled_tokens[request_id] = 1;
         scheduler_output.scheduled_reqs.push_back(std::move(req_data));
@@ -789,6 +710,7 @@ SchedulerOutput Scheduler::schedule()
                 break;
             }
 
+            const int32_t core_seq_id = static_cast<int32_t>(request_id);
             const int32_t context_tokens = context_token_count(*req);
             const int32_t remaining_prefill = context_tokens - req->num_computed;
 
@@ -805,13 +727,24 @@ SchedulerOutput Scheduler::schedule()
                     break;
                 }
 
-                RequestData req_data = make_request_data(*req, false, 1);
+                std::vector<std::vector<int32_t>> block_tables;
+                kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+
+                RequestData req_data;
+                req_data.req_id = request_id;
+                req_data.num_computed_tokens = req->num_computed;
+                req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
+                req_data.sampling_params = req->sampling_params;
+                req_data.all_token_ids = req->_all_token_ids;
+                req_data.block_tables = std::move(block_tables);
+                req_data.new_token_ids.push_back(req->_all_token_ids.back());
 
                 scheduler_output.num_scheduled_tokens[request_id] = 1;
                 scheduler_output.scheduled_reqs.push_back(std::move(req_data));
                 remaining_token_budget -= 1;
                 continue;
             }
+            // 本轮对该请求调度的 token 数量
             const int32_t chunk = fair_prefill_chunk(
                 remaining_prefill,
                 count_prefill_candidates(waiting_snapshot, waiting_index, true));
@@ -820,7 +753,22 @@ SchedulerOutput Scheduler::schedule()
                 break;
             }
 
-            RequestData req_data = make_request_data(*req, true, chunk);
+            std::vector<std::vector<int32_t>> block_tables;
+            kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+
+            RequestData req_data;
+            req_data.req_id = request_id;
+            req_data.num_computed_tokens = req->num_computed;
+            req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
+            req_data.sampling_params = req->sampling_params;
+            req_data.all_token_ids = req->_all_token_ids;
+            req_data.block_tables = std::move(block_tables);
+            req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
+            for (int32_t i = 0; i < chunk; ++i)
+            {
+                const int32_t prompt_index = req->num_computed + i;
+                req_data.new_token_ids.push_back(req->_all_token_ids[static_cast<size_t>(prompt_index)]);
+            }
 
             scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
             scheduler_output.scheduled_reqs.push_back(std::move(req_data));
@@ -837,8 +785,8 @@ SchedulerOutput Scheduler::schedule()
 }
 
 std::map<int, EngineCoreOutput> Scheduler::update_from_output(
-    const SchedulerOutput& scheduler_output,
-    const ModelRunnerOutput& model_runner_output)
+    SchedulerOutput scheduler_output,
+    ModelRunnerOutput model_runner_output)
 {
     std::map<int, EngineCoreOutput> results;
 
@@ -943,8 +891,6 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
         EngineCoreOutput result;
         result.internal_id = req->request_id;
         result.new_token_id = sampled_token_id;
-        result.generated_tokens = req->generated_tokens();
-        result.sequence = nullptr;
         results[to_output_key(req->request_id)] = std::move(result);
 
         const bool stop_by_token =
@@ -954,7 +900,7 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
                 sampled_token_id)
             != req->sampling_params.stop_token_ids.end();
         const bool stop_by_length =
-            req->generated_tokens() >= req->sampling_params.max_tokens;
+            generated_token_count(*req) >= req->sampling_params.max_tokens;
         if (stop_by_token || stop_by_length)
         {
             finish_request(*req);

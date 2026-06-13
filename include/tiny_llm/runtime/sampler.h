@@ -15,6 +15,4 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
                                         const std::vector<SamplingParams>* sampling_params = nullptr,
                                         const std::vector<uint64_t>* request_ids = nullptr);
 
-float apply_repetition_penalty_to_logit(float logit, float penalty);
-
 } // namespace tiny_llm
