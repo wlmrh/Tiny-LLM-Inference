@@ -47,7 +47,7 @@ Interfaces:
 
 ## `InputPreprocessor`
 
-`InputPreprocessor` converts user prompt inputs into `EngineCoreRequest`.
+`InputPreprocessor` converts user prompt inputs into `EngineCoreRequest` and owns the frontend request ID registry.
 
 Attributes:
 
@@ -83,7 +83,7 @@ Attributes:
 Interfaces:
 
 - `add_request(const EngineCoreRequest&)`: registers output state and decodes the initial prompt.
-- `process_outputs(core_outputs)`: converts sampled token IDs to `UserOutput`.
+- `process_outputs(core_outputs)`: converts `EngineCoreOutput` messages to `UserOutput`.
 - `has_unfinished_requests()`: checks frontend states.
 
 Internal behavior:

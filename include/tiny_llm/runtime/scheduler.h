@@ -110,7 +110,7 @@ public:
     SchedulerOutput schedule();
 
     // 根据 scheduler 的调度结果及其执行结果 model_runner_output 修改 scheduler 中 Request 的状态
-    std::map<int, EngineCoreOutput> update_from_output(
+    std::vector<EngineCoreOutput> update_from_output(
         SchedulerOutput scheduler_output,
         ModelRunnerOutput model_runner_output);
 

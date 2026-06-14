@@ -27,7 +27,7 @@
 
 - `EngineCore(const EngineArgs& args)`: constructs scheduler and model runner from shared runtime args.
 - `add_request(const EngineCoreRequest& request)`: validates token range and enqueues a scheduler request.
-- `step()`: runs one scheduler/model/update cycle and returns `(outputs, has_scheduled_tokens)`.
+- `step()`: runs one scheduler/model/update cycle and returns `(std::vector<EngineCoreOutput>, has_scheduled_tokens)`.
 - `last_step_profile()`: returns profiling for the last call to `step()`.
 
 ## Step Semantics
@@ -38,8 +38,7 @@
 2. Call `Scheduler::schedule()` to produce `SchedulerOutput`.
 3. Call `ModelRunner::run(scheduler_output)`.
 4. Store `model_output.profiling`.
-5. Call `Scheduler::update_from_output(...)`.
-6. Convert ordered `std::map<int, EngineCoreOutput>` into `std::unordered_map<int, EngineCoreOutput>`.
+5. Call `Scheduler::update_from_output(...)` to receive a compact vector of `EngineCoreOutput` messages.
 
 The boolean return value is true when the scheduler had at least one scheduled token in this step. This is used by `LLMEngine` to verify the cleanup step does not unexpectedly run more work.
 

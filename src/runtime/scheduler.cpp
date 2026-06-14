@@ -11,15 +11,6 @@ namespace tiny_llm {
 
 namespace {
 
-int to_output_key(uint64_t request_id)
-{
-    if (request_id > static_cast<uint64_t>(std::numeric_limits<int>::max()))
-    {
-        throw std::runtime_error("Scheduler::update_from_output: request_id exceeds output key range.");
-    }
-    return static_cast<int>(request_id);
-}
-
 int32_t context_token_count(const Request& request)
 {
     return static_cast<int32_t>(request._all_token_ids.size());
@@ -784,11 +775,12 @@ SchedulerOutput Scheduler::schedule()
     return scheduler_output;
 }
 
-std::map<int, EngineCoreOutput> Scheduler::update_from_output(
+std::vector<EngineCoreOutput> Scheduler::update_from_output(
     SchedulerOutput scheduler_output,
     ModelRunnerOutput model_runner_output)
 {
-    std::map<int, EngineCoreOutput> results;
+    std::vector<EngineCoreOutput> results;
+    results.reserve(scheduler_output.scheduled_reqs.size());
 
     auto mark_running = [&](Request& req) {
         req.status = RequestStatus::RUNNING;
@@ -891,7 +883,7 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
         EngineCoreOutput result;
         result.internal_id = req->request_id;
         result.new_token_id = sampled_token_id;
-        results[to_output_key(req->request_id)] = std::move(result);
+        results.push_back(std::move(result));
 
         const bool stop_by_token =
             std::find(

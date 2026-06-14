@@ -87,7 +87,7 @@ struct RequestState {
 };
 
 /**
- * @brief Stateless input translator and validator.
+ * @brief Stateful input translator, request ID binder, and validator.
  */
 class InputPreprocessor {
 public:
@@ -95,22 +95,22 @@ public:
 
     EngineCoreRequest process_inputs(const std::string& prompt,
                                      const UserSamplingParams& user_params,
-                                     const std::string& ext_request_id) const;
-    void release_request(const std::string& external_id, uint64_t internal_id) const;
+                                     const std::string& ext_request_id);
+    void release_request(const std::string& external_id, uint64_t internal_id);
 
 private:
-    uint64_t assign_internal_id() const;
+    uint64_t assign_internal_id();
     std::vector<int32_t> tokenize(const std::string& text) const;
     SamplingParams normalize_sampling_params(const UserSamplingParams& user_params) const;
-    void bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id) const;
+    void bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id);
     void validate_tokenizer_contract() const;
     void validate_prompt_tokens(const std::vector<int32_t>& token_ids) const;
     void validate_sampling_params(const SamplingParams& sampling_params) const;
 
     Tokenizer* tokenizer_ = nullptr;
     int32_t default_max_tokens_ = 32;
-    mutable uint64_t next_internal_id_ = 1;
-    mutable std::unordered_map<std::string, uint64_t> external_to_internal_id_;
+    uint64_t next_internal_id_ = 1;
+    std::unordered_map<std::string, uint64_t> external_to_internal_id_;
 };
 
 /**
@@ -121,7 +121,7 @@ public:
     explicit OutPreprocessor(const EngineArgs& args);
 
     void add_request(const EngineCoreRequest& request);
-    std::vector<UserOutput> process_outputs(const std::unordered_map<int, EngineCoreOutput>& core_outputs);
+    std::vector<UserOutput> process_outputs(const std::vector<EngineCoreOutput>& core_outputs);
     bool has_unfinished_requests() const;
 
 private:

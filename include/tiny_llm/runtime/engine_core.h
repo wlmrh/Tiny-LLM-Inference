@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <tuple>
-#include <unordered_map>
+#include <vector>
 
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/processors.h"
@@ -25,7 +25,7 @@ public:
 
     void add_request(const EngineCoreRequest& request);
 
-    std::tuple<std::unordered_map<int, EngineCoreOutput>, bool> step();
+    std::tuple<std::vector<EngineCoreOutput>, bool> step();
     const RuntimeProfilingStats& last_step_profile() const { return last_step_profile_; }
 
 private:

@@ -35,7 +35,7 @@ InputPreprocessor::InputPreprocessor(const EngineArgs& args)
 
 EngineCoreRequest InputPreprocessor::process_inputs(const std::string& prompt,
                                                     const UserSamplingParams& user_params,
-                                                    const std::string& ext_request_id) const
+                                                    const std::string& ext_request_id)
 {
     EngineCoreRequest request;
     request.internal_id = assign_internal_id();
@@ -50,7 +50,7 @@ EngineCoreRequest InputPreprocessor::process_inputs(const std::string& prompt,
     return request;
 }
 
-uint64_t InputPreprocessor::assign_internal_id() const
+uint64_t InputPreprocessor::assign_internal_id()
 {
     if (next_internal_id_ == std::numeric_limits<uint64_t>::max())
     {
@@ -62,7 +62,7 @@ uint64_t InputPreprocessor::assign_internal_id() const
     return assigned;
 }
 
-void InputPreprocessor::bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id) const
+void InputPreprocessor::bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id)
 {
     request.external_id = ext_request_id.empty() ? default_external_id(request.internal_id) : ext_request_id;
 
@@ -74,7 +74,7 @@ void InputPreprocessor::bind_external_id(EngineCoreRequest& request, const std::
     }
 }
 
-void InputPreprocessor::release_request(const std::string& external_id, uint64_t internal_id) const
+void InputPreprocessor::release_request(const std::string& external_id, uint64_t internal_id)
 {
     const auto it = external_to_internal_id_.find(external_id);
     if (it != external_to_internal_id_.end() && it->second == internal_id)
@@ -224,16 +224,14 @@ void OutPreprocessor::add_request(const EngineCoreRequest& request)
     states_[request.internal_id] = std::move(state);
 }
 
-std::vector<UserOutput> OutPreprocessor::process_outputs(const std::unordered_map<int, EngineCoreOutput>& core_outputs)
+std::vector<UserOutput> OutPreprocessor::process_outputs(const std::vector<EngineCoreOutput>& core_outputs)
 {
     std::vector<UserOutput> user_outputs;
     user_outputs.reserve(core_outputs.size());
     std::vector<uint64_t> finished_ids;
 
-    for (const auto& item : core_outputs)
+    for (const EngineCoreOutput& core : core_outputs)
     {
-        const EngineCoreOutput& core = item.second;
-
         UserOutput out;
         out.internal_id = core.internal_id;
 

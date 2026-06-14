@@ -204,12 +204,14 @@ TEST(EngineCoreTest, EmitsPrefillSampleAsFirstGeneratedTokenThenDecodes)
     auto [prefill_outputs, did_work] = fixture.core.step();
     EXPECT_TRUE(did_work);
     ASSERT_EQ(prefill_outputs.size(), 1u);
-    EXPECT_EQ(prefill_outputs.at(1).new_token_id, 12);
+    EXPECT_EQ(prefill_outputs.front().internal_id, 1u);
+    EXPECT_EQ(prefill_outputs.front().new_token_id, 12);
 
     auto [decode_outputs, did_decode] = fixture.core.step();
     EXPECT_TRUE(did_decode);
     ASSERT_EQ(decode_outputs.size(), 1u);
-    EXPECT_EQ(decode_outputs.at(1).new_token_id, 13);
+    EXPECT_EQ(decode_outputs.front().internal_id, 1u);
+    EXPECT_EQ(decode_outputs.front().new_token_id, 13);
 
     auto [empty_outputs, more_work] = fixture.core.step();
     EXPECT_FALSE(more_work);
@@ -228,7 +230,8 @@ TEST(EngineCoreTest, DoesNotEmitOutputUntilChunkedPrefillCompletes)
     auto [second_outputs, second_work] = fixture.core.step();
     EXPECT_TRUE(second_work);
     ASSERT_EQ(second_outputs.size(), 1u);
-    EXPECT_EQ(second_outputs.at(1).new_token_id, 23);
+    EXPECT_EQ(second_outputs.front().internal_id, 1u);
+    EXPECT_EQ(second_outputs.front().new_token_id, 23);
 
     auto [empty_outputs, more_work] = fixture.core.step();
     EXPECT_FALSE(more_work);
