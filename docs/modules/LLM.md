@@ -79,7 +79,7 @@ per-request KV-cache state. Those responsibilities remain in `LLMEngine`,
   extends `CompletionOutput` with `prompt_index`, `delta_text`, and the latest
   `token_id`.
 - `CompletionStreamCallback`: callback invoked synchronously for user-facing
-  streaming events.
+  incremental output events when passed to `generate`.
 
 ## Public Interface
 
@@ -88,19 +88,14 @@ per-request KV-cache state. Those responsibilities remain in `LLMEngine`,
   for CPU or a selected CUDA device.
 - `LLM(LLMOptions options)`: construct with explicit resource, scheduler, and
   model-loading settings.
-- `generate(const std::vector<std::string>& prompts, const LLMSamplingParams&)`:
-  blocking batch generation.
-- `generate(const std::string& prompt, const LLMSamplingParams&)`: blocking
-  single-prompt generation.
-- `generate_stream(...)` for a prompt batch: generation with incremental
-  callback events.
-- `generate_stream(...)` for a single prompt: single-prompt streaming wrapper.
+- `generate(...)` for a prompt batch: blocking batch generation. An optional
+  callback receives incremental output events.
+- `generate(...)` for a single prompt: blocking single-prompt generation with
+  the same optional callback behavior.
 - `last_generation_profile()`: returns profiling counters accumulated during
   the most recent generation call.
 
-The blocking `generate` methods delegate to the streaming path with no
-callback. Batch calls use one `LLMSamplingParams` value for every prompt in the
-batch.
+Batch calls use one `LLMSamplingParams` value for every prompt in the batch.
 
 ## Owned State and Lifecycle
 
@@ -125,7 +120,7 @@ backing resources disappear.
 
 ## Generation Flow
 
-`generate_stream` adds each prompt to `LLMEngine`, records the internal request
+`generate` adds each prompt to `LLMEngine`, records the internal request
 ID returned for each prompt index, and repeatedly calls `LLMEngine::step()` while
 frontend requests remain unfinished. Each returned `UserOutput` updates the
 matching `CompletionOutput`; when a callback is present, `LLM` emits a

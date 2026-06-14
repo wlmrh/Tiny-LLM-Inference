@@ -104,4 +104,4 @@ Internal behavior:
 - `finish_reason`
 - `error_message`
 
-`LLM` converts this into `CompletionOutput` and `CompletionStreamOutput`. `CompletionStreamOutput` extends the final output shape with stream-only fields such as `prompt_index`, `delta_text`, and latest `token_id`.
+`LLM` converts this into `CompletionOutput`; when a generation callback is provided, it also emits `CompletionStreamOutput` events with `prompt_index`, `delta_text`, and the latest `token_id`.

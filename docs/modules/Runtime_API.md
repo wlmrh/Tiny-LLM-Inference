@@ -55,9 +55,7 @@ Main interfaces:
 - `LLM(std::string model)`: constructs a CPU runtime from a model path.
 - `LLM(std::string model, ParallelConfig parallel_config)`: constructs a runtime for the selected device.
 - `LLM(LLMOptions options)`: constructs a runtime with explicit resource settings.
-- `generate(const std::vector<std::string>&, const LLMSamplingParams&)`: blocking batch generation.
-- `generate(const std::string&, const LLMSamplingParams&)`: blocking single-prompt generation.
-- `generate_stream(...)`: generation with `CompletionStreamCallback` invoked for each emitted token event.
+- `generate(...)`: blocking batch or single-prompt generation. An optional `CompletionStreamCallback` can receive incremental output events.
 - `last_generation_profile()`: returns accumulated timings and token counters.
 
 `LLMSamplingParams` is an alias for `UserSamplingParams`. A `max_tokens` value of `0` uses the runtime default from `LLMOptions.max_tokens`; positive values override it for the request.

@@ -457,7 +457,7 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     }
     const auto generation_start = Clock::now();
     const std::vector<tiny_llm::CompletionOutput> outputs =
-        llm.generate_stream(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput&) {
+        llm.generate(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput&) {
             if (!saw_first_token)
             {
                 saw_first_token = true;

@@ -326,24 +326,12 @@ void LLM::release_kv_pool() noexcept
 }
 
 std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prompts,
-                                            const LLMSamplingParams& sampling_params)
-{
-    return generate_stream(prompts, sampling_params, CompletionStreamCallback{});
-}
-
-CompletionOutput LLM::generate(const std::string& prompt, const LLMSamplingParams& sampling_params)
-{
-    std::vector<CompletionOutput> outputs = generate(std::vector<std::string>{prompt}, sampling_params);
-    return outputs.empty() ? CompletionOutput{} : std::move(outputs.front());
-}
-
-std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string>& prompts,
-                                                   const LLMSamplingParams& sampling_params,
-                                                   CompletionStreamCallback callback)
+                                            const LLMSamplingParams& sampling_params,
+                                            CompletionStreamCallback callback)
 {
     if (engine_ == nullptr)
     {
-        throw std::runtime_error("LLM::generate_stream: engine is not initialized.");
+        throw std::runtime_error("LLM::generate: engine is not initialized.");
     }
     if (prompts.empty())
     {
@@ -376,7 +364,7 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
             }
             if (!output.error_message.empty())
             {
-                throw std::runtime_error("LLM::generate_stream: request " + output.external_id + " failed: "
+                throw std::runtime_error("LLM::generate: request " + output.external_id + " failed: "
                                          + output.error_message);
             }
 
@@ -402,12 +390,12 @@ std::vector<CompletionOutput> LLM::generate_stream(const std::vector<std::string
     return results;
 }
 
-CompletionOutput LLM::generate_stream(const std::string& prompt,
-                                      const LLMSamplingParams& sampling_params,
-                                      CompletionStreamCallback callback)
+CompletionOutput LLM::generate(const std::string& prompt,
+                               const LLMSamplingParams& sampling_params,
+                               CompletionStreamCallback callback)
 {
     std::vector<CompletionOutput> outputs =
-        generate_stream(std::vector<std::string>{prompt}, sampling_params, std::move(callback));
+        generate(std::vector<std::string>{prompt}, sampling_params, std::move(callback));
     return outputs.empty() ? CompletionOutput{} : std::move(outputs.front());
 }
 
