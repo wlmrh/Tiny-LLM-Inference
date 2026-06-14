@@ -419,7 +419,7 @@ void Scheduler::add_request(Request request)
     waiting.push_back(request.request_id);
 }
 
-bool Scheduler::has_unfinished_requests()
+bool Scheduler::has_unfinished_requests() const
 {
     for (const auto& item : requests)
     {

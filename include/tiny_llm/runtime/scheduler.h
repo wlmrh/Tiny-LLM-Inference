@@ -118,7 +118,7 @@ public:
     void add_request(Request request);
 
     // 返回是否有未完成的 Request
-    bool has_unfinished_requests();
+    bool has_unfinished_requests() const;
     KVCache* kv_cache() const { return kvcache_manager.kv_cache(); }
 
 private:

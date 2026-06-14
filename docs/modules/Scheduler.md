@@ -47,7 +47,7 @@ Main interfaces:
 - `add_request(Request request)`: validates and enqueues a request.
 - `schedule()`: produces one `SchedulerOutput`.
 - `update_from_output(SchedulerOutput, ModelRunnerOutput)`: consumes sampled tokens and returns generated `EngineCoreOutput` messages.
-- `has_unfinished_requests()`: true when any request is waiting or running.
+- `has_unfinished_requests() const`: true when any request is waiting or running.
 - `kv_cache()`: exposes the bound cache for `ModelRunner`.
 
 ## `SchedulerOutput`
