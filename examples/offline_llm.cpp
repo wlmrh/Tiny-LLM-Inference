@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -37,41 +38,28 @@ int main(int argc, char** argv)
 
         tiny_llm::LLMOptions options(model, parse_device(device));
 
-        tiny_llm::UserSamplingParams sampling_params;
-        sampling_params.temperature = 0.0f;
-        sampling_params.top_p = 1.0f;
-        sampling_params.max_tokens = 8;
+        tiny_llm::LLMSamplingParams sampling_params;
+        sampling_params.temperature = 0.8f;
+        sampling_params.top_p = 0.95f;
 
         tiny_llm::LLM llm(options);
         const std::vector<std::string> prompts = {
             "Hello, my name is",
             "The president of the United States is",
+            "The capital of France is",
+            "The future of AI is",
         };
-        for (size_t i = 0; i < prompts.size(); ++i)
-        {
-            std::cout << "prompt[" << i << "]: " << prompts[i] << "\n";
-            std::cout << "output[" << i << "]: " << std::flush;
-        }
 
         const std::vector<tiny_llm::CompletionOutput> outputs =
-            llm.generate_stream(prompts, sampling_params, [](const tiny_llm::CompletionStreamOutput& output) {
-                if (!output.delta_text.empty())
-                {
-                    std::cout << "\nstream[" << output.prompt_index << "]: " << output.delta_text << std::flush;
-                }
-            });
+            llm.generate(prompts, sampling_params);
 
-        std::cout << "\n";
+        std::cout << "\nGenerated Outputs:\n";
+        std::cout << "------------------------------------------------------------\n";
         for (const tiny_llm::CompletionOutput& output : outputs)
         {
-            std::cout << "final prompt: " << output.prompt << "\n";
-            std::cout << "final output: " << output.text << "\n";
-            std::cout << "tokens:";
-            for (const int32_t token_id : output.token_ids)
-            {
-                std::cout << ' ' << token_id;
-            }
-            std::cout << "\nfinish_reason: " << output.finish_reason << "\n";
+            std::cout << "Prompt:    " << output.prompt << "\n";
+            std::cout << "Output:    " << output.text << "\n";
+            std::cout << "------------------------------------------------------------\n";
         }
     }
     catch (const std::exception& e)
