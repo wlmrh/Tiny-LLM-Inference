@@ -50,4 +50,4 @@ The boolean return value is true when the scheduler had at least one scheduled t
 - `prompt_token_ids = EngineCoreRequest::prompt_token_ids`
 - `sampling_params = EngineCoreRequest::sampling_params`
 
-The scheduler initializes `_all_token_ids`, `status`, and `num_computed` when the request is enqueued.
+The scheduler initializes `context_token_ids`, `status`, and `num_computed_tokens` when the request is enqueued.

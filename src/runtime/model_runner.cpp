@@ -600,7 +600,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
         prepared.sample_row_offsets.push_back(static_cast<int32_t>(flat_token_index - 1));
         batch.req_ids.push_back(req_data.req_id);
         batch.sampling_params.push_back(req_data.sampling_params);
-        batch.token_histories.push_back(req_data.all_token_ids);
+        batch.token_histories.push_back(req_data.context_token_ids);
         ++seq_index;
     }
 

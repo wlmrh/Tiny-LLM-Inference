@@ -17,9 +17,9 @@ Attributes:
 - `request_id`: internal numeric request ID.
 - `sampling_params`: normalized `SamplingParams`.
 - `status`: `WAITING`, `RUNNING`, or `FINISHED`.
-- `num_computed`: number of tokens whose KV cache has been computed.
+- `num_computed_tokens`: number of tokens whose KV cache has been computed.
 - `prompt_token_ids`: immutable prompt tokens.
-- `_all_token_ids`: full context, initialized to prompt tokens and extended with generated tokens.
+- `context_token_ids`: full context, initialized to prompt tokens and extended with generated tokens.
 
 ## Lifecycle
 
@@ -31,7 +31,7 @@ WAITING
   -> erased after cleanup
 ```
 
-When a request is preempted, `_all_token_ids` is not reset. Only `num_computed` is reset, so the scheduler recomputes prompt plus generated context.
+When a request is preempted, `context_token_ids` is not reset. Only `num_computed_tokens` is reset, so the scheduler recomputes prompt plus generated context.
 
 ## Frontend Request State
 

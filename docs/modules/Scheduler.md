@@ -70,7 +70,7 @@ Attributes:
 - `prompt_token_count`: original prompt length.
 - `block_tables`: rank-2 host table `[layer][logical_block] -> physical_block_id`.
 - `sampling_params`: normalized request sampling parameters.
-- `all_token_ids`: full prompt plus generated-token history before sampling this step.
+- `context_token_ids`: full prompt plus generated-token history before sampling this step.
 
 `ModelRunner` uses the all-layer `block_tables` contract directly.
 
@@ -83,8 +83,8 @@ Attributes:
 
 For each request:
 
-- If `num_computed < context_token_count`, schedule a prefill chunk.
-- Otherwise schedule one decode token by replaying the last token in `_all_token_ids`.
+- If `num_computed_tokens < context_token_count`, schedule a prefill chunk.
+- Otherwise schedule one decode token by replaying the last token in `context_token_ids`.
 - Allocate enough KV slots before adding the request to the output.
 - Refresh all per-layer block tables after allocation.
 
@@ -96,10 +96,10 @@ When `KVCacheManager::allocate_slots()` fails, the scheduler scans the back of `
 
 - KV sequence state is ended and blocks are released.
 - `status` becomes `WAITING`.
-- `num_computed` becomes `0`.
+- `num_computed_tokens` becomes `0`.
 - the request is removed from `running` and pushed to the front of `waiting`.
 
-The request's `_all_token_ids` is preserved. This means recomputation includes the original prompt and already-generated context, which avoids losing generated tokens after preemption.
+The request's `context_token_ids` is preserved. This means recomputation includes the original prompt and already-generated context, which avoids losing generated tokens after preemption.
 
 ## Updating From Model Output
 
@@ -107,11 +107,11 @@ The request's `_all_token_ids` is preserved. This means recomputation includes t
 
 1. Cleanup of requests that were already `FINISHED`.
 2. Mark scheduled requests as running.
-3. Advance `num_computed` for prefill tokens.
+3. Advance `num_computed_tokens` for prefill tokens.
 4. Read sampled token IDs from `ModelRunnerOutput`.
-5. Append sampled token to `_all_token_ids`.
+5. Append sampled token to `context_token_ids`.
 6. Emit `EngineCoreOutput`.
 7. Finish requests by stop token or max generated length.
 8. Release KV blocks and erase finished requests.
 
-During prefill, the final prefill row sample is emitted as the first generated token. During decode, `num_computed` advances after appending the sampled token.
+During prefill, the final prefill row sample is emitted as the first generated token. During decode, `num_computed_tokens` advances after appending the sampled token.

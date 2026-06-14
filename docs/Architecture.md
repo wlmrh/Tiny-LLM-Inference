@@ -101,7 +101,7 @@ Request work is split into:
 - prefill chunks: one or more prompt/context tokens, limited by `max_prefill_tokens_per_step`;
 - decode steps: one generated-token replay per running request.
 
-KV capacity is allocated before a request is added to the step output. If there is not enough KV capacity, the scheduler preempts a tail running request, releases its KV state, resets its `num_computed`, and pushes it back to the front of `waiting` so its full prompt plus generated context can be recomputed.
+KV capacity is allocated before a request is added to the step output. If there is not enough KV capacity, the scheduler preempts a tail running request, releases its KV state, resets its `num_computed_tokens`, and pushes it back to the front of `waiting` so its full prompt plus generated context can be recomputed.
 
 ## KV Cache Model
 

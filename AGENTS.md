@@ -48,7 +48,7 @@ If the user explicitly requests local project edits, modify files locally but do
 - Dispatch by tensor device, not compile flag alone. CPU tensors in CUDA builds must remain valid on CPU paths.
 - Runtime KV block bytes for LLaMA/Qwen2 must be `2 * block_size_tokens * (num_key_value_heads * head_dim) * sizeof(float)`.
 - `RuntimeContext` carries `slot_mapping[B]`, `seq_indices[B]`, `context_lens[num_seqs]`, and rank-3 `block_tables[num_layers, num_seqs, max_blocks_per_seq]`.
-- When prefill finishes, the sample from the final prefill row is the first generated token. Do not drop it or double-increment `num_computed`.
+- When prefill finishes, the sample from the final prefill row is the first generated token. Do not drop it or double-increment `num_computed_tokens`.
 - Prefer fail-fast `std::runtime_error` with contextual prefixes for invalid config, shapes, dtype, files, token IDs, allocator exhaustion, and tokenizer/FFI failures.
 
 ## Tokenizer And HF Model Notes

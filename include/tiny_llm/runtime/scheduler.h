@@ -29,7 +29,7 @@ struct RequestData {
     int32_t prompt_token_count = 0;
     std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id
     SamplingParams sampling_params;
-    std::vector<int32_t> all_token_ids;
+    std::vector<int32_t> context_token_ids;
 };
 
 /**
@@ -72,13 +72,13 @@ public:
     size_t estimate_append_new_blocks(
         int32_t core_seq_id,
         bool kv_started,
-        int32_t num_computed) const;
+        int32_t num_computed_tokens) const;
 
     size_t estimate_prefill_new_blocks(
         int32_t core_seq_id,
         bool kv_started,
         int32_t prompt_tokens,
-        int32_t num_computed,
+        int32_t num_computed_tokens,
         int32_t prefill_tokens) const;
 
     void refresh_block_tables(

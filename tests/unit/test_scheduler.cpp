@@ -128,7 +128,8 @@ TEST(SchedulerTest, ChunksPrefillAndEmitsSampleWhenPromptCompletes)
     EXPECT_EQ(second.scheduled_reqs[0].new_token_ids, std::vector<int32_t>({12}));
     auto second_outputs = fixture.scheduler.update_from_output(second, sampled({{1, 41}}));
     ASSERT_EQ(second_outputs.size(), 1u);
-    EXPECT_EQ(second_outputs.at(1).new_token_id, 41);
+    EXPECT_EQ(second_outputs.front().internal_id, 1u);
+    EXPECT_EQ(second_outputs.front().new_token_id, 41);
 }
 
 TEST(SchedulerTest, SpreadsPrefillBudgetAcrossWaitingRequests)
@@ -176,7 +177,9 @@ TEST(SchedulerTest, DecodeStepConsumesLastGeneratedTokenAndStopsByLength)
 
     tiny_llm::SchedulerOutput prefill = fixture.scheduler.schedule();
     auto prefill_outputs = fixture.scheduler.update_from_output(prefill, sampled({{1, 6}}));
-    ASSERT_EQ(prefill_outputs.at(1).new_token_id, 6);
+    ASSERT_EQ(prefill_outputs.size(), 1u);
+    EXPECT_EQ(prefill_outputs.front().internal_id, 1u);
+    EXPECT_EQ(prefill_outputs.front().new_token_id, 6);
 
     tiny_llm::SchedulerOutput decode = fixture.scheduler.schedule();
     ASSERT_EQ(decode.scheduled_reqs.size(), 1u);
@@ -184,7 +187,8 @@ TEST(SchedulerTest, DecodeStepConsumesLastGeneratedTokenAndStopsByLength)
     EXPECT_EQ(decode.scheduled_reqs[0].new_token_ids, std::vector<int32_t>({6}));
     auto decode_outputs = fixture.scheduler.update_from_output(decode, sampled({{1, 7}}));
     ASSERT_EQ(decode_outputs.size(), 1u);
-    EXPECT_EQ(decode_outputs.at(1).new_token_id, 7);
+    EXPECT_EQ(decode_outputs.front().internal_id, 1u);
+    EXPECT_EQ(decode_outputs.front().new_token_id, 7);
     EXPECT_FALSE(fixture.scheduler.has_unfinished_requests());
 }
 
@@ -196,7 +200,8 @@ TEST(SchedulerTest, StopsByStopTokenAndCleansFinishedRequest)
     tiny_llm::SchedulerOutput prefill = fixture.scheduler.schedule();
     auto outputs = fixture.scheduler.update_from_output(prefill, sampled({{1, 9}}));
     ASSERT_EQ(outputs.size(), 1u);
-    EXPECT_EQ(outputs.at(1).new_token_id, 9);
+    EXPECT_EQ(outputs.front().internal_id, 1u);
+    EXPECT_EQ(outputs.front().new_token_id, 9);
     EXPECT_FALSE(fixture.scheduler.has_unfinished_requests());
 
     tiny_llm::SchedulerOutput empty = fixture.scheduler.schedule();
