@@ -29,7 +29,7 @@ Torch is discovered first so `TORCH_CXX_FLAGS` can be propagated globally before
 - `hf_safetensor_dump`: inspect safetensor keys, shapes, dtype, and metadata.
 - `llama_logits_dump`: dump final logits for Python/Transformers comparison.
 - `llama_tensor_dump`: dump intermediate tensors for alignment.
-- `llama_engine_generate`: run greedy generation and print JSONL outputs.
+- `llama_engine_generate`: run deterministic `temperature=0` generation and print JSONL outputs.
 
 `llama_engine_generate` supports:
 
@@ -76,6 +76,7 @@ Benchmark files:
 - `benchmark/llama_engine_benchmark.cpp`
 - `benchmark/industrial_benchmark.py`
 - `benchmark/transformers_generate_benchmark.py`
+- `benchmark/vllm_generate_benchmark.py`
 - `benchmark/run_benchmark_comparison.py`
 
 Benchmark policy:

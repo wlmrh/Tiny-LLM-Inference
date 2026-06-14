@@ -38,7 +38,7 @@ Prefer default construction plus field assignment for public sampling params ins
 
 ## Interfaces
 
-- `sample_greedy_rows(logits, sample_rows, vocab_size, token_histories, sampling_params)`: samples selected rows from a logits tensor.
+- `sample_greedy_rows(logits, sample_rows, vocab_size, token_histories, sampling_params, request_ids)`: samples selected rows from a logits tensor. The function name is historical; it also handles configured seeded non-greedy sampling.
 
 `sample_greedy_rows()` returns a vector with length equal to `logits.size(0)`. Non-sampled rows are `-1`.
 
@@ -59,7 +59,7 @@ History token IDs are validated against the model vocabulary.
 The CUDA greedy path keeps logits on the GPU:
 
 - Without repetition penalty, it uses `argmax(dim=1)` for dense sampled rows or selects sampled rows first for non-dense rows.
-- With repetition penalty, it clones each selected row, adjusts history-token logits on GPU, performs GPU argmax, and copies only sampled token IDs back to CPU.
+- With repetition penalty, it builds row/history metadata in reusable thread-local CUDA scratch tensors, launches CUDA kernels to mark repetition history and run argmax with penalty adjustment, and copies only sampled token IDs back to CPU.
 
 This avoids full-logit CPU transfer for Qwen generation configs that use repetition penalty. Non-greedy CUDA sampling currently uses the shared CPU sampling path for correctness and deterministic behavior.
 

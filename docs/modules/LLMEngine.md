@@ -38,19 +38,20 @@ Direct `LLMEngine` construction is useful for tests, tools, and callers that alr
 
 - `explicit LLMEngine(const EngineArgs& args)`: constructs `EngineCore`, `InputPreprocessor`, and `OutPreprocessor` from shared runtime arguments. The tokenizer must be available because both preprocessors depend on it.
 - `~LLMEngine()`: destroys frontend state and the owned core. The destructor is out-of-line so the header can forward-declare `EngineCore`.
-- Move construction and move assignment: supported for ownership transfer. Copy construction and copy assignment are disabled because the engine owns runtime state.
+- Copy construction and copy assignment are disabled by owned runtime state. Move construction and move assignment are not exposed as public API.
 - `add_request(const std::string& prompt, const UserSamplingParams& user_params, const std::string& ext_request_id)`: tokenizes and validates one prompt, assigns an internal ID, enqueues the core request, registers output state, and returns the internal ID. An empty external ID is replaced with a generated `req-<internal_id>` value.
 - `has_unfinished_requests() const`: returns whether the frontend output processor still has unfinished request state. This is the condition used by `LLM` generation loops.
 - `step()`: advances the token-level runtime once and returns zero or more `UserOutput` objects. A chunked prefill step can legitimately return no user output while work was scheduled.
-- `last_step_profile() const`: returns the latest profile stored by `EngineCore`; `LLMEngine` does not keep a duplicate profiling copy.
+- `last_step_profile() const`: returns the profile cached from the most recent user-visible `EngineCore::step()`.
 
 ## Private State
 
 - `core_`: owned `EngineCore`, responsible for scheduler/model-runner orchestration over token IDs.
+- `last_step_profile_`: cached profile copied from `EngineCore` immediately after the main step.
 - `input_preprocessor_`: frontend request translator. It owns the internal request ID counter and the external-ID uniqueness map.
 - `output_preprocessor_`: frontend output assembler. It owns per-request decoded text, generated token IDs, finish state, and stop-condition checks.
 
-There is no separate `last_step_profile_` field in `LLMEngine`; keeping a second copy would duplicate `EngineCore` state. Finished scheduler and KV state is released inside `Scheduler::update_from_output()`, so `LLMEngine::step()` does not run an extra hidden cleanup step after the final user output.
+After the frontend output processor has no unfinished states, `LLMEngine::step()` performs one final `EngineCore::step()` cleanup call and verifies it produced no outputs or scheduled tokens. This keeps the public generation loop driven by frontend output state while still giving the core a final chance to release scheduler/KV state.
 
 ## Step Flow
 
@@ -59,7 +60,8 @@ There is no separate `last_step_profile_` field in `LLMEngine`; keeping a second
 1. Call `EngineCore::step()` to schedule and execute one token-level step.
 2. Pass core outputs to `OutPreprocessor::process_outputs()`.
 3. For every finished `UserOutput`, release its external request ID binding from `InputPreprocessor`.
-4. Return the user-facing outputs for this step.
+4. If no frontend request remains unfinished, call one cleanup core step and assert that it is empty.
+5. Return the user-facing outputs for this step.
 
 The method is single-process and synchronous. It assumes callers repeatedly call `step()` while `has_unfinished_requests()` is true.
 

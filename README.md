@@ -1,6 +1,6 @@
 # Tiny-LLM-Inference
 
-Tiny-LLM-Inference is a compact C++17 decoder-only LLM inference engine inspired by vLLM. It focuses on the core runtime pieces needed for offline generation: request scheduling, paged KV cache management, Hugging Face weight/tokenizer loading, model execution, and greedy sampling.
+Tiny-LLM-Inference is a compact C++17 decoder-only LLM inference engine inspired by vLLM. It focuses on the core runtime pieces needed for offline generation: request scheduling, paged KV cache management, Hugging Face weight/tokenizer loading, model execution, default greedy decoding, and seeded temperature/top-k/top-p sampling.
 
 The current runtime targets LLaMA-style checkpoints, including small LLaMA/SmolLM2-compatible models and Qwen2-family models such as Qwen2.5-1.5B-Instruct.
 
@@ -79,7 +79,7 @@ CUDA:
   "你好"
 ```
 
-`llama_engine_generate` prints one JSON object per prompt and also supports `--kv-num-blocks N`.
+`llama_engine_generate` prints one JSON object per prompt and also supports `--kv-num-blocks N`. It runs deterministic `temperature=0` generation and applies `generation_config.json` repetition penalty when present.
 
 The higher-level API example can be run with:
 

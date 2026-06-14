@@ -17,7 +17,7 @@
 - Build paged-attention runtime metadata.
 - Reset per-step workspace through `ExecutionContext::StepGuard`.
 - Run `Model::forward`.
-- Greedily sample selected rows with optional repetition penalty.
+- Sample selected rows according to normalized `SamplingParams`. The default path is greedy; seeded non-greedy sampling supports temperature, top-k, and top-p.
 - Return sampled token IDs and profiling data.
 
 ## Attributes
@@ -104,6 +104,8 @@ sample_greedy_rows(logits,
 ```
 
 It then maps sampled token IDs back to request IDs through `req_id_to_index`.
+
+If the model returns compact logits for only `sample_row_offsets`, `ModelRunner` remaps sample rows to the compact output. This lets prefill steps compute the LM head only for request-final rows while preserving the older full-row logits contract.
 
 ## Profiling
 

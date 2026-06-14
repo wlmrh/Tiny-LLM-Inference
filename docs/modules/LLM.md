@@ -38,14 +38,13 @@ This class owns deployment resources and passes non-owning handles into lower la
 - `parallel_config`: CPU or single CUDA device selection.
 - `weight_file`: requested safetensors file. The default `model.safetensors` path also allows the lower model runner to fall back to sorted safetensors shards.
 - `max_num_seqs`: default active sequence limit used when scheduler config does not set one.
-- `max_num_batched_tokens`: default per-step prefill token budget.
 - `max_tokens`: default generated-token limit when user sampling params do not override it.
 - `block_size_tokens`: token capacity per KV block.
 - `kv_num_blocks`: number of physical KV blocks to allocate.
 - `workspace_pool_size`: bytes reserved for the step-local `StackAllocator`.
-- `scheduler_config`: low-level scheduler overrides for policy, preemption, running-request limit, and prefill budget.
+- `scheduler_config`: low-level scheduler overrides for policy, preemption, running-request limit, and prefill token budget through `max_prefill_tokens_per_step`.
 
-The top-level sequence and token limits are convenience defaults. If `scheduler_config.max_running_requests` or `scheduler_config.max_prefill_tokens_per_step` is explicitly set, that lower-level value is preserved.
+The top-level sequence and generated-token limits are convenience defaults. If `scheduler_config.max_running_requests` or `scheduler_config.max_prefill_tokens_per_step` is explicitly set, that lower-level value is preserved.
 
 ## Output Types
 

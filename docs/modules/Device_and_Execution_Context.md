@@ -11,7 +11,7 @@ This module centralizes CPU/CUDA device selection and per-step execution resourc
 - `include/tiny_llm/runtime/execution_context.h`
 - `src/runtime/execution_context.cpp`
 - `include/tiny_llm/runtime/runtime_context.h`
-- `include/tiny_llm/runtime/profiling_stats.h`
+- `include/tiny_llm/runtime/runtime_stats.h`
 - `include/tiny_llm/runtime/profiling.h`
 
 ## `ParallelConfig`

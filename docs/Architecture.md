@@ -1,6 +1,6 @@
 # Tiny-LLM-Inference Architecture
 
-Tiny-LLM-Inference is a small, single-process inference engine inspired by vLLM. The public runtime accepts text prompts, converts them into token IDs, schedules prefill/decode work over active requests, runs a LLaMA-style causal language model, samples one token per scheduled sequence, and streams decoded text back to the caller.
+Tiny-LLM-Inference is a small, single-process inference engine inspired by vLLM. The public runtime accepts text prompts, converts them into token IDs, schedules prefill/decode work over active requests, runs a LLaMA-style causal language model, samples one token per scheduled sequence from normalized sampling parameters, and streams decoded text back to the caller.
 
 The codebase is intentionally layered:
 
@@ -8,7 +8,7 @@ The codebase is intentionally layered:
 - `LLMEngine` is the text/token boundary. It handles prompt preprocessing, tokenizer validation, output decoding, and user-facing request IDs.
 - `EngineCore` is the token-level runtime loop. It owns the `Scheduler` and `ModelRunner`.
 - `Scheduler` owns request state, waiting/running queues, KV block allocation, chunked prefill/decode decisions, and completion cleanup.
-- `ModelRunner` converts scheduler output into dense tensors, builds `RuntimeContext`, invokes `Model::forward`, and samples final rows.
+- `ModelRunner` converts scheduler output into dense tensors, builds `RuntimeContext`, invokes `Model::forward`, and samples final rows. The default path is greedy; seeded non-greedy sampling supports temperature, top-k, and top-p.
 - `Model` implementations are reusable `torch::nn::Module` graphs. The current production model path is `LlamaForCausalLM`, which also supports Qwen2-family checkpoint shapes used by Qwen2.5-1.5B-Instruct.
 - `operators` provide CPU/CUDA tensor kernels and torch-backed fallback paths.
 
@@ -117,13 +117,7 @@ The attention runtime receives `slot_mapping`, `seq_indices`, `context_lens`, ra
 
 ## Model Runtime
 
-`LlamaForCausalLM` is the current causal LM implementation. It contains:
-
-- `LlamaModel`
-- one `Embedding`
-- a vector of `LlamaDecoderLayer`
-- final `RMSNorm`
-- an LM head `Linear`
+`LlamaForCausalLM` is the current causal LM implementation. It owns `LlamaModel` and an LM head `Linear`. `LlamaModel` contains token embedding, the vector of `LlamaDecoderLayer`, and final `RMSNorm`.
 
 Each decoder layer contains:
 
@@ -138,7 +132,7 @@ The model path supports LLaMA-family and Qwen2-family checkpoints that match thi
 
 `ParallelConfig` selects CPU or one CUDA device. Tensor and allocator paths dispatch by actual tensor/device state, not compile flag alone. CPU tensors remain valid in CUDA builds.
 
-CUDA builds add CUDA kernels for selected operators while retaining torch or CPU implementations where appropriate. The current paged attention CUDA path is a correctness-oriented bridge, not a final optimized kernel; fallback/reference paths may still inspect CPU metadata, while optimized full-prefill dispatch uses precomputed segment descriptors.
+CUDA builds add CUDA kernels for selected operators while retaining torch or CPU implementations where appropriate. The paged attention CUDA path now includes custom paged-attention kernels and a full-prefill SDPA path when precomputed segment descriptors are valid; fallback/reference paths remain for unsupported cases. This is still an evolving implementation, not a final optimized kernel.
 
 ## Build Layout
 
@@ -165,6 +159,6 @@ Current supported behavior:
 - LLaMA/SmolLM2-compatible checkpoints;
 - Qwen2-family checkpoints with tied embeddings, GQA, projection bias, large RoPE theta, and optional `unk_token_id`;
 - single-file `model.safetensors` and sorted sharded `*.safetensors` in `ModelRunner`;
-- greedy decoding with repetition penalty and stop-token/max-length termination.
+- default greedy decoding, HuggingFace-style repetition penalty, seeded temperature/top-k/top-p sampling, and stop-token/max-length termination.
 
 Important current limitations are recorded in [Design Review Notes](Design_Review_Notes.md).

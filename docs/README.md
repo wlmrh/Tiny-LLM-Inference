@@ -18,7 +18,7 @@ This directory contains the current English documentation for the Tiny-LLM-Infer
 - [KV Cache and Memory](modules/KV_Cache_and_Memory.md): `KVCache`, `KVCacheManager`, `BlockAllocator`, and `StackAllocator`.
 - [Model Runner](modules/Model_Runner.md): `SchedulerOutput` flattening, `PreparedInputs`, model invocation, sampling, profiling, and HF model construction.
 - [Tokenizer and Processors](modules/Tokenizer_and_Processors.md): tokenizer contract, HuggingFace tokenizer loading, input validation, output decoding, and stop handling.
-- [Sampling](modules/Sampling.md): greedy sampling, repetition penalty, generation config, and current sampling limitations.
+- [Sampling](modules/Sampling.md): default greedy sampling, repetition penalty, seeded non-greedy sampling, generation config, and CUDA/CPU sampling paths.
 - [Models and Weights](modules/Models_and_Weights.md): LLaMA/Qwen-compatible model modules, HF config loading, safetensors loading, and weight binding.
 - [Operators](modules/Operators.md): matmul, RMSNorm, LLaMA helper ops, RoPE, and paged attention backends.
 - [Device and Execution Context](modules/Device_and_Execution_Context.md): CPU/CUDA device selection, execution context, runtime context, and profiling.

@@ -32,10 +32,10 @@ If the user explicitly requests local project edits, modify files locally but do
 
 - `Scheduler` owns request state, `waiting`/`running` queues, token budgets, chunked prefill/decode selection, simplified tail preemption, and the runtime `KVCache`.
 - `EngineCore::step()` calls `Scheduler::schedule()`, `ModelRunner::run()`, then `Scheduler::update_from_output()`. `EngineCore` passes the scheduler-owned `KVCache*` into `ModelRunner`; do not create a second runner-local KV cache for the same engine.
-- `ModelRunner` loads either `model.safetensors` or all sorted `*.safetensors` shards, prepares `PreparedInputs`, builds `RuntimeContext`, calls `Model::forward(const PreparedInputs&, RuntimeContext&)`, and greedily samples request-final rows.
+- `ModelRunner` loads either `model.safetensors` or all sorted `*.safetensors` shards, prepares `PreparedInputs`, builds `RuntimeContext`, calls `Model::forward(const PreparedInputs&, RuntimeContext&)`, and samples request-final rows. Default sampling is greedy (`temperature == 0`); seeded non-greedy sampling supports `temperature`, `top_k`, and `top_p`.
 - LLaMA and Qwen2 reuse the LLaMA-style runtime path. `LlamaForCausalLM` owns `LlamaModel` plus LM head; model modules stay limited to reusable layers such as `Embedding`, `Linear`, `RMSNorm`, and `RotaryEmbedding`.
 - Attention reads paged metadata from `RuntimeContext::attention_metadata()`. New model code should pass metadata through `RuntimeContext`, not through global setters. Full-prefill segment descriptors are derived by `ModelRunner` per step; they are not a scheduler contract.
-- CUDA paged attention is currently a correctness bridge using libtorch operations and fallback CPU-side metadata handling. Optimized full-prefill paths may use precomputed segments to avoid per-layer CUDA metadata reads, but do not treat this as the final optimized kernel.
+- CUDA paged attention uses custom CUDA kernels for paged decode/small batches, a full-prefill SDPA path when segment metadata permits it, and torch/reference fallbacks where needed. Treat it as an evolving implementation, not the final optimized kernel.
 
 ## Coding Rules
 
@@ -120,7 +120,7 @@ Useful direct runs:
 - `tools/hf_safetensor_dump.cpp`: inspect safetensors weights and metadata.
 - `tools/llama_logits_dump.cpp`: compare C++ logits through `scripts/compare_llama_logits_with_transformers.py`.
 - `tools/llama_tensor_dump.cpp`: compare intermediate tensors through `scripts/compare_llama_tensors_with_transformers.py`.
-- `tools/llama_engine_generate.cpp`: run greedy generation and JSONL output; also used by generation comparison and smoke scripts.
+- `tools/llama_engine_generate.cpp`: run deterministic generation and JSONL output; also used by generation comparison and smoke scripts.
 - `benchmark/llama_engine_benchmark.cpp`: end-to-end TinyLLM benchmark binary.
 - `benchmark/transformers_generate_benchmark.py`: Hugging Face Transformers baseline.
 - `benchmark/vllm_generate_benchmark.py`: vLLM performance baseline.

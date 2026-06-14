@@ -78,6 +78,7 @@ Construction behavior:
 Important attributes:
 
 - `core_`: owned `EngineCore`.
+- `last_step_profile_`: profile copied from the latest user-visible core step.
 - `input_preprocessor_`: prompt tokenization, request ID assignment, external-ID tracking, and sampling normalization.
 - `output_preprocessor_`: incremental decoding, output state, and finish detection.
 
@@ -88,7 +89,7 @@ Main interfaces:
 - `step()`: advances the runtime once and returns user-facing outputs.
 - `last_step_profile()`: returns the most recent profile from `EngineCore`.
 
-Finished scheduler/KV state is released during `Scheduler::update_from_output()`. `LLMEngine::step()` does not run a hidden cleanup step after final user output.
+Finished scheduler/KV state is released by scheduler update paths and a final empty cleanup core step after frontend output state is complete. The cleanup step is validated to produce no user-visible outputs and no scheduled tokens.
 
 ## `EngineArgs`
 
