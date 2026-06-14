@@ -6,7 +6,6 @@
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -282,7 +281,7 @@ void LLM::initialize()
         args.model_type = EngineModelType::kHFLlamaSafeTensor;
         args.hf_model_dir = options_.model;
         args.hf_weight_file = options_.weight_file;
-        args.max_batch_size = std::max(options_.max_num_seqs, scheduler_config.max_prefill_tokens_per_step);
+        args.max_batch_size = options_.max_num_seqs;
         args.workspace = workspace_.get();
         args.kv_num_layers = config.num_hidden_layers;
         args.kv_block_size_tokens = options_.block_size_tokens;
