@@ -2,9 +2,13 @@
 
 #include <chrono>
 
-#include "tiny_llm/runtime/runtime_context.h"
+#include <c10/core/Device.h>
+
+#include "tiny_llm/runtime/runtime_stats.h"
 
 namespace tiny_llm {
+
+class RuntimeContext;
 
 class ScopedRuntimeProfile {
 public:
@@ -17,8 +21,9 @@ public:
 private:
     using Clock = std::chrono::steady_clock;
 
-    RuntimeContext& ctx_;
-    double RuntimeProfilingStats::*field_;
+    RuntimeProfilingStats* stats_ = nullptr;
+    double RuntimeProfilingStats::*field_ = nullptr;
+    c10::Device device_{c10::kCPU};
     bool enabled_ = false;
     Clock::time_point start_{};
 };

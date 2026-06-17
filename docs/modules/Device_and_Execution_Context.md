@@ -100,4 +100,4 @@ This object is the preferred way to pass per-step runtime metadata through model
 
 `RuntimeProfilingStats::add()` aggregates stats across generation steps.
 
-`ScopedRuntimeProfile` records model component timing when detailed profiling is enabled. CUDA paths synchronize around profiled regions to make timings meaningful.
+`ScopedRuntimeProfile` records model component timing when detailed profiling is enabled. The helper stores only the active stats pointer and device, while `RuntimeContext` remains the source of those values. CUDA paths synchronize around profiled regions to make timings meaningful.
