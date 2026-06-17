@@ -6,7 +6,7 @@ This module provides persistent paged KV cache storage and short-lived per-step 
 
 - `include/tiny_llm/runtime/kv_cache.h`
 - `src/runtime/kv_cache.cpp`
-- `include/tiny_llm/runtime/scheduler.h`
+- `include/tiny_llm/runtime/kv_cache_manager.h`
 - `src/runtime/scheduler.cpp`
 - `include/tiny_llm/core/allocator.h`
 - `src/core/allocator_common.cpp`

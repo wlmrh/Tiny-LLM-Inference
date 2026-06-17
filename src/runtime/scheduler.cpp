@@ -1,6 +1,7 @@
 #include "tiny_llm/runtime/scheduler.h"
 
 #include "tiny_llm/runtime/engine_args.h"
+#include "tiny_llm/runtime/kv_cache_manager.h"
 #include "tiny_llm/runtime/kv_cache.h"
 
 #include <algorithm>
@@ -72,6 +73,10 @@ KVCacheManager::KVCacheManager(KVCache* kv)
 }
 
 KVCacheManager::~KVCacheManager() = default;
+
+KVCacheManager::KVCacheManager(KVCacheManager&&) noexcept = default;
+
+KVCacheManager& KVCacheManager::operator=(KVCacheManager&&) noexcept = default;
 
 void KVCacheManager::bind(KVCache* kv)
 {
@@ -355,7 +360,8 @@ bool KVCacheManager::allocate_slots(
 }
 
 Scheduler::Scheduler(SchedulerConfig config)
-    : max_num_scheduled_tokens(
+    : kvcache_manager(std::make_unique<KVCacheManager>()),
+      max_num_scheduled_tokens(
           std::max<int64_t>(1, static_cast<int64_t>(config.max_prefill_tokens_per_step))),
       max_running_requests(config.max_running_requests),
       enable_preemption(config.enable_preemption)
@@ -372,11 +378,11 @@ Scheduler::Scheduler(const EngineArgs& args)
         {
             throw std::runtime_error("Scheduler: KV cache device does not match EngineArgs parallel_config.");
         }
-        kvcache_manager.bind(args.kv);
+        kvcache_manager->bind(args.kv);
         return;
     }
 
-    kvcache_manager.init_owned(
+    kvcache_manager->init_owned(
         args.kv_num_layers,
         args.kv_block_size_tokens,
         args.kv_num_blocks,
@@ -388,8 +394,10 @@ Scheduler::Scheduler(const EngineArgs& args)
 Scheduler::Scheduler(KVCache* kv, SchedulerConfig config)
     : Scheduler(config)
 {
-    kvcache_manager.bind(kv);
+    kvcache_manager->bind(kv);
 }
+
+Scheduler::~Scheduler() = default;
 
 void Scheduler::add_request(Request request)
 {
@@ -428,7 +436,7 @@ void Scheduler::add_request(Request request)
     waiting.push_back(request.request_id);
 }
 
-bool Scheduler::has_unfinished_requests()
+bool Scheduler::has_unfinished_requests() const
 {
     for (const auto& item : requests)
     {
@@ -440,27 +448,14 @@ bool Scheduler::has_unfinished_requests()
     return false;
 }
 
-size_t Scheduler::running_request_count() const
+KVCache* Scheduler::kv_cache() const
 {
-    size_t count = 0;
-    for (const auto& item : requests)
-    {
-        if (item.second.status == RequestStatus::RUNNING)
-        {
-            ++count;
-        }
-    }
-    return count;
+    return kvcache_manager->kv_cache();
 }
 
-bool Scheduler::can_admit_waiting_request() const
+void Scheduler::preempt_request(uint64_t request_id)
 {
-    return max_running_requests == 0 || running_request_count() < max_running_requests;
-}
-
-void Scheduler::_preempt_request(Request request)
-{
-    Request* req = find_request(requests, request.request_id);
+    Request* req = find_request(requests, request_id);
     if (req == nullptr || req->status == RequestStatus::FINISHED)
     {
         return;
@@ -471,7 +466,7 @@ void Scheduler::_preempt_request(Request request)
     {
         try
         {
-            kvcache_manager.end_sequence(core_seq_id);
+            kvcache_manager->end_sequence(core_seq_id);
         }
         catch (const std::exception&)
         {
@@ -489,7 +484,7 @@ void Scheduler::_preempt_request(Request request)
 
 SchedulerOutput Scheduler::schedule()
 {
-    if (kvcache_manager.num_layers() <= 0)
+    if (kvcache_manager->num_layers() <= 0)
     {
         throw std::runtime_error("Scheduler::schedule: KVCacheManager is not initialized.");
     }
@@ -497,11 +492,25 @@ SchedulerOutput Scheduler::schedule()
     SchedulerOutput scheduler_output;
     int64_t remaining_token_budget = std::max<int64_t>(1, max_num_scheduled_tokens);
     bool preempted_during_running = false;
+    auto count_running = [&]() -> size_t {
+        size_t count = 0;
+        for (const auto& item : requests)
+        {
+            if (item.second.status == RequestStatus::RUNNING)
+            {
+                ++count;
+            }
+        }
+        return count;
+    };
+    auto can_admit_waiting = [&]() -> bool {
+        return max_running_requests == 0 || count_running() < max_running_requests;
+    };
     auto count_prefill_candidates = [&](const std::deque<uint64_t>& snapshot,
                                         size_t start_index,
                                         bool waiting_phase) -> int32_t {
         int32_t count = 0;
-        size_t admitted_running = running_request_count();
+        size_t admitted_running = count_running();
         for (size_t index = start_index; index < snapshot.size(); ++index)
         {
             const uint64_t candidate_id = snapshot[index];
@@ -556,7 +565,7 @@ SchedulerOutput Scheduler::schedule()
         while (true)
         {
             const bool started = req.status == RequestStatus::RUNNING;
-            if (kvcache_manager.allocate_slots(core_seq_id, started, req.num_computed, num_new_tokens))
+            if (kvcache_manager->allocate_slots(core_seq_id, started, req.num_computed, num_new_tokens))
             {
                 req.status = RequestStatus::RUNNING;
                 return true;
@@ -585,7 +594,7 @@ SchedulerOutput Scheduler::schedule()
             }
 
             const uint64_t victim_id = victim->request_id;
-            _preempt_request(*victim);
+            preempt_request(victim_id);
             if (is_running)
             {
                 preempted_during_running = true;
@@ -634,7 +643,7 @@ SchedulerOutput Scheduler::schedule()
             }
 
             std::vector<std::vector<int32_t>> block_tables;
-            kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+            kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
 
             RequestData req_data;
             req_data.req_id = request_id;
@@ -668,7 +677,7 @@ SchedulerOutput Scheduler::schedule()
         }
 
         std::vector<std::vector<int32_t>> block_tables;
-        kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+        kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
 
         RequestData req_data;
         req_data.req_id = request_id;
@@ -705,7 +714,7 @@ SchedulerOutput Scheduler::schedule()
             {
                 continue;
             }
-            if (req->status == RequestStatus::WAITING && !can_admit_waiting_request())
+            if (req->status == RequestStatus::WAITING && !can_admit_waiting())
             {
                 break;
             }
@@ -728,7 +737,7 @@ SchedulerOutput Scheduler::schedule()
                 }
 
                 std::vector<std::vector<int32_t>> block_tables;
-                kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+                kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
 
                 RequestData req_data;
                 req_data.req_id = request_id;
@@ -754,7 +763,7 @@ SchedulerOutput Scheduler::schedule()
             }
 
             std::vector<std::vector<int32_t>> block_tables;
-            kvcache_manager.refresh_block_tables(core_seq_id, true, block_tables);
+            kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
 
             RequestData req_data;
             req_data.req_id = request_id;
@@ -785,8 +794,8 @@ SchedulerOutput Scheduler::schedule()
 }
 
 std::map<int, EngineCoreOutput> Scheduler::update_from_output(
-    SchedulerOutput scheduler_output,
-    ModelRunnerOutput model_runner_output)
+    const SchedulerOutput& scheduler_output,
+    const ModelRunnerOutput& model_runner_output)
 {
     std::map<int, EngineCoreOutput> results;
 
@@ -817,7 +826,7 @@ std::map<int, EngineCoreOutput> Scheduler::update_from_output(
         {
             try
             {
-                kvcache_manager.end_sequence(static_cast<int32_t>(req.request_id));
+                kvcache_manager->end_sequence(static_cast<int32_t>(req.request_id));
             }
             catch (const std::exception&)
             {
