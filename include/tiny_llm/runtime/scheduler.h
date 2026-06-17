@@ -20,13 +20,13 @@ class KVCacheManager;
 class KVCache;
 
 struct RequestData {
-    uint64_t req_id = 0; // 请求 id
-    std::vector<int32_t> new_token_ids; // 本轮要计算的新 token 集合
-    int32_t num_computed_tokens = 0; // 已经计算过 kvcache 的 token 长度
-    int32_t prompt_token_count = 0; // Request prompt 长度
-    std::vector<std::vector<int32_t>> block_tables; // [layer][logical_block] -> physical block id
-    SamplingParams sampling_params; // 该 Requsest 的采样参数
-    std::vector<int32_t> context_token_ids; // 当前所有 token 的 id 序列
+    uint64_t req_id = 0; ///< Runtime request ID.
+    std::vector<int32_t> new_token_ids; ///< Tokens scheduled for this engine step.
+    int32_t num_computed_tokens = 0; ///< Prefix length of context_token_ids already present in KV.
+    int32_t prompt_token_count = 0; ///< Original prompt length.
+    std::vector<std::vector<int32_t>> block_tables; ///< [layer][logical_block] -> physical block id.
+    SamplingParams sampling_params; ///< Normalized request sampling parameters.
+    std::vector<int32_t> context_token_ids; ///< Full prompt plus generated-token history before this step.
 };
 
 /**

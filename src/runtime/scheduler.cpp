@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace tiny_llm {
 
@@ -16,6 +17,11 @@ namespace {
 int32_t context_token_count(const Request& request)
 {
     return static_cast<int32_t>(request.context_token_ids.size());
+}
+
+int32_t pending_context_token_count(const Request& request)
+{
+    return std::max<int32_t>(0, context_token_count(request) - request.num_computed_tokens);
 }
 
 int32_t generated_token_count(const Request& request)
@@ -51,6 +57,30 @@ void push_to_running_if_absent(std::deque<uint64_t>& running, uint64_t request_i
     {
         running.push_back(request_id);
     }
+}
+
+RequestData make_request_data(const Request& request,
+                              int32_t token_start,
+                              int32_t token_count,
+                              std::vector<std::vector<int32_t>> block_tables)
+{
+    RequestData req_data;
+    req_data.req_id = request.request_id;
+    req_data.num_computed_tokens = request.num_computed_tokens;
+    req_data.prompt_token_count = static_cast<int32_t>(request.prompt_token_ids.size());
+    req_data.sampling_params = request.sampling_params;
+    req_data.context_token_ids = request.context_token_ids;
+    req_data.block_tables = std::move(block_tables);
+    req_data.new_token_ids.reserve(static_cast<size_t>(token_count));
+
+    for (int32_t i = 0; i < token_count; ++i)
+    {
+        const int32_t token_index = token_start + i;
+        req_data.new_token_ids.push_back(
+            request.context_token_ids[static_cast<size_t>(token_index)]);
+    }
+
+    return req_data;
 }
 
 } // namespace
@@ -486,6 +516,12 @@ SchedulerOutput Scheduler::schedule()
     SchedulerOutput scheduler_output;
     int64_t remaining_token_budget = std::max<int64_t>(1, max_num_scheduled_tokens);
     bool preempted_during_running = false;
+
+    // The loops use queue snapshots, so skip an ID after it has been selected once.
+    auto already_scheduled = [&](uint64_t request_id) -> bool {
+        return scheduler_output.num_scheduled_tokens.find(request_id)
+               != scheduler_output.num_scheduled_tokens.end();
+    };
     auto count_running = [&]() -> size_t {
         size_t count = 0;
         for (const auto& item : requests)
@@ -500,16 +536,17 @@ SchedulerOutput Scheduler::schedule()
     auto can_admit_waiting = [&]() -> bool {
         return max_running_requests == 0 || count_running() < max_running_requests;
     };
-    auto count_prefill_candidates = [&](const std::deque<uint64_t>& snapshot,
-                                        size_t start_index,
-                                        bool waiting_phase) -> int32_t {
+    // Count later requests that still have history tokens missing from KV. The count
+    // is used only to choose this request's chunk size.
+    auto count_context_catchup_candidates = [&](const std::deque<uint64_t>& snapshot,
+                                                size_t start_index,
+                                                bool waiting_phase) -> int32_t {
         int32_t count = 0;
         size_t admitted_running = count_running();
         for (size_t index = start_index; index < snapshot.size(); ++index)
         {
             const uint64_t candidate_id = snapshot[index];
-            if (scheduler_output.num_scheduled_tokens.find(candidate_id)
-                != scheduler_output.num_scheduled_tokens.end())
+            if (already_scheduled(candidate_id))
             {
                 continue;
             }
@@ -522,7 +559,8 @@ SchedulerOutput Scheduler::schedule()
             {
                 if (candidate->status == RequestStatus::WAITING)
                 {
-                    if (max_running_requests != 0 && admitted_running >= max_running_requests)
+                    if (max_running_requests != 0
+                        && admitted_running >= max_running_requests)
                     {
                         break;
                     }
@@ -533,23 +571,34 @@ SchedulerOutput Scheduler::schedule()
             {
                 continue;
             }
-            if (candidate->num_computed_tokens < context_token_count(*candidate))
+            if (pending_context_token_count(*candidate) > 0)
             {
                 ++count;
             }
         }
         return std::max<int32_t>(1, count);
     };
-    auto fair_prefill_chunk = [&](int32_t remaining_prefill, int32_t candidate_count) -> int32_t {
+    // Divide the remaining token budget by the number of eligible requests, but
+    // still schedule at least one token for the current request.
+    auto fair_context_chunk = [&](int32_t pending_context_tokens, int32_t candidate_count) -> int32_t {
         const int64_t fair_budget =
             (remaining_token_budget + static_cast<int64_t>(candidate_count) - 1)
             / static_cast<int64_t>(candidate_count);
         return std::min<int32_t>(
-            remaining_prefill,
+            pending_context_tokens,
             static_cast<int32_t>(std::max<int64_t>(1, fair_budget)));
     };
-    // try to allocate `num_new_tokens` for req, whose current state is is_running.
-    auto try_allocate_with_tail_preempt = [&](Request& req, int32_t num_new_tokens, bool is_running) -> bool {
+    // Add one request to this step and update all token counters together.
+    auto append_scheduled_request = [&](RequestData req_data, int32_t scheduled_tokens) {
+        const uint64_t request_id = req_data.req_id;
+        scheduler_output.num_scheduled_tokens[request_id] = scheduled_tokens;
+        scheduler_output.scheduled_reqs.push_back(std::move(req_data));
+        remaining_token_budget -= scheduled_tokens;
+        scheduler_output.total_num_scheduled_tokens += scheduled_tokens;
+    };
+    // Make sure KV has room for the requested tokens. If it is full, preempt tail
+    // running requests and retry the allocation.
+    auto try_allocate_slots = [&](Request& req, int32_t num_new_tokens, bool from_running_pass) -> bool {
         if (num_new_tokens <= 0)
         {
             return false;
@@ -568,8 +617,8 @@ SchedulerOutput Scheduler::schedule()
             {
                 return false;
             }
-            // No enough Space for a the current request
-            // Find a legal Request from the back of the queue and preempt it
+
+            // Free KV space by preempting the tail running request.
             Request* victim = nullptr;
             for (auto it = running.rbegin(); it != running.rend(); ++it)
             {
@@ -589,7 +638,7 @@ SchedulerOutput Scheduler::schedule()
 
             const uint64_t victim_id = victim->request_id;
             preempt_request(victim_id);
-            if (is_running)
+            if (from_running_pass)
             {
                 preempted_during_running = true;
             }
@@ -609,9 +658,7 @@ SchedulerOutput Scheduler::schedule()
         {
             break;
         }
-
-        // 检测该 Request 是否已经被调度
-        if (scheduler_output.num_scheduled_tokens.find(request_id) != scheduler_output.num_scheduled_tokens.end())
+        if (already_scheduled(request_id))
         {
             continue;
         }
@@ -624,38 +671,25 @@ SchedulerOutput Scheduler::schedule()
 
         const int32_t core_seq_id = static_cast<int32_t>(request_id);
         const int32_t context_tokens = context_token_count(*req);
+        const int32_t pending_context_tokens = pending_context_token_count(*req);
 
-        if (req->num_computed_tokens < context_tokens)
-        {// 处于 prefilling 阶段
-            const int32_t remaining_prefill = context_tokens - req->num_computed_tokens;
-            const int32_t chunk = fair_prefill_chunk(
-                remaining_prefill,
-                count_prefill_candidates(running_snapshot, running_index, false));
-            if (!try_allocate_with_tail_preempt(*req, chunk, true))
+        if (pending_context_tokens > 0)
+        {
+            // Compute context tokens that are not in KV yet. This covers both initial prompt
+            // prefill and generated-token catch-up after sampling appends to the history.
+            const int32_t chunk = fair_context_chunk(
+                pending_context_tokens,
+                count_context_catchup_candidates(running_snapshot, running_index, false));
+            if (!try_allocate_slots(*req, chunk, true))
             {
                 continue;
             }
 
             std::vector<std::vector<int32_t>> block_tables;
             kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
-
-            RequestData req_data;
-            req_data.req_id = request_id;
-            req_data.num_computed_tokens = req->num_computed_tokens;
-            req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
-            req_data.sampling_params = req->sampling_params;
-            req_data.context_token_ids = req->context_token_ids;
-            req_data.block_tables = std::move(block_tables);
-            req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
-            for (int32_t i = 0; i < chunk; ++i)
-            {
-                const int32_t prompt_index = req->num_computed_tokens + i;
-                req_data.new_token_ids.push_back(req->context_token_ids[static_cast<size_t>(prompt_index)]);
-            }
-
-            scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
-            scheduler_output.scheduled_reqs.push_back(std::move(req_data));
-            remaining_token_budget -= chunk;
+            append_scheduled_request(
+                make_request_data(*req, req->num_computed_tokens, chunk, std::move(block_tables)),
+                chunk);
             continue;
         }
 
@@ -665,26 +699,16 @@ SchedulerOutput Scheduler::schedule()
             continue;
         }
 
-        if (!try_allocate_with_tail_preempt(*req, 1, true))
+        if (!try_allocate_slots(*req, 1, true))
         {
             continue;
         }
 
         std::vector<std::vector<int32_t>> block_tables;
         kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
-
-        RequestData req_data;
-        req_data.req_id = request_id;
-        req_data.num_computed_tokens = req->num_computed_tokens;
-        req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
-        req_data.sampling_params = req->sampling_params;
-        req_data.context_token_ids = req->context_token_ids;
-        req_data.block_tables = std::move(block_tables);
-        req_data.new_token_ids.push_back(req->context_token_ids.back());
-
-        scheduler_output.num_scheduled_tokens[request_id] = 1;
-        scheduler_output.scheduled_reqs.push_back(std::move(req_data));
-        remaining_token_budget -= 1;
+        append_scheduled_request(
+            make_request_data(*req, context_tokens - 1, 1, std::move(block_tables)),
+            1);
     }
 
     if (!preempted_during_running)
@@ -697,8 +721,7 @@ SchedulerOutput Scheduler::schedule()
             {
                 break;
             }
-            // If this request has been scheduled before, skip it.
-            if (scheduler_output.num_scheduled_tokens.find(request_id) != scheduler_output.num_scheduled_tokens.end())
+            if (already_scheduled(request_id))
             {
                 continue;
             }
@@ -715,9 +738,9 @@ SchedulerOutput Scheduler::schedule()
 
             const int32_t core_seq_id = static_cast<int32_t>(request_id);
             const int32_t context_tokens = context_token_count(*req);
-            const int32_t remaining_prefill = context_tokens - req->num_computed_tokens;
+            const int32_t pending_context_tokens = pending_context_token_count(*req);
 
-            if (remaining_prefill <= 0)
+            if (pending_context_tokens <= 0)
             {
                 if (req->context_token_ids.empty())
                 {
@@ -725,63 +748,33 @@ SchedulerOutput Scheduler::schedule()
                     continue;
                 }
 
-                if (!try_allocate_with_tail_preempt(*req, 1, false))
+                if (!try_allocate_slots(*req, 1, false))
                 {
                     break;
                 }
 
                 std::vector<std::vector<int32_t>> block_tables;
                 kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
-
-                RequestData req_data;
-                req_data.req_id = request_id;
-                req_data.num_computed_tokens = req->num_computed_tokens;
-                req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
-                req_data.sampling_params = req->sampling_params;
-                req_data.context_token_ids = req->context_token_ids;
-                req_data.block_tables = std::move(block_tables);
-                req_data.new_token_ids.push_back(req->context_token_ids.back());
-
-                scheduler_output.num_scheduled_tokens[request_id] = 1;
-                scheduler_output.scheduled_reqs.push_back(std::move(req_data));
-                remaining_token_budget -= 1;
+                append_scheduled_request(
+                    make_request_data(*req, context_tokens - 1, 1, std::move(block_tables)),
+                    1);
                 continue;
             }
-            // 本轮对该请求调度的 token 数量
-            const int32_t chunk = fair_prefill_chunk(
-                remaining_prefill,
-                count_prefill_candidates(waiting_snapshot, waiting_index, true));
-            if (!try_allocate_with_tail_preempt(*req, chunk, false))
+
+            const int32_t chunk = fair_context_chunk(
+                pending_context_tokens,
+                count_context_catchup_candidates(waiting_snapshot, waiting_index, true));
+            if (!try_allocate_slots(*req, chunk, false))
             {
                 break;
             }
 
             std::vector<std::vector<int32_t>> block_tables;
             kvcache_manager->refresh_block_tables(core_seq_id, true, block_tables);
-
-            RequestData req_data;
-            req_data.req_id = request_id;
-            req_data.num_computed_tokens = req->num_computed_tokens;
-            req_data.prompt_token_count = static_cast<int32_t>(req->prompt_token_ids.size());
-            req_data.sampling_params = req->sampling_params;
-            req_data.context_token_ids = req->context_token_ids;
-            req_data.block_tables = std::move(block_tables);
-            req_data.new_token_ids.reserve(static_cast<size_t>(chunk));
-            for (int32_t i = 0; i < chunk; ++i)
-            {
-                const int32_t prompt_index = req->num_computed_tokens + i;
-                req_data.new_token_ids.push_back(req->context_token_ids[static_cast<size_t>(prompt_index)]);
-            }
-
-            scheduler_output.num_scheduled_tokens[req_data.req_id] = chunk;
-            scheduler_output.scheduled_reqs.push_back(std::move(req_data));
-            remaining_token_budget -= chunk;
+            append_scheduled_request(
+                make_request_data(*req, req->num_computed_tokens, chunk, std::move(block_tables)),
+                chunk);
         }
-    }
-
-    for (const auto& item : scheduler_output.num_scheduled_tokens)
-    {
-        scheduler_output.total_num_scheduled_tokens += item.second;
     }
 
     return scheduler_output;
@@ -794,12 +787,14 @@ std::vector<EngineCoreOutput> Scheduler::update_from_output(
     std::vector<EngineCoreOutput> results;
     results.reserve(scheduler_output.scheduled_reqs.size());
 
+    // Move a scheduled request into the running queue after model output is processed.
     auto mark_running = [&](Request& req) {
         req.status = RequestStatus::RUNNING;
         remove_from_queue(waiting, req.request_id);
         push_to_running_if_absent(running, req.request_id);
     };
 
+    // Remove finished requests from all scheduler-owned state.
     auto cleanup_finished = [&]() {
         for (auto it = requests.begin(); it != requests.end();)
         {
@@ -816,6 +811,7 @@ std::vector<EngineCoreOutput> Scheduler::update_from_output(
         }
     };
 
+    // Release KV blocks before marking a running request as finished.
     auto finish_request = [&](Request& req) {
         if (req.status == RequestStatus::RUNNING)
         {
@@ -857,8 +853,8 @@ std::vector<EngineCoreOutput> Scheduler::update_from_output(
         const int32_t context_tokens = context_token_count(*req);
         mark_running(*req);
 
-        const bool was_prefilling = req->num_computed_tokens < context_tokens;
-        if (was_prefilling)
+        const bool was_computing_context = req->num_computed_tokens < context_tokens;
+        if (was_computing_context)
         {
             const int32_t target_computed = std::min(context_tokens, req->num_computed_tokens + processed_tokens);
             req->num_computed_tokens = target_computed;
@@ -887,7 +883,7 @@ std::vector<EngineCoreOutput> Scheduler::update_from_output(
         }
 
         req->context_token_ids.push_back(sampled_token_id);
-        if (!was_prefilling)
+        if (!was_computing_context)
         {
             req->num_computed_tokens += processed_tokens;
         }

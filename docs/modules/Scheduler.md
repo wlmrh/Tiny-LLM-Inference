@@ -14,7 +14,7 @@ The scheduler owns request state and decides which tokens are computed in each e
 - Maintain all active `Request` objects.
 - Maintain `waiting` and `running` queues.
 - Enforce the per-step scheduled-token budget.
-- Split request work into chunked prefill and decode.
+- Schedule pending context-token computation and one-token sampling steps.
 - Allocate KV cache blocks before model execution.
 - Preempt tail running requests when KV capacity is insufficient.
 - Apply scheduler state updates after sampled tokens return from `ModelRunner`.
@@ -28,7 +28,7 @@ Attributes:
 
 - `max_running_requests`: maximum active running request count; `0` means unlimited.
 - `enable_preemption`: allows tail preemption when KV allocation fails.
-- `max_prefill_tokens_per_step`: token budget used by `Scheduler` as `max_num_scheduled_tokens`.
+- `max_prefill_tokens_per_step`: token budget used by `Scheduler` as `max_num_scheduled_tokens`; the public name is retained for compatibility, but the budget applies to scheduled context-token work.
 
 ## `Scheduler`
 
@@ -83,12 +83,12 @@ Attributes:
 
 For each request:
 
-- If `num_computed_tokens < context_token_count`, schedule a prefill chunk.
-- Otherwise schedule one decode token by replaying the last token in `context_token_ids`.
+- If `num_computed_tokens < context_token_count`, schedule a context catch-up chunk: tokens from `context_token_ids` that are not yet represented in KV. This covers both initial prompt prefill and generated tokens appended after prior sampling.
+- Otherwise schedule one sampling step by replaying the last token in `context_token_ids`.
 - Allocate enough KV slots before adding the request to the output.
 - Refresh all per-layer block tables after allocation.
 
-The prefill chunk size is bounded by the remaining token budget. Decode always schedules one token per selected request.
+The context catch-up chunk size is bounded by the remaining token budget and divided fairly across remaining catch-up candidates. The replay path always schedules one token per selected request.
 
 ## Preemption
 
@@ -107,11 +107,11 @@ The request's `context_token_ids` is preserved. This means recomputation include
 
 1. Cleanup of requests that were already `FINISHED`.
 2. Mark scheduled requests as running.
-3. Advance `num_computed_tokens` for prefill tokens.
+3. Advance `num_computed_tokens` for scheduled context tokens.
 4. Read sampled token IDs from `ModelRunnerOutput`.
 5. Append sampled token to `context_token_ids`.
 6. Emit `EngineCoreOutput`.
 7. Finish requests by stop token or max generated length.
 8. Release KV blocks and erase finished requests.
 
-During prefill, the final prefill row sample is emitted as the first generated token. During decode, `num_computed_tokens` advances after appending the sampled token.
+When a context catch-up chunk reaches the end of the current history, the final row sample is emitted as the next generated token. That sampled token is appended to `context_token_ids`; a later scheduler step may then compute it as pending context before emitting the next token.

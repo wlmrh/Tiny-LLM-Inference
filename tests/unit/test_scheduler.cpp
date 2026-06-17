@@ -184,6 +184,8 @@ TEST(SchedulerTest, DecodeStepConsumesLastGeneratedTokenAndStopsByLength)
     tiny_llm::SchedulerOutput decode = fixture.scheduler.schedule();
     ASSERT_EQ(decode.scheduled_reqs.size(), 1u);
     EXPECT_EQ(decode.scheduled_reqs[0].num_computed_tokens, 1);
+    EXPECT_EQ(decode.scheduled_reqs[0].context_token_ids, std::vector<int32_t>({5, 6}));
+    // The sampled token is already in history but still needs a scheduler step to enter KV.
     EXPECT_EQ(decode.scheduled_reqs[0].new_token_ids, std::vector<int32_t>({6}));
     auto decode_outputs = fixture.scheduler.update_from_output(decode, sampled({{1, 7}}));
     ASSERT_EQ(decode_outputs.size(), 1u);
