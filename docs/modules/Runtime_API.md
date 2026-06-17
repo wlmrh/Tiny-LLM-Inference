@@ -55,7 +55,7 @@ Main interfaces:
 - `LLM(std::string model)`: constructs a CPU runtime from a model path.
 - `LLM(std::string model, ParallelConfig parallel_config)`: constructs a runtime for the selected device.
 - `LLM(LLMOptions options)`: constructs a runtime with explicit resource settings.
-- `generate(...)`: blocking batch or single-prompt generation. An optional `CompletionStreamCallback` can receive incremental output events.
+- `generate(...)`: blocking batch or single-prompt generation. Pass an optional `CompletionStreamCallback` to receive incremental output events.
 - `last_generation_profile()`: returns accumulated timings and token counters.
 
 `LLMSamplingParams` is an alias for `UserSamplingParams`. A `max_tokens` value of `0` uses the runtime default from `LLMOptions.max_tokens`; positive values override it for the request.
@@ -77,12 +77,12 @@ Important attributes:
 
 - `core_`: owned `EngineCore`.
 - `last_step_profile_`: profile copied from the latest user-visible core step.
-- `input_preprocessor_`: prompt tokenization, request ID assignment, external-ID tracking, and sampling normalization.
+- `input_preprocessor_`: prompt tokenization, request ID assignment, and sampling normalization.
 - `output_preprocessor_`: incremental decoding, output state, and finish detection.
 
 Main interfaces:
 
-- `add_request(prompt, user_params, ext_request_id)`: tokenizes and validates a prompt, adds it to core runtime, and registers output state.
+- `add_request(prompt, user_params)`: tokenizes and validates a prompt, adds it to core runtime, and registers output state.
 - `has_unfinished_requests()`: checks frontend output state.
 - `step()`: advances the runtime once and returns user-facing outputs.
 - `last_step_profile()`: returns the most recent profile from `EngineCore`.

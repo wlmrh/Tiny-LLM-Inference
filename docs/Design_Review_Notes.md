@@ -22,7 +22,7 @@ Resolved: the `LLM` convenience facade accepts sharded `*.safetensors` directori
 
 ### Frontend Request State
 
-Resolved for completed requests: `OutPreprocessor` removes completed request state after final output delivery, and `InputPreprocessor` releases active external IDs after completion.
+Resolved for completed requests: `OutPreprocessor` removes completed request state after final output delivery, and request attribution now uses the existing internal request ID.
 
 ### KV Cache and Block Allocator Safety
 

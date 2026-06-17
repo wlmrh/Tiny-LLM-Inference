@@ -40,7 +40,6 @@ When a request is preempted, `context_token_ids` is not reset. Only `num_compute
 Attributes:
 
 - `internal_id`: matches the scheduler/core request ID.
-- `external_id`: user-visible ID.
 - `sampling_params`: normalized sampling settings.
 - `prompt_token_ids`: prompt tokens for full-context decoding.
 - `generated_token_ids`: generated token sequence.

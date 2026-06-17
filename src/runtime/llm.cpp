@@ -363,7 +363,7 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prom
             }
             if (!output.error_message.empty())
             {
-                throw std::runtime_error("LLM::generate: request " + output.external_id + " failed: "
+                throw std::runtime_error("LLM::generate: request " + std::to_string(output.internal_id) + " failed: "
                                          + output.error_message);
             }
 

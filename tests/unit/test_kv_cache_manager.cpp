@@ -1,4 +1,4 @@
-#include "tiny_llm/runtime/scheduler.h"
+#include "tiny_llm/runtime/kv_cache_manager.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/core/allocator.h"
 

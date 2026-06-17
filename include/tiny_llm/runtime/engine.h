@@ -29,8 +29,7 @@ public:
      * @brief Adds one text request and returns internal request id.
      */
     uint64_t add_request(const std::string& prompt,
-                         const UserSamplingParams& user_params = UserSamplingParams{},
-                         const std::string& ext_request_id = "");
+                         const UserSamplingParams& user_params = UserSamplingParams{});
 
     /**
      * @brief Returns true when any request is still unfinished.
