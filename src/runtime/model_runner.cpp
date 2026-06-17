@@ -658,11 +658,11 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     validate_handles();
     const c10::Device runtime_device = require_global_execution_context("ModelRunner::run").device();
 
-    int64_t prefill_tokens = 0;
-    int64_t decode_tokens = 0;
-    int64_t prefill_requests = 0;
-    int64_t decode_requests = 0;
-    int64_t max_context_len = 0;
+    int64_t prefill_tokens = 0; // 该轮所有调度的，prefill 状态的 token
+    int64_t decode_tokens = 0; // 该轮所有调度的，decode 状态的 token
+    int64_t prefill_requests = 0; // 该轮调度的，包含 prefill 状态 token 的 req 数量
+    int64_t decode_requests = 0; // 该轮调度的，包含 decode 状态 token 的 req 数量
+    int64_t max_context_len = 0; // 完成该轮调度后的 req 最大序列长度
     for (const RequestData& req_data : scheduler_output.scheduled_reqs)
     {
         const auto count_it = scheduler_output.num_scheduled_tokens.find(req_data.req_id);
@@ -670,8 +670,8 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         {
             continue;
         }
-        bool request_has_prefill = false;
-        bool request_has_decode = false;
+        bool request_has_prefill = false; // 该 req 调度的 prefill token 数量
+        bool request_has_decode = false; // 该 req 调度的 decode token 数量
         max_context_len = std::max<int64_t>(
             max_context_len,
             static_cast<int64_t>(req_data.num_computed_tokens) + static_cast<int64_t>(count_it->second));
