@@ -516,25 +516,14 @@ SchedulerOutput Scheduler::schedule()
     SchedulerOutput scheduler_output;
     int64_t remaining_token_budget = std::max<int64_t>(1, max_num_scheduled_tokens);
     bool preempted_during_running = false;
+    // running already contains requests from earlier steps. Requests selected from
+    // waiting below are counted here first, then moved into running by update_from_output().
+    size_t admitted_running_count = running.size();
 
     // The loops use queue snapshots, so skip an ID after it has been selected once.
     auto already_scheduled = [&](uint64_t request_id) -> bool {
         return scheduler_output.num_scheduled_tokens.find(request_id)
                != scheduler_output.num_scheduled_tokens.end();
-    };
-    auto count_running = [&]() -> size_t {
-        size_t count = 0;
-        for (const auto& item : requests)
-        {
-            if (item.second.status == RequestStatus::RUNNING)
-            {
-                ++count;
-            }
-        }
-        return count;
-    };
-    auto can_admit_waiting = [&]() -> bool {
-        return max_running_requests == 0 || count_running() < max_running_requests;
     };
     // Count later requests that still have history tokens missing from KV. The count
     // is used only to choose this request's chunk size.
@@ -542,7 +531,9 @@ SchedulerOutput Scheduler::schedule()
                                                 size_t start_index,
                                                 bool waiting_phase) -> int32_t {
         int32_t count = 0;
-        size_t admitted_running = count_running();
+        // Include waiting requests that would fit under max_running_requests later
+        // in this snapshot, even though they are not in running yet.
+        size_t candidate_admitted_running_count = admitted_running_count;
         for (size_t index = start_index; index < snapshot.size(); ++index)
         {
             const uint64_t candidate_id = snapshot[index];
@@ -560,11 +551,11 @@ SchedulerOutput Scheduler::schedule()
                 if (candidate->status == RequestStatus::WAITING)
                 {
                     if (max_running_requests != 0
-                        && admitted_running >= max_running_requests)
+                        && candidate_admitted_running_count >= max_running_requests)
                     {
                         break;
                     }
-                    ++admitted_running;
+                    ++candidate_admitted_running_count;
                 }
             }
             else if (candidate->status != RequestStatus::RUNNING)
@@ -641,6 +632,10 @@ SchedulerOutput Scheduler::schedule()
             if (from_running_pass)
             {
                 preempted_during_running = true;
+            }
+            else if (admitted_running_count > 0)
+            {
+                --admitted_running_count;
             }
 
             if (victim_id == req.request_id)
@@ -731,7 +726,10 @@ SchedulerOutput Scheduler::schedule()
             {
                 continue;
             }
-            if (req->status == RequestStatus::WAITING && !can_admit_waiting())
+            const bool newly_admitted = req->status == RequestStatus::WAITING;
+            if (newly_admitted
+                && max_running_requests != 0
+                && admitted_running_count >= max_running_requests)
             {
                 break;
             }
@@ -758,6 +756,10 @@ SchedulerOutput Scheduler::schedule()
                 append_scheduled_request(
                     make_request_data(*req, context_tokens - 1, 1, std::move(block_tables)),
                     1);
+                if (newly_admitted)
+                {
+                    ++admitted_running_count;
+                }
                 continue;
             }
 
@@ -774,6 +776,10 @@ SchedulerOutput Scheduler::schedule()
             append_scheduled_request(
                 make_request_data(*req, req->num_computed_tokens, chunk, std::move(block_tables)),
                 chunk);
+            if (newly_admitted)
+            {
+                ++admitted_running_count;
+            }
         }
     }
 
