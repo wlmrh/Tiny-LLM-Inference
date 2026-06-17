@@ -292,6 +292,7 @@ add_library(tiny_llm STATIC
     src/runtime/execution_context.cpp
     src/runtime/sampler.cpp
     src/runtime/profiling.cpp
+    src/runtime/runtime_stats.cpp
     src/runtime/processors.cpp
     src/runtime/model_runner.cpp
     src/runtime/kv_cache.cpp

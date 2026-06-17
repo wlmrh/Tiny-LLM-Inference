@@ -35,6 +35,9 @@ tinyllm_add_gtest(test_parallel_config
 tinyllm_add_gtest(test_runtime_device_config
     "${TINYLLM_TEST_UNIT_DIR}/test_runtime_device_config.cpp")
 
+tinyllm_add_gtest(test_runtime_stats
+    "${TINYLLM_TEST_UNIT_DIR}/test_runtime_stats.cpp")
+
 tinyllm_add_gtest(test_weight_map
     "${TINYLLM_TEST_UNIT_DIR}/test_weight_map.cpp")
 
