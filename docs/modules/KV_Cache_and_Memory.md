@@ -79,7 +79,6 @@ Attributes:
 Interfaces:
 
 - `KVCache(Config, BlockAllocator*)`: binds an existing block allocator.
-- `KVCache(Config, ..., ParallelConfig)`: owns a block allocator over a raw pool on an explicit device.
 - `start_sequence(seq_id)`: initializes per-layer page tables and rejects duplicate active sequence IDs.
 - `end_sequence(seq_id)`: releases all blocks used by a sequence.
 - `ensure_capacity(seq_id, layer_id, token_pos)`: allocates blocks so `token_pos` can be stored.
@@ -89,7 +88,7 @@ Interfaces:
 
 ## `KVCacheManager`
 
-`KVCacheManager` is a scheduler helper that binds or owns `KVCache` and exposes scheduling-oriented operations.
+`KVCacheManager` is a scheduler helper that binds an external `KVCache` or owns the runtime allocator/cache pair and exposes scheduling-oriented operations.
 
 Attributes:
 
@@ -99,7 +98,7 @@ Attributes:
 Interfaces:
 
 - `bind(KVCache*)`: binds external cache.
-- `init_owned(..., ParallelConfig)`: constructs an owned cache from raw pool parameters on an explicit device.
+- `init_owned(..., ParallelConfig)`: constructs an owned `BlockAllocator` and `KVCache` from raw pool parameters on an explicit device.
 - `start_sequence(core_seq_id)` / `end_sequence(core_seq_id)`: sequence lifecycle.
 - `estimate_append_new_blocks(...)`: estimate blocks needed for one decode append.
 - `estimate_prefill_new_blocks(...)`: estimate blocks needed for a prefill chunk.

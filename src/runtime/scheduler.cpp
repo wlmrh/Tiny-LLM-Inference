@@ -1,5 +1,6 @@
 #include "tiny_llm/runtime/scheduler.h"
 
+#include "tiny_llm/core/allocator.h"
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/kv_cache_manager.h"
 #include "tiny_llm/runtime/kv_cache.h"
@@ -76,6 +77,7 @@ void KVCacheManager::bind(KVCache* kv)
         kv->parallel_config().validate();
     }
     owned_kv_.reset();
+    owned_blocks_.reset();
     kv_ = kv;
 }
 
@@ -112,12 +114,13 @@ void KVCacheManager::init_owned(int32_t kv_num_layers,
     kv_cfg.num_layers = kv_num_layers;
     kv_cfg.block_size_tokens = kv_block_size_tokens;
 
-    owned_kv_ = std::make_unique<KVCache>(
-        kv_cfg,
+    owned_kv_.reset();
+    owned_blocks_ = std::make_unique<BlockAllocator>(
         kv_num_blocks,
         kv_block_size_bytes,
         kv_memory_pool,
         parallel_config);
+    owned_kv_ = std::make_unique<KVCache>(kv_cfg, owned_blocks_.get());
     kv_ = owned_kv_.get();
 }
 

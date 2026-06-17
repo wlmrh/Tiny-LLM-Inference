@@ -36,15 +36,6 @@ public:
      */
     KVCache(Config cfg, BlockAllocator* blocks);
 
-    /**
-     * @brief Constructs KVCache and its internal BlockAllocator from pool parameters.
-     */
-    KVCache(Config cfg,
-            size_t num_blocks,
-            size_t block_size_bytes,
-            void* memory_pool,
-            ParallelConfig parallel_config);
-
     ~KVCache();
 
     /**
@@ -113,7 +104,6 @@ private:
     };
 
     Config cfg_;                        ///< Cache configuration.
-    std::unique_ptr<BlockAllocator> owned_blocks_; ///< Optional owned allocator when built from raw pool args.
     BlockAllocator* blocks_ = nullptr;  ///< Non-owning pointer to the physical block pool.
     ParallelConfig parallel_config_{};
     std::unordered_map<int32_t, SeqState> seqs_; ///< Map of active sequence IDs to their states.

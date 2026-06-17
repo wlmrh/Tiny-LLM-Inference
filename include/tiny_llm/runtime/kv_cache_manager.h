@@ -9,6 +9,7 @@
 
 namespace tiny_llm {
 
+class BlockAllocator;
 class KVCache;
 
 /**
@@ -65,6 +66,7 @@ public:
     KVCache* kv_cache() const { return kv_; }
 
 private:
+    std::unique_ptr<BlockAllocator> owned_blocks_;
     std::unique_ptr<KVCache> owned_kv_;
     KVCache* kv_ = nullptr;
 };
