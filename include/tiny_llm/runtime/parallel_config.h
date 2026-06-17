@@ -2,7 +2,9 @@
 
 #include <cstdint>
 
-#include <c10/core/Device.h>
+namespace c10 {
+class Device;
+}
 
 namespace tiny_llm {
 

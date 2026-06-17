@@ -33,6 +33,8 @@ Interfaces:
 - `validate()`
 - equality operators.
 
+`torch_device()` is the explicit conversion point to libtorch device types; most runtime configuration should stay on `device_type()` and `device_id()`.
+
 The project currently supports one CPU device or one CUDA device per runtime.
 
 ## `ExecutionContext`

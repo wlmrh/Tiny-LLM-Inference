@@ -1,4 +1,5 @@
 #pragma once
+#include <c10/core/Device.h>
 
 #include "tiny_llm/runtime/parallel_config.h"
 #include "utils/cuda_compat.h"

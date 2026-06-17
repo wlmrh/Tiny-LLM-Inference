@@ -1,4 +1,5 @@
 #pragma once
+#include <c10/core/Device.h>
 #include <cstdint>
 #include <memory>
 #include <vector>

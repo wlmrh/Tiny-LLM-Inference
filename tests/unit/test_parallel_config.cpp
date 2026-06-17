@@ -1,5 +1,7 @@
 #include "tiny_llm/runtime/parallel_config.h"
 
+#include <c10/core/Device.h>
+
 #include <gtest/gtest.h>
 #include <stdexcept>
 
