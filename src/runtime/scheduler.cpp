@@ -14,16 +14,6 @@ namespace tiny_llm {
 
 namespace {
 
-int32_t context_token_count(const Request& request)
-{
-    return static_cast<int32_t>(request.context_token_ids.size());
-}
-
-int32_t pending_context_token_count(const Request& request)
-{
-    return std::max<int32_t>(0, context_token_count(request) - request.num_computed_tokens);
-}
-
 int32_t generated_token_count(const Request& request)
 {
     const size_t prompt_tokens = request.prompt_token_ids.size();
@@ -562,7 +552,8 @@ SchedulerOutput Scheduler::schedule()
             {
                 continue;
             }
-            if (pending_context_token_count(*candidate) > 0)
+            const int32_t candidate_context_tokens = static_cast<int32_t>(candidate->context_token_ids.size());
+            if (candidate->num_computed_tokens < candidate_context_tokens)
             {
                 ++count;
             }
@@ -665,8 +656,8 @@ SchedulerOutput Scheduler::schedule()
         }
 
         const int32_t core_seq_id = static_cast<int32_t>(request_id);
-        const int32_t context_tokens = context_token_count(*req);
-        const int32_t pending_context_tokens = pending_context_token_count(*req);
+        const int32_t context_tokens = static_cast<int32_t>(req->context_token_ids.size());
+        const int32_t pending_context_tokens = std::max<int32_t>(0, context_tokens - req->num_computed_tokens);
 
         if (pending_context_tokens > 0)
         {
@@ -735,8 +726,8 @@ SchedulerOutput Scheduler::schedule()
             }
 
             const int32_t core_seq_id = static_cast<int32_t>(request_id);
-            const int32_t context_tokens = context_token_count(*req);
-            const int32_t pending_context_tokens = pending_context_token_count(*req);
+            const int32_t context_tokens = static_cast<int32_t>(req->context_token_ids.size());
+            const int32_t pending_context_tokens = std::max<int32_t>(0, context_tokens - req->num_computed_tokens);
 
             if (pending_context_tokens <= 0)
             {
@@ -856,7 +847,7 @@ std::vector<EngineCoreOutput> Scheduler::update_from_output(
             continue;
         }
 
-        const int32_t context_tokens = context_token_count(*req);
+        const int32_t context_tokens = static_cast<int32_t>(req->context_token_ids.size());
         mark_running(*req);
 
         const bool was_computing_context = req->num_computed_tokens < context_tokens;
