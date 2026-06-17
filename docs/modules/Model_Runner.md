@@ -95,12 +95,13 @@ The model receives `PreparedInputs` plus this context. Attention modules read pa
 `run()` calls:
 
 ```cpp
-sample_greedy_rows(logits,
-                   logit_sample_rows,
-                   model_->vocab_size(),
-                   &batch.token_histories,
-                   &batch.sampling_params,
-                   &batch.req_ids);
+const SamplerBatch sampler_batch{
+    logit_sample_rows,
+    model_->vocab_size(),
+    &batch.token_histories,
+    &batch.sampling_params,
+    &batch.req_ids};
+sample_rows(logits, sampler_batch);
 ```
 
 It then maps sampled token IDs back to request IDs through `req_id_to_index`.

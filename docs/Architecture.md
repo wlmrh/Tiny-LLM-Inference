@@ -37,7 +37,7 @@ LLM::generate
                  -> ModelRunner::run
                       -> private input preparation
                       -> Model::forward(PreparedInputs, RuntimeContext)
-                      -> sample_greedy_rows
+                      -> sample_rows
                  -> Scheduler::update_from_output
             -> OutPreprocessor::process_outputs
 ```

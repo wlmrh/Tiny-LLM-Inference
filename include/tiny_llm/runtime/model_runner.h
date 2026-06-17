@@ -7,8 +7,7 @@
 #include "tiny_llm/core/tensor.h"
 #include "tiny_llm/runtime/model_runner_output.h"
 #include "tiny_llm/runtime/prepared_inputs.h"
-#include "tiny_llm/runtime/sampler.h"
-#include "tiny_llm/runtime/scheduler.h"
+#include "tiny_llm/runtime/processors.h"
 
 namespace tiny_llm {
 
@@ -16,6 +15,7 @@ class HFSafeTensorLoader;
 class KVCache;
 class Model;
 struct EngineArgs;
+struct SchedulerOutput;
 
 /**
  * @brief Converts SchedulerOutput to model tensors, runs the model, and samples logits.

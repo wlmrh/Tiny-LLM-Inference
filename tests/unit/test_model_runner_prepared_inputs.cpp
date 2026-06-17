@@ -3,6 +3,7 @@
 #include "tiny_llm/runtime/engine_args.h"
 #include "tiny_llm/runtime/model_runner.h"
 #include "tiny_llm/runtime/prepared_inputs.h"
+#include "tiny_llm/runtime/scheduler.h"
 
 #include <gtest/gtest.h>
 

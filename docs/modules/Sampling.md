@@ -38,9 +38,9 @@ Prefer default construction plus field assignment for public sampling params ins
 
 ## Interfaces
 
-- `sample_greedy_rows(logits, sample_rows, vocab_size, token_histories, sampling_params, request_ids)`: samples selected rows from a logits tensor. The function name is historical; it also handles configured seeded non-greedy sampling.
+- `sample_rows(logits, SamplerBatch{...})`: samples selected rows from a logits tensor using per-request histories, sampling parameters, and request IDs when provided.
 
-`sample_greedy_rows()` returns a vector with length equal to `logits.size(0)`. Non-sampled rows are `-1`.
+`sample_rows()` returns a vector with length equal to `logits.size(0)`. Non-sampled rows are `-1`.
 
 ## CPU Path
 

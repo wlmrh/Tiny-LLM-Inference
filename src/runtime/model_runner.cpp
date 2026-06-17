@@ -11,6 +11,8 @@
 #include "tiny_llm/runtime/execution_context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/runtime_context.h"
+#include "tiny_llm/runtime/sampler.h"
+#include "tiny_llm/runtime/scheduler.h"
 
 #include <c10/core/InferenceMode.h>
 
@@ -842,13 +844,13 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
     synchronize_for_profile(runtime_device);
     const auto sampling_start = ProfileClock::now();
-    std::vector<int32_t> sampled_rows = sample_greedy_rows(
-        logits,
+    const SamplerBatch sampler_batch{
         logit_sample_rows,
         model_->vocab_size(),
         &batch.token_histories,
         &batch.sampling_params,
-        &batch.req_ids);
+        &batch.req_ids};
+    std::vector<int32_t> sampled_rows = sample_rows(logits, sampler_batch);
     synchronize_for_profile(runtime_device);
     const auto sampling_end = ProfileClock::now();
     output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);

@@ -2,6 +2,21 @@
 
 #include <gtest/gtest.h>
 
+
+namespace {
+std::vector<int32_t> sample_rows(const tiny_llm::Tensor& logits,
+                                 const std::vector<int32_t>& rows,
+                                 int32_t vocab_size,
+                                 const std::vector<std::vector<int32_t>>* token_histories = nullptr,
+                                 const std::vector<tiny_llm::SamplingParams>* sampling_params = nullptr,
+                                 const std::vector<uint64_t>* request_ids = nullptr)
+{
+    return tiny_llm::sample_rows(
+        logits,
+        tiny_llm::SamplerBatch{rows, vocab_size, token_histories, sampling_params, request_ids});
+}
+} // namespace
+
 TEST(SamplerTest, GreedyPenaltyOneMatchesArgmax)
 {
     tiny_llm::Tensor logits = torch::tensor(
@@ -13,7 +28,7 @@ TEST(SamplerTest, GreedyPenaltyOneMatchesArgmax)
     params[0].repetition_penalty = 1.0f;
     params[1].repetition_penalty = 1.0f;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled, std::vector<int32_t>({2, 0}));
 }
 
@@ -27,7 +42,7 @@ TEST(SamplerTest, AppliesPositiveRepetitionPenaltyBeforeArgmax)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 2.0f;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 2);
 }
 
@@ -41,7 +56,7 @@ TEST(SamplerTest, AppliesNegativeRepetitionPenaltyBeforeArgmax)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 2.0f;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 2);
 }
 
@@ -53,7 +68,7 @@ TEST(SamplerTest, PenalizesPromptHistoryBeforeAnyGeneratedToken)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 1.1f;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 2);
 }
 
@@ -67,7 +82,7 @@ TEST(SamplerTest, AppliesRepetitionRewardBelowOneBeforeArgmax)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 0.5f;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, &histories, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, &histories, &params);
     EXPECT_EQ(sampled[0], 1);
 }
 
@@ -79,7 +94,7 @@ TEST(SamplerTest, RejectsMismatchedPenaltyMetadata)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 1.1f;
 
-    EXPECT_THROW(tiny_llm::sample_greedy_rows(logits, rows, 2, &histories, &params), std::runtime_error);
+    EXPECT_THROW(sample_rows(logits, rows, 2, &histories, &params), std::runtime_error);
 }
 
 TEST(SamplerTest, RejectsHistoryTokenOutsideVocabulary)
@@ -90,7 +105,7 @@ TEST(SamplerTest, RejectsHistoryTokenOutsideVocabulary)
     std::vector<tiny_llm::SamplingParams> params(1);
     params[0].repetition_penalty = 1.1f;
 
-    EXPECT_THROW(tiny_llm::sample_greedy_rows(logits, rows, 2, &histories, &params), std::runtime_error);
+    EXPECT_THROW(sample_rows(logits, rows, 2, &histories, &params), std::runtime_error);
 }
 
 TEST(SamplerTest, TopKOneSamplingAlwaysSelectsTopToken)
@@ -102,7 +117,7 @@ TEST(SamplerTest, TopKOneSamplingAlwaysSelectsTopToken)
     params[0].top_k = 1;
     params[0].seed = 123;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, nullptr, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, nullptr, &params);
     EXPECT_EQ(sampled[0], 2);
 }
 
@@ -115,7 +130,7 @@ TEST(SamplerTest, TopPFilteringKeepsAtLeastMostLikelyToken)
     params[0].top_p = 0.5f;
     params[0].seed = 123;
 
-    const std::vector<int32_t> sampled = tiny_llm::sample_greedy_rows(logits, rows, 3, nullptr, &params);
+    const std::vector<int32_t> sampled = sample_rows(logits, rows, 3, nullptr, &params);
     EXPECT_EQ(sampled[0], 0);
 }
 
@@ -130,9 +145,9 @@ TEST(SamplerTest, SeededSamplingIsReproducible)
     std::vector<uint64_t> request_ids = {42};
 
     const std::vector<int32_t> first =
-        tiny_llm::sample_greedy_rows(logits, rows, 4, &histories, &params, &request_ids);
+        sample_rows(logits, rows, 4, &histories, &params, &request_ids);
     const std::vector<int32_t> second =
-        tiny_llm::sample_greedy_rows(logits, rows, 4, &histories, &params, &request_ids);
+        sample_rows(logits, rows, 4, &histories, &params, &request_ids);
     EXPECT_EQ(first, second);
     EXPECT_GE(first[0], 0);
     EXPECT_LT(first[0], 4);
@@ -160,9 +175,9 @@ TEST(SamplerTest, CudaRepetitionPenaltyMatchesCpuForNonDenseRows)
     params[1].repetition_penalty = 0.5f;
 
     const std::vector<int32_t> cpu_sampled =
-        tiny_llm::sample_greedy_rows(logits_cpu, rows, 4, &histories, &params);
+        sample_rows(logits_cpu, rows, 4, &histories, &params);
     const std::vector<int32_t> cuda_sampled =
-        tiny_llm::sample_greedy_rows(logits_cuda, rows, 4, &histories, &params);
+        sample_rows(logits_cuda, rows, 4, &histories, &params);
 
     EXPECT_EQ(cuda_sampled, cpu_sampled);
 }
@@ -187,9 +202,9 @@ TEST(SamplerTest, CudaNonGreedySamplingMatchesCpuFallback)
     params[1].top_k = 1;
 
     const std::vector<int32_t> cpu_sampled =
-        tiny_llm::sample_greedy_rows(logits_cpu, rows, 3, nullptr, &params);
+        sample_rows(logits_cpu, rows, 3, nullptr, &params);
     const std::vector<int32_t> cuda_sampled =
-        tiny_llm::sample_greedy_rows(logits_cuda, rows, 3, nullptr, &params);
+        sample_rows(logits_cuda, rows, 3, nullptr, &params);
 
     EXPECT_EQ(cuda_sampled, cpu_sampled);
 }

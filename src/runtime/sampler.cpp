@@ -127,19 +127,19 @@ void validate_sampling_params(const SamplingParams& params)
 {
     if (params.temperature < 0.0f)
     {
-        throw std::runtime_error("sample_greedy_rows: temperature must be >= 0.");
+        throw std::runtime_error("sample_rows: temperature must be >= 0.");
     }
     if (!(params.top_p > 0.0f && params.top_p <= 1.0f))
     {
-        throw std::runtime_error("sample_greedy_rows: top_p must be in (0, 1].");
+        throw std::runtime_error("sample_rows: top_p must be in (0, 1].");
     }
     if (params.top_k < 0)
     {
-        throw std::runtime_error("sample_greedy_rows: top_k must be >= 0.");
+        throw std::runtime_error("sample_rows: top_k must be >= 0.");
     }
     if (params.repetition_penalty <= 0.0f)
     {
-        throw std::runtime_error("sample_greedy_rows: repetition_penalty must be positive.");
+        throw std::runtime_error("sample_rows: repetition_penalty must be positive.");
     }
 }
 
@@ -150,13 +150,13 @@ void validate_sampling_metadata(const std::vector<int32_t>& sample_rows,
 {
     if (token_histories != nullptr && token_histories->size() != sample_rows.size())
     {
-        throw std::runtime_error("sample_greedy_rows: token history metadata size mismatch.");
+        throw std::runtime_error("sample_rows: token history metadata size mismatch.");
     }
     if (sampling_params != nullptr)
     {
         if (sampling_params->size() != sample_rows.size())
         {
-            throw std::runtime_error("sample_greedy_rows: sampling parameter metadata size mismatch.");
+            throw std::runtime_error("sample_rows: sampling parameter metadata size mismatch.");
         }
         for (const SamplingParams& params : *sampling_params)
         {
@@ -165,7 +165,7 @@ void validate_sampling_metadata(const std::vector<int32_t>& sample_rows,
     }
     if (request_ids != nullptr && request_ids->size() != sample_rows.size())
     {
-        throw std::runtime_error("sample_greedy_rows: request id metadata size mismatch.");
+        throw std::runtime_error("sample_rows: request id metadata size mismatch.");
     }
 }
 
@@ -179,7 +179,7 @@ bool has_active_repetition_penalty(const std::vector<int32_t>& sample_rows,
     }
     if (token_histories->size() != sample_rows.size() || sampling_params->size() != sample_rows.size())
     {
-        throw std::runtime_error("sample_greedy_rows: repetition penalty metadata size mismatch.");
+        throw std::runtime_error("sample_rows: repetition penalty metadata size mismatch.");
     }
 
     for (size_t i = 0; i < sample_rows.size(); ++i)
@@ -201,7 +201,7 @@ bool has_non_greedy_sampling(const std::vector<int32_t>& sample_rows,
     }
     if (sampling_params->size() != sample_rows.size())
     {
-        throw std::runtime_error("sample_greedy_rows: sampling parameter metadata size mismatch.");
+        throw std::runtime_error("sample_rows: sampling parameter metadata size mismatch.");
     }
     for (const SamplingParams& params : *sampling_params)
     {
@@ -223,7 +223,7 @@ std::vector<int64_t> unique_valid_history_tokens(const std::vector<int32_t>& his
     {
         if (token_id < 0 || token_id >= vocab_size)
         {
-            throw std::runtime_error("sample_greedy_rows: token history id is out of vocabulary range.");
+            throw std::runtime_error("sample_rows: token history id is out of vocabulary range.");
         }
         if (seen_tokens.insert(token_id).second)
         {
@@ -267,7 +267,7 @@ int32_t argmax_row(const std::vector<float>& row)
     }
     if (best < 0 || best_value == -std::numeric_limits<float>::infinity())
     {
-        throw std::runtime_error("sample_greedy_rows: no valid token remains after filtering.");
+        throw std::runtime_error("sample_rows: no valid token remains after filtering.");
     }
     return best;
 }
@@ -276,7 +276,7 @@ float apply_repetition_penalty_to_logit(float logit, float penalty)
 {
     if (penalty <= 0.0f)
     {
-        throw std::runtime_error("sample_greedy_rows: repetition_penalty must be positive.");
+        throw std::runtime_error("sample_rows: repetition_penalty must be positive.");
     }
     if (penalty == 1.0f || logit == 0.0f)
     {
@@ -348,7 +348,7 @@ std::vector<double> softmax_weights(const std::vector<float>& row, float tempera
     }
     if (max_value == -std::numeric_limits<double>::infinity())
     {
-        throw std::runtime_error("sample_greedy_rows: no valid logits remain after filtering.");
+        throw std::runtime_error("sample_rows: no valid logits remain after filtering.");
     }
 
     std::vector<double> weights(row.size(), 0.0);
@@ -373,7 +373,7 @@ void apply_top_p_filter(std::vector<float>& row, float top_p, float temperature)
     const double total = std::accumulate(weights.begin(), weights.end(), 0.0);
     if (total <= 0.0)
     {
-        throw std::runtime_error("sample_greedy_rows: probability mass is zero.");
+        throw std::runtime_error("sample_rows: probability mass is zero.");
     }
     for (double& weight : weights)
     {
@@ -450,7 +450,7 @@ int32_t sample_filtered_row(std::vector<float> row,
     const double total = std::accumulate(weights.begin(), weights.end(), 0.0);
     if (total <= 0.0)
     {
-        throw std::runtime_error("sample_greedy_rows: probability mass is zero.");
+        throw std::runtime_error("sample_rows: probability mass is zero.");
     }
 
     std::mt19937_64 rng(derive_sample_seed(params, request_id, history.size(), sample_index));
@@ -552,7 +552,7 @@ std::vector<int32_t> sample_cuda_rows_with_repetition_penalty(
         const float penalty = sampling_params[sample_index].repetition_penalty;
         if (penalty <= 0.0f)
         {
-            throw std::runtime_error("sample_greedy_rows: repetition penalty must be positive.");
+            throw std::runtime_error("sample_rows: repetition penalty must be positive.");
         }
         penalties.push_back(penalty);
         if (penalty != 1.0f && !token_histories[sample_index].empty())
@@ -622,7 +622,7 @@ std::vector<int32_t> sample_cuda_rows_with_repetition_penalty(
         const float penalty = sampling_params[sample_index].repetition_penalty;
         if (penalty <= 0.0f)
         {
-            throw std::runtime_error("sample_greedy_rows: repetition penalty must be positive.");
+            throw std::runtime_error("sample_rows: repetition penalty must be positive.");
         }
 
         Tensor row_logits = logits.narrow(0, row, 1).squeeze(0);
@@ -659,11 +659,11 @@ int32_t sample_argmax(const float* logits, int32_t vocab_size)
 {
     if (logits == nullptr)
     {
-        throw std::runtime_error("sample_greedy_rows: logits pointer must be non-null.");
+        throw std::runtime_error("sample_rows: logits pointer must be non-null.");
     }
     if (vocab_size <= 0)
     {
-        throw std::runtime_error("sample_greedy_rows: vocab_size must be positive.");
+        throw std::runtime_error("sample_rows: vocab_size must be positive.");
     }
 
     int32_t best_token = 0;
@@ -690,7 +690,7 @@ int32_t sample_argmax_with_repetition_penalty(const float* logits,
     {
         if (token_id < 0 || token_id >= vocab_size)
         {
-            throw std::runtime_error("sample_greedy_rows: token history id is out of vocabulary range.");
+            throw std::runtime_error("sample_rows: token history id is out of vocabulary range.");
         }
         seen_tokens.insert(token_id);
     }
@@ -715,28 +715,28 @@ int32_t sample_argmax_with_repetition_penalty(const float* logits,
 
 } // namespace
 
-std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
-                                        const std::vector<int32_t>& sample_rows,
-                                        int32_t vocab_size,
-                                        const std::vector<std::vector<int32_t>>* token_histories,
-                                        const std::vector<SamplingParams>* sampling_params,
-                                        const std::vector<uint64_t>* request_ids)
+static std::vector<int32_t> sample_rows_impl(const Tensor& logits,
+                                            const std::vector<int32_t>& sample_rows,
+                                            int32_t vocab_size,
+                                            const std::vector<std::vector<int32_t>>* token_histories,
+                                            const std::vector<SamplingParams>* sampling_params,
+                                            const std::vector<uint64_t>* request_ids)
 {
     if (!logits.defined())
     {
-        throw std::runtime_error("sample_greedy_rows: logits must be defined.");
+        throw std::runtime_error("sample_rows: logits must be defined.");
     }
     if (tensor_dtype(logits) != DType::kFloat32)
     {
-        throw std::runtime_error("sample_greedy_rows: logits must be float32.");
+        throw std::runtime_error("sample_rows: logits must be float32.");
     }
     if (vocab_size <= 0)
     {
-        throw std::runtime_error("sample_greedy_rows: vocab_size must be positive.");
+        throw std::runtime_error("sample_rows: vocab_size must be positive.");
     }
     if (logits.dim() != 2 || logits.size(1) != vocab_size)
     {
-        throw std::runtime_error("sample_greedy_rows: logits shape must be [rows, vocab_size].");
+        throw std::runtime_error("sample_rows: logits shape must be [rows, vocab_size].");
     }
 
     std::vector<int32_t> sampled(static_cast<size_t>(logits.size(0)), -1);
@@ -744,7 +744,7 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
     {
         if (row < 0 || row >= logits.size(0))
         {
-            throw std::runtime_error("sample_greedy_rows: sample row is out of range.");
+            throw std::runtime_error("sample_rows: sample row is out of range.");
         }
     }
 
@@ -803,6 +803,17 @@ std::vector<int32_t> sample_greedy_rows(const Tensor& logits,
             (*sampling_params)[sample_index].repetition_penalty);
     }
     return sampled;
+}
+
+std::vector<int32_t> sample_rows(const Tensor& logits, const SamplerBatch& batch)
+{
+    return sample_rows_impl(
+        logits,
+        batch.sample_rows,
+        batch.vocab_size,
+        batch.token_histories,
+        batch.sampling_params,
+        batch.request_ids);
 }
 
 } // namespace tiny_llm
