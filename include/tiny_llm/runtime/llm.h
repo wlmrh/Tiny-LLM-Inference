@@ -78,16 +78,11 @@ public:
     LLM& operator=(const LLM&) = delete;
 
     std::vector<CompletionOutput> generate(const std::vector<std::string>& prompts,
-                                           const LLMSamplingParams& sampling_params = LLMSamplingParams{});
+                                           const LLMSamplingParams& sampling_params = LLMSamplingParams{},
+                                           CompletionStreamCallback callback = CompletionStreamCallback{});
     CompletionOutput generate(const std::string& prompt,
-                              const LLMSamplingParams& sampling_params = LLMSamplingParams{});
-
-    std::vector<CompletionOutput> generate_stream(const std::vector<std::string>& prompts,
-                                                  const LLMSamplingParams& sampling_params,
-                                                  CompletionStreamCallback callback);
-    CompletionOutput generate_stream(const std::string& prompt,
-                                     const LLMSamplingParams& sampling_params,
-                                     CompletionStreamCallback callback);
+                              const LLMSamplingParams& sampling_params = LLMSamplingParams{},
+                              CompletionStreamCallback callback = CompletionStreamCallback{});
 
     const RuntimeProfilingStats& last_generation_profile() const { return last_generation_profile_; }
 

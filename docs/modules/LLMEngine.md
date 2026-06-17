@@ -24,12 +24,11 @@ Direct `LLMEngine` construction is useful for tests, tools, and callers that alr
 ## Responsibilities
 
 - Validate frontend construction through `InputPreprocessor` and `OutPreprocessor`.
-- Assign internal request IDs and bind optional external request IDs.
+- Assign internal request IDs used for frontend/core routing and output attribution.
 - Tokenize prompt strings and normalize `UserSamplingParams` into `SamplingParams`.
 - Enqueue normalized `EngineCoreRequest` objects into `EngineCore`.
 - Run one runtime step at a time.
 - Incrementally decode sampled token IDs into `UserOutput` objects.
-- Release external request ID bindings when frontend output state finishes.
 - Expose profiling data from the most recent `EngineCore::step()`.
 
 `LLMEngine` intentionally does not own tokenizer/model/workspace/KV resources passed through prebuilt `EngineArgs` pointers. It also does not make scheduling decisions; those belong to `Scheduler`, reached only through `EngineCore`.
@@ -39,7 +38,7 @@ Direct `LLMEngine` construction is useful for tests, tools, and callers that alr
 - `explicit LLMEngine(const EngineArgs& args)`: constructs `EngineCore`, `InputPreprocessor`, and `OutPreprocessor` from shared runtime arguments. The tokenizer must be available because both preprocessors depend on it.
 - `~LLMEngine()`: destroys frontend state and the owned core. The destructor is out-of-line so the header can forward-declare `EngineCore`.
 - Copy construction and copy assignment are disabled by owned runtime state. Move construction and move assignment are not exposed as public API.
-- `add_request(const std::string& prompt, const UserSamplingParams& user_params, const std::string& ext_request_id)`: tokenizes and validates one prompt, assigns an internal ID, enqueues the core request, registers output state, and returns the internal ID. An empty external ID is replaced with a generated `req-<internal_id>` value.
+- `add_request(const std::string& prompt, const UserSamplingParams& user_params)`: tokenizes and validates one prompt, assigns an internal ID, enqueues the core request, registers output state, and returns the internal ID.
 - `has_unfinished_requests() const`: returns whether the frontend output processor still has unfinished request state. This is the condition used by `LLM` generation loops.
 - `step()`: advances the token-level runtime once and returns zero or more `UserOutput` objects. A chunked prefill step can legitimately return no user output while work was scheduled.
 - `last_step_profile() const`: returns the profile cached from the most recent user-visible `EngineCore::step()`.
@@ -48,7 +47,7 @@ Direct `LLMEngine` construction is useful for tests, tools, and callers that alr
 
 - `core_`: owned `EngineCore`, responsible for scheduler/model-runner orchestration over token IDs.
 - `last_step_profile_`: cached profile copied from `EngineCore` immediately after the main step.
-- `input_preprocessor_`: frontend request translator. It owns the internal request ID counter and the external-ID uniqueness map.
+- `input_preprocessor_`: frontend request translator. It owns the internal request ID counter.
 - `output_preprocessor_`: frontend output assembler. It owns per-request decoded text, generated token IDs, finish state, and stop-condition checks.
 
 After the frontend output processor has no unfinished states, `LLMEngine::step()` performs one final `EngineCore::step()` cleanup call and verifies it produced no outputs or scheduled tokens. This keeps the public generation loop driven by frontend output state while still giving the core a final chance to release scheduler/KV state.
@@ -59,9 +58,8 @@ After the frontend output processor has no unfinished states, `LLMEngine::step()
 
 1. Call `EngineCore::step()` to schedule and execute one token-level step.
 2. Pass core outputs to `OutPreprocessor::process_outputs()`.
-3. For every finished `UserOutput`, release its external request ID binding from `InputPreprocessor`.
-4. If no frontend request remains unfinished, call one cleanup core step and assert that it is empty.
-5. Return the user-facing outputs for this step.
+3. If no frontend request remains unfinished, call one cleanup core step and assert that it is empty.
+4. Return the user-facing outputs for this step.
 
 The method is single-process and synchronous. It assumes callers repeatedly call `step()` while `has_unfinished_requests()` is true.
 

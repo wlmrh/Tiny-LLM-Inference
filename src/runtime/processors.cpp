@@ -9,15 +9,6 @@
 
 namespace tiny_llm {
 
-namespace {
-
-std::string default_external_id(uint64_t internal_id)
-{
-    return std::string("req-") + std::to_string(internal_id);
-}
-
-} // namespace
-
 InputPreprocessor::InputPreprocessor(const EngineArgs& args)
     : tokenizer_(args.tokenizer), default_max_tokens_(args.max_generated_tokens)
 {
@@ -34,12 +25,10 @@ InputPreprocessor::InputPreprocessor(const EngineArgs& args)
 }
 
 EngineCoreRequest InputPreprocessor::process_inputs(const std::string& prompt,
-                                                    const UserSamplingParams& user_params,
-                                                    const std::string& ext_request_id) const
+                                                    const UserSamplingParams& user_params) const
 {
     EngineCoreRequest request;
     request.internal_id = assign_internal_id();
-    bind_external_id(request, ext_request_id);
 
     request.prompt_token_ids = tokenize(prompt);
     request.sampling_params = normalize_sampling_params(user_params);
@@ -60,27 +49,6 @@ uint64_t InputPreprocessor::assign_internal_id() const
     const uint64_t assigned = next_internal_id_;
     ++next_internal_id_;
     return assigned;
-}
-
-void InputPreprocessor::bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id) const
-{
-    request.external_id = ext_request_id.empty() ? default_external_id(request.internal_id) : ext_request_id;
-
-    const auto [it, inserted] =
-        external_to_internal_id_.emplace(request.external_id, request.internal_id);
-    if (!inserted)
-    {
-        throw std::runtime_error("InputPreprocessor::bind_external_id: duplicated external_id.");
-    }
-}
-
-void InputPreprocessor::release_request(const std::string& external_id, uint64_t internal_id) const
-{
-    const auto it = external_to_internal_id_.find(external_id);
-    if (it != external_to_internal_id_.end() && it->second == internal_id)
-    {
-        external_to_internal_id_.erase(it);
-    }
 }
 
 void InputPreprocessor::validate_tokenizer_contract() const
@@ -211,7 +179,6 @@ void OutPreprocessor::add_request(const EngineCoreRequest& request)
 
     std::unique_ptr<RequestState> state = std::make_unique<RequestState>();
     state->internal_id = request.internal_id;
-    state->external_id = request.external_id;
     state->sampling_params = request.sampling_params;
     state->prompt_token_ids = request.prompt_token_ids;
     state->generated_token_ids.clear();
@@ -248,7 +215,6 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::unordered_ma
         }
 
         RequestState& state = *(it->second);
-        out.external_id = state.external_id;
 
         if (state.is_finished)
         {

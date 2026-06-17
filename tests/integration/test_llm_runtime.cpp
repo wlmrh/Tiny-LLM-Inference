@@ -79,7 +79,7 @@ bool has_required_model_files(const std::filesystem::path& model_dir, std::strin
 }
 }
 
-TEST(LLMRuntimeIntegrationTest, GenerateStreamReturnsEventsAndFinalOutputs)
+TEST(LLMRuntimeIntegrationTest, GenerateCallbackReturnsEventsAndFinalOutputs)
 {
     const std::filesystem::path model_dir(resolve_model_dir());
     std::string skip_reason;
@@ -104,7 +104,7 @@ TEST(LLMRuntimeIntegrationTest, GenerateStreamReturnsEventsAndFinalOutputs)
     std::vector<std::string> streamed_text(prompts.size());
 
     const std::vector<tiny_llm::CompletionOutput> outputs =
-        llm.generate_stream(prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
+        llm.generate(prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
             ASSERT_LT(output.prompt_index, prompts.size());
             EXPECT_EQ(output.prompt, prompts[output.prompt_index]);
             EXPECT_GE(output.token_id, 0);

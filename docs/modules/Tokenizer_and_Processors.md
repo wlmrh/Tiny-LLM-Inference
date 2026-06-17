@@ -54,20 +54,17 @@ Attributes:
 - `tokenizer_`: non-owning tokenizer pointer.
 - `default_max_tokens_`: fallback max generation length.
 - `next_internal_id_`: monotonically increasing internal ID.
-- `external_to_internal_id_`: duplicate external ID guard.
 
 Interfaces:
 
-- `process_inputs(prompt, user_params, ext_request_id)`: returns a validated `EngineCoreRequest`.
-- `release_request(external_id, internal_id)`: releases an active external ID after request completion.
+- `process_inputs(prompt, user_params)`: returns a validated `EngineCoreRequest` with an assigned `internal_id`.
 
 Internal steps:
 
 1. Assign a new internal ID.
-2. Bind or synthesize an external ID.
-3. Tokenize the prompt.
-4. Normalize sampling parameters.
-5. Validate prompt tokens and sampling settings.
+2. Tokenize the prompt.
+3. Normalize sampling parameters.
+4. Validate prompt tokens and sampling settings.
 
 Sampling normalization copies user fields and appends tokenizer EOS to `stop_token_ids` when missing.
 
@@ -96,7 +93,6 @@ Internal behavior:
 `UserOutput` contains:
 
 - `internal_id`
-- `external_id`
 - `delta_text`
 - `text`
 - `generated_token_ids`

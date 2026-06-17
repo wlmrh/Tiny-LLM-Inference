@@ -45,7 +45,6 @@ struct SamplingParams : public SamplingParamsCommon {
  */
 struct EngineCoreRequest {
     uint64_t internal_id = 0;
-    std::string external_id;
     std::vector<int32_t> prompt_token_ids;
     SamplingParams sampling_params;
 };
@@ -62,7 +61,6 @@ struct EngineCoreOutput {
  */
 struct UserOutput {
     uint64_t internal_id = 0;
-    std::string external_id;
     std::string delta_text;
     std::string text;
     std::vector<int32_t> generated_token_ids;
@@ -76,7 +74,6 @@ struct UserOutput {
  */
 struct RequestState {
     uint64_t internal_id = 0;
-    std::string external_id;
     SamplingParams sampling_params;
     std::vector<int32_t> prompt_token_ids;
     std::vector<int32_t> generated_token_ids;
@@ -94,15 +91,12 @@ public:
     explicit InputPreprocessor(const EngineArgs& args);
 
     EngineCoreRequest process_inputs(const std::string& prompt,
-                                     const UserSamplingParams& user_params,
-                                     const std::string& ext_request_id) const;
-    void release_request(const std::string& external_id, uint64_t internal_id) const;
+                                     const UserSamplingParams& user_params) const;
 
 private:
     uint64_t assign_internal_id() const;
     std::vector<int32_t> tokenize(const std::string& text) const;
     SamplingParams normalize_sampling_params(const UserSamplingParams& user_params) const;
-    void bind_external_id(EngineCoreRequest& request, const std::string& ext_request_id) const;
     void validate_tokenizer_contract() const;
     void validate_prompt_tokens(const std::vector<int32_t>& token_ids) const;
     void validate_sampling_params(const SamplingParams& sampling_params) const;
@@ -110,7 +104,6 @@ private:
     Tokenizer* tokenizer_ = nullptr;
     int32_t default_max_tokens_ = 32;
     mutable uint64_t next_internal_id_ = 1;
-    mutable std::unordered_map<std::string, uint64_t> external_to_internal_id_;
 };
 
 /**

@@ -150,9 +150,10 @@ TEST(InputPreprocessorTest, DefaultUserMaxTokensUsesEngineDefaultAndCopiesShared
     user_params.stop_token_ids = {6, 7};
 
     const tiny_llm::EngineCoreRequest request =
-        preprocessor.process_inputs("prompt", user_params, "sampling-default");
+        preprocessor.process_inputs("prompt", user_params);
     const tiny_llm::SamplingParams& params = request.sampling_params;
 
+    EXPECT_EQ(request.internal_id, 1u);
     EXPECT_FLOAT_EQ(params.temperature, user_params.temperature);
     EXPECT_FLOAT_EQ(params.top_p, user_params.top_p);
     EXPECT_EQ(params.top_k, user_params.top_k);
@@ -175,8 +176,9 @@ TEST(InputPreprocessorTest, ExplicitUserMaxTokensOverridesEngineDefault)
     user_params.max_tokens = 5;
 
     const tiny_llm::EngineCoreRequest request =
-        preprocessor.process_inputs("prompt", user_params, "sampling-override");
+        preprocessor.process_inputs("prompt", user_params);
 
+    EXPECT_EQ(request.internal_id, 1u);
     EXPECT_EQ(request.sampling_params.max_tokens, 5);
 }
 
@@ -192,7 +194,7 @@ TEST(InputPreprocessorTest, RejectsNegativeUserMaxTokens)
     user_params.max_tokens = -1;
 
     EXPECT_THROW(
-        preprocessor.process_inputs("prompt", user_params, "sampling-negative"),
+        preprocessor.process_inputs("prompt", user_params),
         std::runtime_error);
 }
 
@@ -241,7 +243,7 @@ TEST(EngineCoreTest, RejectsPromptTokenOutsideModelVocabulary)
     EXPECT_THROW(fixture.add_request(1, {63, 64}, 1), std::runtime_error);
 }
 
-TEST(EngineCoreTest, LLMEngineReleasesFinishedExternalRequestIds)
+TEST(EngineCoreTest, LLMEnginePropagatesStableSequentialInternalRequestIds)
 {
     EngineCoreFixture fixture;
     tiny_llm::EngineArgs args;
@@ -256,11 +258,29 @@ TEST(EngineCoreTest, LLMEngineReleasesFinishedExternalRequestIds)
     tiny_llm::UserSamplingParams sampling_params;
     sampling_params.max_tokens = 1;
 
-    EXPECT_NO_THROW(engine.add_request("first", sampling_params, "reuse-id"));
+    EXPECT_EQ(engine.add_request("first", sampling_params), 1u);
+    std::vector<uint64_t> first_internal_ids;
     while (engine.has_unfinished_requests())
     {
-        (void)engine.step();
+        for (const tiny_llm::UserOutput& output : engine.step())
+        {
+            first_internal_ids.push_back(output.internal_id);
+        }
     }
 
-    EXPECT_NO_THROW(engine.add_request("second", sampling_params, "reuse-id"));
+    ASSERT_FALSE(first_internal_ids.empty());
+    EXPECT_EQ(first_internal_ids.back(), 1u);
+
+    EXPECT_EQ(engine.add_request("second", sampling_params), 2u);
+    std::vector<uint64_t> second_internal_ids;
+    while (engine.has_unfinished_requests())
+    {
+        for (const tiny_llm::UserOutput& output : engine.step())
+        {
+            second_internal_ids.push_back(output.internal_id);
+        }
+    }
+
+    ASSERT_FALSE(second_internal_ids.empty());
+    EXPECT_EQ(second_internal_ids.back(), 2u);
 }

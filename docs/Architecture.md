@@ -25,7 +25,7 @@ This diagram intentionally shows only the major classes and separates ownership 
 The high-level call path is:
 
 ```text
-LLM::generate / generate_stream
+LLM::generate
   -> LLMEngine::add_request
        -> InputPreprocessor::process_inputs
        -> EngineCore::add_request
