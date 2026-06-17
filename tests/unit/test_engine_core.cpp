@@ -38,7 +38,7 @@ public:
 
 class FakeTokenizer final : public tiny_llm::Tokenizer {
 public:
-    std::vector<int32_t> encode(const std::string&) override { return {4}; }
+    std::vector<int32_t> encode(const std::string&) const override { return {4}; }
     std::string decode(const std::vector<int32_t>& ids) const override
     {
         std::string result;
@@ -77,7 +77,7 @@ struct EngineCoreFixture {
     static tiny_llm::EngineArgs make_engine_args(IncrementTokenModel* model,
                                                  tiny_llm::ExecutionContext* ctx,
                                                  tiny_llm::KVCache* kv,
-                                                 FakeTokenizer* tokenizer,
+                                                 const FakeTokenizer* tokenizer,
                                                  int32_t max_prefill_tokens)
     {
         tiny_llm::EngineArgs args;
@@ -108,7 +108,7 @@ struct EngineCoreFixture {
     static tiny_llm::EngineArgs make_engine_args(tiny_llm::Model* model,
                                                 tiny_llm::ExecutionContext* ctx,
                                                 tiny_llm::KVCache* kv,
-                                                tiny_llm::Tokenizer* tokenizer,
+                                                const tiny_llm::Tokenizer* tokenizer,
                                                 int32_t max_prefill_tokens)
     {
         tiny_llm::EngineArgs args;

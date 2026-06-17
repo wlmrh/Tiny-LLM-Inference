@@ -15,8 +15,8 @@ This module handles the boundary between user strings and engine token IDs.
 
 Interfaces:
 
-- `encode(text)`: convert text to token IDs.
-- `decode(ids)`: convert token IDs to text.
+- `encode(text) const`: convert text to token IDs without mutating tokenizer state.
+- `decode(ids) const`: convert token IDs to text without mutating tokenizer state.
 - `vocab_size()`: tokenizer/model vocabulary size used for validation.
 - `bos_id()`, `eos_id()`, `unk_id()`: special token IDs.
 - `is_valid_token_id(id)`: token ID validation.

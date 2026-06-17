@@ -29,7 +29,7 @@ struct EngineArgs {
     Model* model = nullptr;
     ExecutionContext* ctx = nullptr;
     KVCache* kv = nullptr;
-    Tokenizer* tokenizer = nullptr;
+    const Tokenizer* tokenizer = nullptr;
     ParallelConfig parallel_config = ParallelConfig::cpu();
 
     // Model construction inputs (used when model == nullptr).

@@ -14,7 +14,7 @@ class Tokenizer {
 public:
     virtual ~Tokenizer() = default;
 
-    virtual std::vector<int32_t> encode(const std::string& text) = 0;
+    virtual std::vector<int32_t> encode(const std::string& text) const = 0;
     virtual std::string decode(const std::vector<int32_t>& ids) const = 0;
 
     virtual int32_t vocab_size() const = 0;
@@ -41,7 +41,7 @@ public:
     HFLlamaTokenizer(const HFLlamaTokenizer&) = delete;
     HFLlamaTokenizer& operator=(const HFLlamaTokenizer&) = delete;
 
-    std::vector<int32_t> encode(const std::string& text) override;
+    std::vector<int32_t> encode(const std::string& text) const override;
     std::string decode(const std::vector<int32_t>& ids) const override;
 
     int32_t vocab_size() const override;

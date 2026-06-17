@@ -101,7 +101,7 @@ private:
     void validate_prompt_tokens(const std::vector<int32_t>& token_ids) const;
     void validate_sampling_params(const SamplingParams& sampling_params) const;
 
-    Tokenizer* tokenizer_ = nullptr;
+    const Tokenizer* tokenizer_ = nullptr;
     int32_t default_max_tokens_ = 32;
     mutable uint64_t next_internal_id_ = 1;
 };

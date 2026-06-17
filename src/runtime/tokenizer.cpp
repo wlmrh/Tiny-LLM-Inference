@@ -257,7 +257,7 @@ HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string& hf_model_di
     return HFLlamaTokenizer(std::move(impl));
 }
 
-std::vector<int32_t> HFLlamaTokenizer::encode(const std::string& text)
+std::vector<int32_t> HFLlamaTokenizer::encode(const std::string& text) const
 {
     std::vector<int32_t> ids = impl_->tokenizer->Encode(text);
     if (ids.empty() && bos_id_ >= 0)
