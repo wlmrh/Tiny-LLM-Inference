@@ -12,6 +12,7 @@
 namespace tiny_llm {
 
 class HFSafeTensorLoader;
+class ExecutionContext;
 class KVCache;
 class Model;
 struct EngineArgs;
@@ -31,16 +32,17 @@ public:
 private:
     struct PreparedBatch {
         PreparedInputs inputs;
+        RuntimeProfilingStats scheduling_stats;
         std::vector<uint64_t> req_ids;
-        std::vector<SamplingParams> sampling_params;
-        std::vector<std::vector<int32_t>> token_histories;
+        std::vector<SamplingParams> sampling_params; // the offset of the last token in each request
+        std::vector<std::vector<int32_t>> token_histories; // Full prompt plus generated-token history before this step for each request
     };
 
     void init_from_args(const EngineArgs& args);
     void validate_handles() const;
     int32_t resolve_model_max_batch_size(const EngineArgs& args) const;
-    PreparedBatch prepare_batch(const SchedulerOutput& scheduler_output);
-    Tensor run_model(const PreparedInputs& inputs, RuntimeProfilingStats* profiling) const;
+    PreparedBatch prepare_batch(const SchedulerOutput& scheduler_output, ExecutionContext& ctx);
+    Tensor run_model(const PreparedInputs& inputs, ExecutionContext& exec_ctx, RuntimeProfilingStats* profiling) const;
 
     std::unique_ptr<Model> owned_model_;
     std::vector<std::unique_ptr<HFSafeTensorLoader>> owned_hf_loaders_;

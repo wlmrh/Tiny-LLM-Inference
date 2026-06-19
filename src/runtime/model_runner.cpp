@@ -132,46 +132,41 @@ Tensor make_int32_tensor_from_host(const std::vector<int32_t>& values,
     return cpu_tensor.to(device, /*non_blocking=*/false, /*copy=*/true).contiguous();
 }
 
-void populate_prefill_segments(const SchedulerOutput& output,
+struct PreparedRequestInfo {
+    const RequestData* req_data = nullptr;
+    int32_t scheduled_tokens = 0;
+    int32_t context_len = 0;
+    int32_t required_blocks = 0;
+};
+
+void populate_prefill_segments(const std::vector<PreparedRequestInfo>& request_infos,
                                int64_t total_tokens,
                                PreparedInputs& prepared)
 {
     prepared.prefill_segments.clear();
     prepared.prefill_segments_valid = false;
-    if (total_tokens < 64 || output.scheduled_reqs.empty())
+    if (total_tokens < 64 || request_infos.empty())
     {
         return;
     }
 
     int64_t row_start = 0;
     int32_t seq_index = 0;
-    prepared.prefill_segments.reserve(output.scheduled_reqs.size());
-    for (const RequestData& req_data : output.scheduled_reqs)
+    prepared.prefill_segments.reserve(request_infos.size());
+    for (const PreparedRequestInfo& info : request_infos)
     {
-        const auto count_it = output.num_scheduled_tokens.find(req_data.req_id);
-        if (count_it == output.num_scheduled_tokens.end() || count_it->second <= 0)
-        {
-            prepared.prefill_segments.clear();
-            return;
-        }
-        const int32_t scheduled_tokens = count_it->second;
+        const RequestData& req_data = *info.req_data;
         const bool full_prompt_prefill =
             req_data.num_computed_tokens == 0
-            && scheduled_tokens == req_data.prompt_token_count;
+            && info.scheduled_tokens == req_data.prompt_token_count;
         if (!full_prompt_prefill)
         {
             prepared.prefill_segments.clear();
             return;
         }
-        if (req_data.new_token_ids.size() < static_cast<size_t>(scheduled_tokens))
-        {
-            prepared.prefill_segments.clear();
-            return;
-        }
-
         prepared.prefill_segments.push_back(
-            ops::PagedAttentionPrefillSegment{row_start, seq_index, scheduled_tokens});
-        row_start += scheduled_tokens;
+            ops::PagedAttentionPrefillSegment{row_start, seq_index, info.scheduled_tokens});
+        row_start += info.scheduled_tokens;
         ++seq_index;
     }
 
@@ -182,6 +177,51 @@ void populate_prefill_segments(const SchedulerOutput& output,
     }
 
     prepared.prefill_segments.clear();
+}
+
+int32_t required_block_count(int32_t context_len, int32_t block_size_tokens)
+{
+    if (context_len <= 0)
+    {
+        return 0;
+    }
+    return (context_len - 1) / block_size_tokens + 1;
+}
+
+int32_t checked_context_len(int32_t num_computed_tokens, int32_t scheduled_tokens, const char* caller)
+{
+    const int64_t context_len =
+        static_cast<int64_t>(num_computed_tokens) + static_cast<int64_t>(scheduled_tokens);
+    if (context_len > static_cast<int64_t>(std::numeric_limits<int32_t>::max()))
+    {
+        throw std::runtime_error(std::string(caller) + ": context length exceeds int32 range.");
+    }
+    return static_cast<int32_t>(context_len);
+}
+
+void validate_required_blocks(const RequestData& req_data,
+                              int32_t num_layers,
+                              int32_t required_blocks,
+                              const char* caller)
+{
+    if (static_cast<int32_t>(req_data.block_tables.size()) != num_layers)
+    {
+        throw std::runtime_error(std::string(caller) + ": block_tables layer count must match model.");
+    }
+    for (const std::vector<int32_t>& layer_blocks : req_data.block_tables)
+    {
+        if (static_cast<int32_t>(layer_blocks.size()) < required_blocks)
+        {
+            throw std::runtime_error(std::string(caller) + ": block table does not cover scheduled context.");
+        }
+        for (int32_t block_index = 0; block_index < required_blocks; ++block_index)
+        {
+            if (layer_blocks[static_cast<size_t>(block_index)] < 0)
+            {
+                throw std::runtime_error(std::string(caller) + ": physical block id must be non-negative.");
+            }
+        }
+    }
 }
 
 Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
@@ -308,7 +348,6 @@ WeightMap load_weight_map_from_safetensors(
 }
 
 void validate_prepared_tensor_pack(const PreparedInputs& inputs,
-                                   int32_t vocab_size,
                                    int32_t num_layers,
                                    const char* caller)
 {
@@ -361,31 +400,6 @@ void validate_prepared_tensor_pack(const PreparedInputs& inputs,
         || inputs.block_tables.device() != device)
     {
         throw std::runtime_error(std::string(caller) + ": prepared tensors must be on the same device.");
-    }
-    if (input_shape[0] == 0)
-    {
-        return;
-    }
-    if (device.is_cuda())
-    {
-        return;
-    }
-
-    const Tensor input_cpu = tensor_to_cpu_contiguous(inputs.input_ids);
-    const Tensor positions_cpu = tensor_to_cpu_contiguous(inputs.positions);
-    const int32_t* input_ptr = input_cpu.data_ptr<int32_t>();
-    const int32_t* position_ptr = positions_cpu.data_ptr<int32_t>();
-    for (int64_t row = 0; row < input_shape[0]; ++row)
-    {
-        const int32_t token_id = input_ptr[row];
-        if (token_id < 0 || token_id >= vocab_size)
-        {
-            throw std::runtime_error(std::string(caller) + ": token is out of model vocab range.");
-        }
-        if (position_ptr[row] < 0)
-        {
-            throw std::runtime_error(std::string(caller) + ": positions must be non-negative.");
-        }
     }
 }
 
@@ -481,28 +495,32 @@ void ModelRunner::validate_token_ids(const std::vector<int32_t>& token_ids, cons
     }
 }
 
-ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& output)
+ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& output, ExecutionContext& ctx)
 {
-    validate_handles();
-    ExecutionContext& ctx = require_global_execution_context("ModelRunner::prepare_batch");
+    constexpr const char* kCaller = "ModelRunner::prepare_batch";
     const c10::Device runtime_device = ctx.device();
 
     PreparedBatch batch;
     PreparedInputs& prepared = batch.inputs;
 
     const int64_t request_count = static_cast<int64_t>(output.scheduled_reqs.size());
+    batch.scheduling_stats.scheduled_requests = request_count;
     const int64_t total_tokens = static_cast<int64_t>(std::max(0, output.total_num_scheduled_tokens));
     if (request_count == 0 || total_tokens == 0)
     {
-        prepared.input_ids = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
-        prepared.positions = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
-        prepared.slot_mapping = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
-        prepared.seq_indices = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
-        prepared.context_lens = make_int32_tensor_from_host({}, {0}, runtime_device, "ModelRunner::prepare_batch");
-        prepared.block_tables = make_int32_tensor_from_host({}, {model_->num_layers(), 0, 0}, runtime_device, "ModelRunner::prepare_batch");
+        prepared.input_ids = make_int32_tensor_from_host({}, {0}, runtime_device, kCaller);
+        prepared.positions = make_int32_tensor_from_host({}, {0}, runtime_device, kCaller);
+        prepared.slot_mapping = make_int32_tensor_from_host({}, {0}, runtime_device, kCaller);
+        prepared.seq_indices = make_int32_tensor_from_host({}, {0}, runtime_device, kCaller);
+        prepared.context_lens = make_int32_tensor_from_host({}, {0}, runtime_device, kCaller);
+        prepared.block_tables = make_int32_tensor_from_host({}, {model_->num_layers(), 0, 0}, runtime_device, kCaller);
         return batch;
     }
 
+    const int32_t num_layers = model_->num_layers();
+    const int32_t vocab_size = model_->vocab_size();
+    std::vector<PreparedRequestInfo> request_infos;
+    request_infos.reserve(static_cast<size_t>(request_count));
     int64_t max_blocks_per_seq = 0;
     int64_t checked_total_tokens = 0;
     for (const RequestData& req_data : output.scheduled_reqs)
@@ -510,39 +528,75 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
         const auto count_it = output.num_scheduled_tokens.find(req_data.req_id);
         if (count_it == output.num_scheduled_tokens.end())
         {
-            throw std::runtime_error("ModelRunner::prepare_batch: missing token budget for scheduled request.");
+            throw std::runtime_error(std::string(kCaller) + ": missing token budget for scheduled request.");
         }
         const int32_t scheduled_tokens = count_it->second;
         if (scheduled_tokens <= 0)
         {
-            throw std::runtime_error("ModelRunner::prepare_batch: scheduled token budget must be positive.");
+            throw std::runtime_error(std::string(kCaller) + ": scheduled token budget must be positive.");
         }
         if (req_data.num_computed_tokens < 0)
         {
-            throw std::runtime_error("ModelRunner::prepare_batch: num_computed_tokens must be non-negative.");
+            throw std::runtime_error(std::string(kCaller) + ": num_computed_tokens must be non-negative.");
         }
         if (req_data.new_token_ids.size() < static_cast<size_t>(scheduled_tokens))
         {
-            throw std::runtime_error("ModelRunner::prepare_batch: new_token_ids is shorter than scheduled budget.");
+            throw std::runtime_error(std::string(kCaller) + ": new_token_ids is shorter than scheduled budget.");
         }
-        if (static_cast<int32_t>(req_data.block_tables.size()) != model_->num_layers())
-        {
-            throw std::runtime_error("ModelRunner::prepare_batch: block_tables layer count must match model.");
-        }
+        const int32_t context_len = checked_context_len(
+            req_data.num_computed_tokens,
+            scheduled_tokens,
+            kCaller);
+        const int32_t required_blocks = required_block_count(context_len, kv_block_size_tokens_);
+        validate_required_blocks(req_data, num_layers, required_blocks, kCaller);
+
         for (const std::vector<int32_t>& layer_blocks : req_data.block_tables)
         {
-            if (layer_blocks.empty())
-            {
-                throw std::runtime_error("ModelRunner::prepare_batch: each layer block table must be non-empty.");
-            }
             max_blocks_per_seq = std::max(max_blocks_per_seq, static_cast<int64_t>(layer_blocks.size()));
         }
+
+        bool request_has_prefill = false;
+        bool request_has_decode = false;
+        batch.scheduling_stats.max_context_len = std::max<int64_t>(
+            batch.scheduling_stats.max_context_len,
+            static_cast<int64_t>(context_len));
+        for (int32_t i = 0; i < scheduled_tokens; ++i)
+        {
+            const int32_t position = req_data.num_computed_tokens + i;
+            if (position < req_data.prompt_token_count)
+            {
+                ++batch.scheduling_stats.prefill_tokens;
+                request_has_prefill = true;
+            }
+            else
+            {
+                ++batch.scheduling_stats.decode_tokens;
+                request_has_decode = true;
+            }
+        }
+        if (request_has_prefill)
+        {
+            ++batch.scheduling_stats.prefill_requests;
+        }
+        if (request_has_decode)
+        {
+            ++batch.scheduling_stats.decode_requests;
+        }
+
+        request_infos.push_back(PreparedRequestInfo{
+            &req_data,
+            scheduled_tokens,
+            context_len,
+            required_blocks});
         checked_total_tokens += scheduled_tokens;
     }
     if (checked_total_tokens != total_tokens)
     {
-        throw std::runtime_error("ModelRunner::prepare_batch: total scheduled token count mismatch.");
+        throw std::runtime_error(std::string(kCaller) + ": total scheduled token count mismatch.");
     }
+    batch.scheduling_stats.scheduled_tokens =
+        batch.scheduling_stats.prefill_tokens + batch.scheduling_stats.decode_tokens;
+    batch.scheduling_stats.profiled_steps = batch.scheduling_stats.scheduled_tokens > 0 ? 1 : 0;
 
     std::vector<int32_t> input_values(static_cast<size_t>(total_tokens), 0);
     std::vector<int32_t> position_values(static_cast<size_t>(total_tokens), 0);
@@ -550,7 +604,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     std::vector<int32_t> seq_index_values(static_cast<size_t>(total_tokens), 0);
     std::vector<int32_t> context_values(static_cast<size_t>(request_count), 0);
     std::vector<int32_t> block_table_values(
-        static_cast<size_t>(model_->num_layers() * request_count * max_blocks_per_seq),
+        static_cast<size_t>(num_layers * request_count * max_blocks_per_seq),
         -1);
 
     int64_t flat_token_index = 0;
@@ -560,16 +614,15 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     batch.sampling_params.reserve(static_cast<size_t>(request_count));
     batch.token_histories.reserve(static_cast<size_t>(request_count));
 
-    for (const RequestData& req_data : output.scheduled_reqs)
+    for (const PreparedRequestInfo& info : request_infos)
     {
-        const int32_t scheduled_tokens = output.num_scheduled_tokens.at(req_data.req_id);
-        const int32_t context_len = req_data.num_computed_tokens + scheduled_tokens;
-        context_values[static_cast<size_t>(seq_index)] = context_len;
+        const RequestData& req_data = *info.req_data;
+        context_values[static_cast<size_t>(seq_index)] = info.context_len;
         for (size_t layer = 0; layer < req_data.block_tables.size(); ++layer)
         {
             const std::vector<int32_t>& layer_blocks = req_data.block_tables[layer];
             for (size_t col = 0; col < layer_blocks.size(); ++col)
-            {
+            {   // block_table_values[num_layers, num_seqs, max_blocks_per_seq]
                 block_table_values[
                     static_cast<int64_t>(layer) * request_count * max_blocks_per_seq
                     + seq_index * max_blocks_per_seq
@@ -577,21 +630,17 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
             }
         }
 
-        for (int32_t i = 0; i < scheduled_tokens; ++i)
+        for (int32_t i = 0; i < info.scheduled_tokens; ++i)
         {
             const int32_t position = req_data.num_computed_tokens + i;
             const int32_t logical_block_index = position / kv_block_size_tokens_;
-            if (logical_block_index < 0
-                || logical_block_index >= static_cast<int32_t>(req_data.block_tables[0].size()))
+            const int32_t token_id = req_data.new_token_ids[static_cast<size_t>(i)];
+            if (token_id < 0 || token_id >= vocab_size)
             {
-                throw std::runtime_error("ModelRunner::prepare_batch: logical block index is out of range.");
+                throw std::runtime_error(std::string(kCaller) + ": token is out of model vocab range.");
             }
             const int32_t physical_block_id = req_data.block_tables[0][static_cast<size_t>(logical_block_index)];
-            if (physical_block_id < 0)
-            {
-                throw std::runtime_error("ModelRunner::prepare_batch: physical block id must be non-negative.");
-            }
-            input_values[static_cast<size_t>(flat_token_index)] = req_data.new_token_ids[static_cast<size_t>(i)];
+            input_values[static_cast<size_t>(flat_token_index)] = token_id;
             position_values[static_cast<size_t>(flat_token_index)] = position;
             slot_values[static_cast<size_t>(flat_token_index)] =
                 physical_block_id * kv_block_size_tokens_ + (position % kv_block_size_tokens_);
@@ -608,28 +657,28 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
 
     if (flat_token_index != total_tokens)
     {
-        throw std::runtime_error("ModelRunner::prepare_batch: flattened token count mismatch.");
+        throw std::runtime_error(std::string(kCaller) + ": flattened token count mismatch.");
     }
 
-    prepared.input_ids = make_int32_tensor_from_host(input_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
-    prepared.positions = make_int32_tensor_from_host(position_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
-    prepared.slot_mapping = make_int32_tensor_from_host(slot_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
-    prepared.seq_indices = make_int32_tensor_from_host(seq_index_values, {total_tokens}, runtime_device, "ModelRunner::prepare_batch");
-    prepared.context_lens = make_int32_tensor_from_host(context_values, {request_count}, runtime_device, "ModelRunner::prepare_batch");
+    prepared.input_ids = make_int32_tensor_from_host(input_values, {total_tokens}, runtime_device, kCaller);
+    prepared.positions = make_int32_tensor_from_host(position_values, {total_tokens}, runtime_device, kCaller);
+    prepared.slot_mapping = make_int32_tensor_from_host(slot_values, {total_tokens}, runtime_device, kCaller);
+    prepared.seq_indices = make_int32_tensor_from_host(seq_index_values, {total_tokens}, runtime_device, kCaller);
+    prepared.context_lens = make_int32_tensor_from_host(context_values, {request_count}, runtime_device, kCaller);
     prepared.block_tables = make_int32_tensor_from_host(
         block_table_values,
-        {model_->num_layers(), request_count, max_blocks_per_seq},
+        {num_layers, request_count, max_blocks_per_seq},
         runtime_device,
-        "ModelRunner::prepare_batch");
-    populate_prefill_segments(output, total_tokens, prepared);
+        kCaller);
+    populate_prefill_segments(request_infos, total_tokens, prepared);
     return batch;
 }
 
-Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStats* profiling) const
+Tensor ModelRunner::run_model(const PreparedInputs& inputs,
+                              ExecutionContext& exec_ctx,
+                              RuntimeProfilingStats* profiling) const
 {
-    validate_handles();
-    ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run_model");
-    validate_prepared_tensor_pack(inputs, model_->vocab_size(), model_->num_layers(), "ModelRunner::run_model");
+    validate_prepared_tensor_pack(inputs, model_->num_layers(), "ModelRunner::run_model");
     if (inputs.input_ids.numel() == 0)
     {
         return torch::empty(
@@ -657,67 +706,23 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs, RuntimeProfilingStat
 
 ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 {
-    validate_handles();
-    const c10::Device runtime_device = require_global_execution_context("ModelRunner::run").device();
-
-    int64_t prefill_tokens = 0; // 该轮所有调度的，prefill 状态的 token
-    int64_t decode_tokens = 0; // 该轮所有调度的，decode 状态的 token
-    int64_t prefill_requests = 0; // 该轮调度的，包含 prefill 状态 token 的 req 数量
-    int64_t decode_requests = 0; // 该轮调度的，包含 decode 状态 token 的 req 数量
-    int64_t max_context_len = 0; // 完成该轮调度后的 req 最大序列长度
-    for (const RequestData& req_data : scheduler_output.scheduled_reqs)
+    if (model_ == nullptr)
     {
-        const auto count_it = scheduler_output.num_scheduled_tokens.find(req_data.req_id);
-        if (count_it == scheduler_output.num_scheduled_tokens.end() || count_it->second <= 0)
-        {
-            continue;
-        }
-        bool request_has_prefill = false; // 该 req 调度的 prefill token 数量
-        bool request_has_decode = false; // 该 req 调度的 decode token 数量
-        max_context_len = std::max<int64_t>(
-            max_context_len,
-            static_cast<int64_t>(req_data.num_computed_tokens) + static_cast<int64_t>(count_it->second));
-        for (int32_t i = 0; i < count_it->second; ++i)
-        {
-            const int32_t position = req_data.num_computed_tokens + i;
-            if (position < req_data.prompt_token_count)
-            {
-                ++prefill_tokens;
-                request_has_prefill = true;
-            }
-            else
-            {
-                ++decode_tokens;
-                request_has_decode = true;
-            }
-        }
-        if (request_has_prefill)
-        {
-            ++prefill_requests;
-        }
-        if (request_has_decode)
-        {
-            ++decode_requests;
-        }
+        throw std::runtime_error("ModelRunner: model must be non-null.");
     }
+    ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run");
+    const c10::Device runtime_device = exec_ctx.device();
 
     synchronize_for_profile(runtime_device);
     const auto prepare_start = ProfileClock::now();
-    PreparedBatch batch = prepare_batch(scheduler_output);
+    PreparedBatch batch = prepare_batch(scheduler_output, exec_ctx);
     const PreparedInputs& inputs = batch.inputs;
     synchronize_for_profile(runtime_device);
     const auto prepare_end = ProfileClock::now();
 
     ModelRunnerOutput output;
+    output.profiling = batch.scheduling_stats;
     output.profiling.prepare_inputs_ms = elapsed_profile_ms(prepare_start, prepare_end);
-    output.profiling.prefill_tokens = prefill_tokens;
-    output.profiling.decode_tokens = decode_tokens;
-    output.profiling.scheduled_requests = static_cast<int64_t>(scheduler_output.scheduled_reqs.size());
-    output.profiling.scheduled_tokens = prefill_tokens + decode_tokens;
-    output.profiling.prefill_requests = prefill_requests;
-    output.profiling.decode_requests = decode_requests;
-    output.profiling.max_context_len = max_context_len;
-    output.profiling.profiled_steps = (prefill_tokens + decode_tokens) > 0 ? 1 : 0;
     output.sampled_token_ids.reserve(batch.req_ids.size());
     output.req_id_to_index.reserve(batch.req_ids.size());
     if (inputs.input_ids.numel() == 0)
@@ -728,7 +733,7 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
 
     synchronize_for_profile(runtime_device);
     const auto model_start = ProfileClock::now();
-    Tensor logits = run_model(inputs, &output.profiling);
+    Tensor logits = run_model(inputs, exec_ctx, &output.profiling);
     synchronize_for_profile(runtime_device);
     const auto model_end = ProfileClock::now();
 
@@ -827,13 +832,15 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
     }
 
     const double model_ms = elapsed_profile_ms(model_start, model_end);
-    const int64_t model_tokens = prefill_tokens + decode_tokens;
-    if (model_tokens > 0 && prefill_tokens > 0 && decode_tokens > 0)
+    const int64_t model_tokens = output.profiling.scheduled_tokens;
+    if (model_tokens > 0 && output.profiling.prefill_tokens > 0 && output.profiling.decode_tokens > 0)
     {
-        output.profiling.prefill_ms = model_ms * static_cast<double>(prefill_tokens) / static_cast<double>(model_tokens);
-        output.profiling.decode_ms_total = model_ms * static_cast<double>(decode_tokens) / static_cast<double>(model_tokens);
+        output.profiling.prefill_ms =
+            model_ms * static_cast<double>(output.profiling.prefill_tokens) / static_cast<double>(model_tokens);
+        output.profiling.decode_ms_total =
+            model_ms * static_cast<double>(output.profiling.decode_tokens) / static_cast<double>(model_tokens);
     }
-    else if (prefill_tokens > 0)
+    else if (output.profiling.prefill_tokens > 0)
     {
         output.profiling.prefill_ms = model_ms;
     }
