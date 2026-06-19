@@ -38,6 +38,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeat", type=positive_int, default=3)
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
     parser.add_argument("--ignore-eos", action="store_true", help="require backends to generate max_new_tokens")
+    parser.add_argument("--workload-jsonl", help="flat JSONL workload with prompt/request_id records")
+    parser.add_argument("--events-jsonl", help="TinyLLM raw request event JSONL output path")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--top-k", type=non_negative_int, default=0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--benchmark-mode",
         choices=("correctness", "fixed_output_perf"),
@@ -91,11 +98,24 @@ def command_common_args(args: argparse.Namespace) -> List[str]:
         str(args.repeat),
         "--max-new-tokens",
         str(args.max_new_tokens),
+        "--temperature",
+        str(args.temperature),
+        "--top-p",
+        str(args.top_p),
+        "--top-k",
+        str(args.top_k),
+        "--repetition-penalty",
+        str(args.repetition_penalty),
+        "--seed",
+        str(args.seed),
     ]
     if args.ignore_eos:
         command.append("--ignore-eos")
-    for prompt in args.prompts or DEFAULT_PROMPTS:
-        command.extend(["--prompt", prompt])
+    if args.workload_jsonl:
+        command.extend(["--workload-jsonl", str(Path(args.workload_jsonl).expanduser())])
+    else:
+        for prompt in args.prompts or DEFAULT_PROMPTS:
+            command.extend(["--prompt", prompt])
     command.append("--json")
     command.append(str(Path(args.model_dir).expanduser()))
     return command
@@ -132,6 +152,9 @@ def run_tinyllm(args: argparse.Namespace) -> Dict[str, Any]:
     common[json_index:json_index] = ["--max-num-batched-token-cap", str(args.max_num_batched_token_cap)]
     if args.profile_detail:
         common.insert(-1, "--profile-detail")
+    if args.events_jsonl:
+        common.insert(-1, str(Path(args.events_jsonl).expanduser()))
+        common.insert(-2, "--events-jsonl")
     return run_command([str(binary), *common], "tinyllm")
 
 

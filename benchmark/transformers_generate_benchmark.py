@@ -4,7 +4,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 DEFAULT_PROMPTS = ["hello", "tiny llm inference"]
@@ -50,9 +50,87 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
     parser.add_argument("--ignore-eos", action="store_true", help="generate exactly max_new_tokens unless another hard limit is hit")
     parser.add_argument("--prompt", action="append", dest="prompts", default=[])
+    parser.add_argument("--workload-jsonl", help="flat JSONL workload with prompt/request_id records")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--top-k", type=non_negative_int, default=0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("model_dir")
     return parser.parse_args()
+
+
+def load_workload_jsonl(args: argparse.Namespace) -> Tuple[List[str], List[str]]:
+    if not args.workload_jsonl:
+        prompts = args.prompts or DEFAULT_PROMPTS
+        return prompts, [f"request-{idx}" for idx in range(len(prompts))]
+
+    prompts: List[str] = []
+    request_ids: List[str] = []
+    max_new_tokens: Optional[int] = None
+    ignore_eos: Optional[bool] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    repetition_penalty: Optional[float] = None
+    with Path(args.workload_jsonl).expanduser().open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            prompt = record.get("prompt")
+            if not isinstance(prompt, str):
+                raise RuntimeError(f"workload record {line_number} missing string prompt")
+            prompts.append(prompt)
+            request_ids.append(str(record.get("request_id", f"request-{len(request_ids)}")))
+
+            if "max_new_tokens" in record:
+                value = int(record["max_new_tokens"])
+                if max_new_tokens is not None and max_new_tokens != value:
+                    raise RuntimeError("mixed workload max_new_tokens values are not supported")
+                max_new_tokens = value
+            if "ignore_eos" in record:
+                value = bool(record["ignore_eos"])
+                if ignore_eos is not None and ignore_eos != value:
+                    raise RuntimeError("mixed workload ignore_eos values are not supported")
+                ignore_eos = value
+            if "temperature" in record:
+                value = float(record["temperature"])
+                if temperature is not None and temperature != value:
+                    raise RuntimeError("mixed workload temperature values are not supported")
+                temperature = value
+            if "top_p" in record:
+                value = float(record["top_p"])
+                if top_p is not None and top_p != value:
+                    raise RuntimeError("mixed workload top_p values are not supported")
+                top_p = value
+            if "top_k" in record:
+                value = int(record["top_k"])
+                if top_k is not None and top_k != value:
+                    raise RuntimeError("mixed workload top_k values are not supported")
+                top_k = value
+            if "repetition_penalty" in record:
+                value = float(record["repetition_penalty"])
+                if repetition_penalty is not None and repetition_penalty != value:
+                    raise RuntimeError("mixed workload repetition_penalty values are not supported")
+                repetition_penalty = value
+
+    if not prompts:
+        raise RuntimeError(f"workload JSONL is empty: {args.workload_jsonl}")
+    if max_new_tokens is not None:
+        args.max_new_tokens = max_new_tokens
+    if ignore_eos is not None:
+        args.ignore_eos = ignore_eos
+    if temperature is not None:
+        args.temperature = temperature
+    if top_p is not None:
+        args.top_p = top_p
+    if top_k is not None:
+        args.top_k = top_k
+    if repetition_penalty is not None:
+        args.repetition_penalty = repetition_penalty
+    return prompts, request_ids
 
 
 def validate_model_dir(model_dir: Path) -> None:
@@ -133,6 +211,7 @@ def generate_once(
     tokenizer,
     model,
     prompts: List[str],
+    request_ids: List[str],
     prompt_tokens: int,
     load_ms: float,
     args: argparse.Namespace,
@@ -151,15 +230,23 @@ def generate_once(
         attention_mask = attention_mask.to(device)
 
     timer.mark_start()
+    if args.seed:
+        torch.manual_seed(int(args.seed))
     generate_kwargs = {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
-        "do_sample": False,
+        "do_sample": bool(args.temperature > 0.0),
         "max_new_tokens": args.max_new_tokens,
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": None if args.ignore_eos else tokenizer.eos_token_id,
         "logits_processor": logits_processor_list([timer]),
+        "repetition_penalty": float(args.repetition_penalty),
     }
+    if args.temperature > 0.0:
+        generate_kwargs["temperature"] = float(args.temperature)
+        generate_kwargs["top_p"] = float(args.top_p)
+        if int(args.top_k) > 0:
+            generate_kwargs["top_k"] = int(args.top_k)
 
     with torch.no_grad():
         output_ids = model.generate(**generate_kwargs)
@@ -175,6 +262,7 @@ def generate_once(
         generated_tokens += len(generated_token_ids)
         samples.append(
             {
+                "request_id": request_ids[idx],
                 "prompt": prompts[idx],
                 "output_text": tokenizer.decode(generated_token_ids, skip_special_tokens=True),
                 "generated_text": tokenizer.decode(generated_token_ids, skip_special_tokens=True),
@@ -235,6 +323,11 @@ def build_summary(args: argparse.Namespace, model_dir: Path, device_text: str, p
         "warmup": args.warmup,
         "repeat": args.repeat,
         "max_new_tokens": args.max_new_tokens,
+        "temperature": float(args.temperature),
+        "top_p": float(args.top_p),
+        "top_k": int(args.top_k),
+        "repetition_penalty": float(args.repetition_penalty),
+        "seed": int(args.seed),
         "ignore_eos": bool(args.ignore_eos),
         "avg_load_init_ms": mean(load_ms),
         "avg_total_latency_ms": avg_total_ms,
@@ -259,7 +352,8 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
     print(
         f"  prompts: {summary['prompt_count']}, warmup: {summary['warmup']}, "
         f"repeat: {summary['repeat']}, max_new_tokens: {summary['max_new_tokens']}, "
-        f"ignore_eos: {'on' if summary['ignore_eos'] else 'off'}"
+        f"ignore_eos: {'on' if summary['ignore_eos'] else 'off'}, "
+        f"temperature: {summary['temperature']}, top_p: {summary['top_p']}, top_k: {summary['top_k']}"
     )
     print("  latency:")
     print(f"    avg_load_init_ms: {summary['avg_load_init_ms']:.3f}")
@@ -292,7 +386,7 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
 
 def main() -> int:
     args = parse_args()
-    prompts = args.prompts or DEFAULT_PROMPTS
+    prompts, request_ids = load_workload_jsonl(args)
     model_dir = Path(args.model_dir).expanduser()
     validate_model_dir(model_dir)
     torch, auto_model, auto_tokenizer, logits_processor_list = import_deps()
@@ -305,11 +399,33 @@ def main() -> int:
     prompt_tokens = count_prompt_tokens(tokenizer, prompts)
 
     for _ in range(args.warmup):
-        generate_once(tokenizer, model, prompts, prompt_tokens, load_ms, args, device, torch, logits_processor_list, False)
+        generate_once(
+            tokenizer,
+            model,
+            prompts,
+            request_ids,
+            prompt_tokens,
+            load_ms,
+            args,
+            device,
+            torch,
+            logits_processor_list,
+            False)
 
     repeats = []
     for _ in range(args.repeat):
-        metrics = generate_once(tokenizer, model, prompts, prompt_tokens, load_ms, args, device, torch, logits_processor_list, True)
+        metrics = generate_once(
+            tokenizer,
+            model,
+            prompts,
+            request_ids,
+            prompt_tokens,
+            load_ms,
+            args,
+            device,
+            torch,
+            logits_processor_list,
+            True)
         assert metrics is not None
         repeats.append(metrics)
 

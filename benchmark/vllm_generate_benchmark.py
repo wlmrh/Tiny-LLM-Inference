@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
     parser.add_argument("--ignore-eos", action="store_true", help="generate exactly max_new_tokens unless another hard limit is hit")
     parser.add_argument("--prompt", action="append", dest="prompts", default=[])
+    parser.add_argument("--workload-jsonl", help="flat JSONL workload with prompt/request_id records")
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--top-k", type=non_negative_int, default=0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dtype", default="auto", help="vLLM dtype, for example auto, float16, bfloat16, or float32")
     parser.add_argument("--gpu-memory-utilization", type=positive_float, default=0.90)
     parser.add_argument(
@@ -52,6 +58,56 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("model_dir")
     return parser.parse_args()
+
+
+def load_workload_jsonl(args: argparse.Namespace) -> Tuple[List[str], List[str]]:
+    if not args.workload_jsonl:
+        prompts = args.prompts or DEFAULT_PROMPTS
+        return prompts, [f"request-{idx}" for idx in range(len(prompts))]
+
+    prompts: List[str] = []
+    request_ids: List[str] = []
+    max_new_tokens: Optional[int] = None
+    ignore_eos: Optional[bool] = None
+    with Path(args.workload_jsonl).expanduser().open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            prompt = record.get("prompt")
+            if not isinstance(prompt, str):
+                raise RuntimeError(f"workload record {line_number} missing string prompt")
+            prompts.append(prompt)
+            request_ids.append(str(record.get("request_id", f"request-{len(request_ids)}")))
+            if "max_new_tokens" in record:
+                value = int(record["max_new_tokens"])
+                if max_new_tokens is not None and max_new_tokens != value:
+                    raise RuntimeError("mixed workload max_new_tokens values are not supported")
+                max_new_tokens = value
+            if "ignore_eos" in record:
+                value = bool(record["ignore_eos"])
+                if ignore_eos is not None and ignore_eos != value:
+                    raise RuntimeError("mixed workload ignore_eos values are not supported")
+                ignore_eos = value
+            for key, attr, caster in (
+                ("temperature", "temperature", float),
+                ("top_p", "top_p", float),
+                ("top_k", "top_k", int),
+                ("repetition_penalty", "repetition_penalty", float),
+            ):
+                if key in record:
+                    current = getattr(args, attr)
+                    value = caster(record[key])
+                    if prompts[:-1] and current != value:
+                        raise RuntimeError(f"mixed workload {key} values are not supported")
+                    setattr(args, attr, value)
+    if not prompts:
+        raise RuntimeError(f"workload JSONL is empty: {args.workload_jsonl}")
+    if max_new_tokens is not None:
+        args.max_new_tokens = max_new_tokens
+    if ignore_eos is not None:
+        args.ignore_eos = ignore_eos
+    return prompts, request_ids
 
 
 def validate_model_dir(model_dir: Path) -> None:
@@ -161,10 +217,10 @@ def output_metrics_first_token_ms(outputs: List[Any]) -> Optional[float]:
     return min(first_token_ms)
 
 
-def extract_samples(outputs: List[Any]) -> Tuple[int, List[Dict[str, Any]]]:
+def extract_samples(outputs: List[Any], request_ids: List[str]) -> Tuple[int, List[Dict[str, Any]]]:
     generated_tokens = 0
     samples = []
-    for request_output in outputs:
+    for idx, request_output in enumerate(outputs):
         prompt = str(getattr(request_output, "prompt", ""))
         completions = list(getattr(request_output, "outputs", []))
         completion = completions[0] if completions else None
@@ -174,6 +230,7 @@ def extract_samples(outputs: List[Any]) -> Tuple[int, List[Dict[str, Any]]]:
         generated_tokens += len(token_ids)
         samples.append(
             {
+                "request_id": request_ids[idx] if idx < len(request_ids) else f"request-{idx}",
                 "prompt": prompt,
                 "output_text": text,
                 "generated_text": text,
@@ -190,6 +247,7 @@ def generate_once(
     sampling_params,
     first_token_sampling_params,
     prompts: List[str],
+    request_ids: List[str],
     prompt_tokens: int,
     load_ms: float,
     device_kind: str,
@@ -217,7 +275,7 @@ def generate_once(
         first_token_ms = (time.perf_counter() - probe_start) * 1000.0
         ttft_source = "one_token_probe"
 
-    generated_tokens, samples = extract_samples(outputs)
+    generated_tokens, samples = extract_samples(outputs, request_ids)
     return {
         "load_ms": load_ms,
         "total_ms": (generation_end - generation_start) * 1000.0,
@@ -267,6 +325,11 @@ def build_summary(
         "warmup": args.warmup,
         "repeat": args.repeat,
         "max_new_tokens": args.max_new_tokens,
+        "temperature": float(args.temperature),
+        "top_p": float(args.top_p),
+        "top_k": int(args.top_k),
+        "repetition_penalty": float(args.repetition_penalty),
+        "seed": int(args.seed),
         "ignore_eos": bool(args.ignore_eos),
         "dtype": args.dtype,
         "vllm_version": vllm_version,
@@ -297,7 +360,8 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
     print(
         f"  prompts: {summary['prompt_count']}, warmup: {summary['warmup']}, "
         f"repeat: {summary['repeat']}, max_new_tokens: {summary['max_new_tokens']}, "
-        f"ignore_eos: {'on' if summary['ignore_eos'] else 'off'}"
+        f"ignore_eos: {'on' if summary['ignore_eos'] else 'off'}, "
+        f"temperature: {summary['temperature']}, top_p: {summary['top_p']}, top_k: {summary['top_k']}"
     )
     print(
         f"  vllm: version {summary['vllm_version']}, dtype {summary['dtype']}, "
@@ -336,7 +400,7 @@ def print_summary(summary: Dict[str, Any], emit_json: bool) -> None:
 
 def main() -> int:
     args = parse_args()
-    prompts = args.prompts or DEFAULT_PROMPTS
+    prompts, request_ids = load_workload_jsonl(args)
     model_dir = Path(args.model_dir).expanduser()
     validate_model_dir(model_dir)
     os.environ.setdefault("VLLM_NO_USAGE_STATS", "1")
@@ -348,18 +412,18 @@ def main() -> int:
     tokenizer = auto_tokenizer.from_pretrained(model_dir, local_files_only=True, trust_remote_code=False)
     prompt_tokens = count_prompt_tokens(tokenizer, prompts)
     llm, load_ms = load_engine(args, model_dir, device_kind, llm_cls, torch)
-    sampling_params = sampling_params_cls(
-        temperature=0.0,
-        top_p=1.0,
-        max_tokens=args.max_new_tokens,
-        ignore_eos=bool(args.ignore_eos),
-    )
-    first_token_sampling_params = sampling_params_cls(
-        temperature=0.0,
-        top_p=1.0,
-        max_tokens=1,
-        ignore_eos=bool(args.ignore_eos),
-    )
+    if args.seed:
+        torch.manual_seed(int(args.seed))
+    sampling_kwargs = {
+        "temperature": float(args.temperature),
+        "top_p": float(args.top_p),
+        "repetition_penalty": float(args.repetition_penalty),
+        "ignore_eos": bool(args.ignore_eos),
+    }
+    if int(args.top_k) > 0:
+        sampling_kwargs["top_k"] = int(args.top_k)
+    sampling_params = sampling_params_cls(max_tokens=args.max_new_tokens, **sampling_kwargs)
+    first_token_sampling_params = sampling_params_cls(max_tokens=1, **sampling_kwargs)
 
     for _ in range(args.warmup):
         generate_once(
@@ -367,6 +431,7 @@ def main() -> int:
             sampling_params,
             first_token_sampling_params,
             prompts,
+            request_ids,
             prompt_tokens,
             load_ms,
             device_kind,
@@ -381,6 +446,7 @@ def main() -> int:
             sampling_params,
             first_token_sampling_params,
             prompts,
+            request_ids,
             prompt_tokens,
             load_ms,
             device_kind,
