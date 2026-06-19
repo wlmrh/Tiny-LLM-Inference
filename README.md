@@ -112,6 +112,20 @@ For direct JSONL output or explicit KV block sizing, use `llama_engine_generate`
 
 `llama_engine_generate` prints one JSON object per prompt and also supports `--kv-num-blocks N`.
 
+## Benchmarks
+
+The preferred reproducible benchmark entrypoint is the config-driven suite:
+
+```bash
+python3 benchmark/run_benchmark_suite.py \
+  --config benchmark/configs/qwen25_quick.json \
+  --backend tinyllm,transformers
+```
+
+It writes workload JSONL, TinyLLM request event traces, summary JSON, and Markdown reports under
+`benchmark/results/`. The lower-level `llama_engine_benchmark` binary also supports
+`--workload-jsonl`, full sampling flags, and `--events-jsonl` for request-level timing.
+
 ## Tests
 
 Run the default test suite after a CPU build:

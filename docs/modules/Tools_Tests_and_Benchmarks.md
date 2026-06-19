@@ -74,10 +74,24 @@ These scripts align TinyLLM behavior against HuggingFace Transformers or run mod
 Benchmark files:
 
 - `benchmark/llama_engine_benchmark.cpp`
+- `benchmark/run_benchmark_suite.py`
+- `benchmark/configs/*.json`
+- `benchmark/suite/*.py`
 - `benchmark/industrial_benchmark.py`
 - `benchmark/transformers_generate_benchmark.py`
 - `benchmark/vllm_generate_benchmark.py`
 - `benchmark/run_benchmark_comparison.py`
+
+`run_benchmark_suite.py` is the preferred benchmark entrypoint for reproducible reports. It generates
+flat JSONL workloads, runs TinyLLM plus selected baselines, captures TinyLLM request event JSONL, and
+writes summary JSON and Markdown reports under `benchmark/results/`.
+
+`llama_engine_benchmark` remains the C++ TinyLLM runner. It supports prompt lists or
+`--workload-jsonl`, aggregate JSON output, full sampling options, and `--events-jsonl` for
+request-level `submit`, `token`, and `finish` events. Event traces are used to compute request-level
+TTFT, E2E latency, and TPOT percentiles.
+
+`industrial_benchmark.py` is kept as a legacy preset wrapper for quick optimization loops.
 
 Benchmark policy:
 
@@ -85,6 +99,14 @@ Benchmark policy:
 - Use regression presets before claiming coherent throughput improvements.
 - Use full presets only at phase boundaries or for headline reports.
 - Keep benchmark outputs out of regular CTest registration.
+
+Benchmark suite quick run:
+
+```bash
+python3 benchmark/run_benchmark_suite.py \
+  --config benchmark/configs/qwen25_quick.json \
+  --backend tinyllm,transformers
+```
 
 ## Common Commands
 
