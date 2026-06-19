@@ -1,0 +1,60 @@
+{
+  "label": "qwen25_quick_suite",
+  "model_dir": "/models/Qwen2.5-1.5B-Instruct",
+  "tinyllm_binary": "build-cuda/benchmark/llama_engine_benchmark",
+  "device": "cuda:0",
+  "backends": ["tinyllm", "transformers"],
+  "defaults": {
+    "warmup": 0,
+    "repeat": 1,
+    "benchmark_mode": "fixed_output_perf",
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "seed": 0,
+    "ignore_eos": true
+  },
+  "workloads": [
+    {
+      "name": "correctness_greedy",
+      "batch": 2,
+      "input_tokens": 32,
+      "output_tokens": 8,
+      "benchmark_mode": "correctness",
+      "ignore_eos": false,
+      "backends": ["tinyllm", "transformers"]
+    },
+    {
+      "name": "short_chat",
+      "batch": 1,
+      "input_tokens": 64,
+      "output_tokens": 16
+    },
+    {
+      "name": "long_prefill",
+      "batch": 2,
+      "input_tokens": 512,
+      "output_tokens": 16
+    },
+    {
+      "name": "long_decode",
+      "batch": 2,
+      "input_tokens": 128,
+      "output_tokens": 64
+    },
+    {
+      "name": "mixed_serving",
+      "batch": 4,
+      "input_tokens": 160,
+      "output_tokens": 32
+    },
+    {
+      "name": "chunked_prefill_stress",
+      "batch": 2,
+      "input_tokens": 768,
+      "output_tokens": 8
+    }
+  ]
+}
+
