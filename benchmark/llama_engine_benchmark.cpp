@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -31,11 +33,16 @@ struct Options {
     int32_t warmup = 1;
     int32_t repeat = 3;
     int32_t max_new_tokens = 8;
+    bool max_new_tokens_explicit = false;
     bool ignore_eos = false;
+    bool ignore_eos_explicit = false;
     bool json = false;
     bool profile_detail = false;
     std::vector<std::string> prompts;
+    std::vector<std::string> request_ids;
     std::filesystem::path model_dir;
+    std::filesystem::path workload_jsonl;
+    std::filesystem::path events_jsonl;
     int64_t prompt_tokens = -1;
     std::vector<int64_t> prompt_token_counts;
     size_t kv_num_blocks = 0;
@@ -43,6 +50,13 @@ struct Options {
     int32_t max_num_batched_tokens = 0;
     bool max_num_batched_tokens_explicit = false;
     int32_t max_num_batched_token_cap = 4096;
+    float temperature = 0.0f;
+    float top_p = 1.0f;
+    int32_t top_k = 0;
+    float repetition_penalty = 1.0f;
+    bool repetition_penalty_explicit = false;
+    uint64_t seed = 0;
+    std::vector<int32_t> stop_token_ids;
 };
 
 struct PromptTokenStats {
@@ -51,12 +65,33 @@ struct PromptTokenStats {
 };
 
 struct SampleOutput {
+    std::string request_id;
     std::string prompt;
     std::string text;
     std::string generated_text;
     std::vector<int32_t> token_ids;
     bool finished = false;
     std::string finish_reason;
+};
+
+struct TokenTraceEvent {
+    int32_t token_index = 0;
+    int32_t token_id = -1;
+    double time_ms = 0.0;
+    std::string delta_text;
+    bool finished = false;
+};
+
+struct RequestTrace {
+    std::string request_id;
+    size_t prompt_index = 0;
+    double submit_ms = 0.0;
+    double first_token_ms = -1.0;
+    double finish_ms = -1.0;
+    int64_t prompt_tokens = 0;
+    int64_t generated_tokens = 0;
+    std::string finish_reason;
+    std::vector<TokenTraceEvent> tokens;
 };
 
 struct RepeatMetrics {
@@ -91,6 +126,7 @@ struct RepeatMetrics {
     double cuda_memory_peak_allocated_mb = 0.0;
     double cuda_memory_peak_reserved_mb = 0.0;
     std::vector<SampleOutput> samples;
+    std::vector<RequestTrace> request_traces;
 };
 
 struct CudaMemoryMetrics {
@@ -160,6 +196,42 @@ int32_t parse_non_negative_int(const char* text, const char* name)
     }
 }
 
+float parse_float(const char* text, const char* name)
+{
+    try
+    {
+        size_t consumed = 0;
+        const float value = std::stof(text, &consumed);
+        if (consumed != std::string(text).size())
+        {
+            throw std::runtime_error("expected float");
+        }
+        return value;
+    }
+    catch (const std::exception& ex)
+    {
+        throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
+    }
+}
+
+uint64_t parse_uint64(const char* text, const char* name)
+{
+    try
+    {
+        size_t consumed = 0;
+        const unsigned long long value = std::stoull(text, &consumed);
+        if (consumed != std::string(text).size())
+        {
+            throw std::runtime_error("expected uint64");
+        }
+        return static_cast<uint64_t>(value);
+    }
+    catch (const std::exception& ex)
+    {
+        throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
+    }
+}
+
 tiny_llm::ParallelConfig parse_device(const std::string& text)
 {
     if (text == "cpu")
@@ -179,6 +251,336 @@ tiny_llm::ParallelConfig parse_device(const std::string& text)
     }
 
     throw std::runtime_error("device must be cpu, cuda, or cuda:<device_id>.");
+}
+
+std::string json_escape(const std::string& text);
+
+size_t find_json_value(const std::string& line, const std::string& key)
+{
+    const std::string needle = "\"" + key + "\"";
+    const size_t key_pos = line.find(needle);
+    if (key_pos == std::string::npos)
+    {
+        return std::string::npos;
+    }
+    size_t colon = line.find(':', key_pos + needle.size());
+    if (colon == std::string::npos)
+    {
+        throw std::runtime_error("malformed workload JSON for key: " + key);
+    }
+    ++colon;
+    while (colon < line.size() && std::isspace(static_cast<unsigned char>(line[colon])))
+    {
+        ++colon;
+    }
+    return colon;
+}
+
+int hex_digit(char ch)
+{
+    if (ch >= '0' && ch <= '9')
+    {
+        return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f')
+    {
+        return ch - 'a' + 10;
+    }
+    if (ch >= 'A' && ch <= 'F')
+    {
+        return ch - 'A' + 10;
+    }
+    return -1;
+}
+
+void append_utf8(std::string& out, uint32_t codepoint)
+{
+    if (codepoint <= 0x7f)
+    {
+        out.push_back(static_cast<char>(codepoint));
+    }
+    else if (codepoint <= 0x7ff)
+    {
+        out.push_back(static_cast<char>(0xc0 | ((codepoint >> 6) & 0x1f)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+    }
+    else
+    {
+        out.push_back(static_cast<char>(0xe0 | ((codepoint >> 12) & 0x0f)));
+        out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3f)));
+        out.push_back(static_cast<char>(0x80 | (codepoint & 0x3f)));
+    }
+}
+
+std::string parse_json_string_at(const std::string& line, size_t pos, const std::string& key)
+{
+    if (pos >= line.size() || line[pos] != '"')
+    {
+        throw std::runtime_error("workload key must be a JSON string: " + key);
+    }
+    std::string out;
+    for (size_t i = pos + 1; i < line.size(); ++i)
+    {
+        const char ch = line[i];
+        if (ch == '"')
+        {
+            return out;
+        }
+        if (ch != '\\')
+        {
+            out.push_back(ch);
+            continue;
+        }
+        if (++i >= line.size())
+        {
+            throw std::runtime_error("unterminated JSON escape for key: " + key);
+        }
+        const char esc = line[i];
+        switch (esc)
+        {
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        case '/': out.push_back('/'); break;
+        case 'b': out.push_back('\b'); break;
+        case 'f': out.push_back('\f'); break;
+        case 'n': out.push_back('\n'); break;
+        case 'r': out.push_back('\r'); break;
+        case 't': out.push_back('\t'); break;
+        case 'u': {
+            if (i + 4 >= line.size())
+            {
+                throw std::runtime_error("short JSON unicode escape for key: " + key);
+            }
+            uint32_t codepoint = 0;
+            for (int digit_index = 0; digit_index < 4; ++digit_index)
+            {
+                const int digit = hex_digit(line[++i]);
+                if (digit < 0)
+                {
+                    throw std::runtime_error("invalid JSON unicode escape for key: " + key);
+                }
+                codepoint = (codepoint << 4) | static_cast<uint32_t>(digit);
+            }
+            append_utf8(out, codepoint);
+            break;
+        }
+        default:
+            throw std::runtime_error("unsupported JSON escape for key: " + key);
+        }
+    }
+    throw std::runtime_error("unterminated JSON string for key: " + key);
+}
+
+bool json_string_field(const std::string& line, const std::string& key, std::string& value)
+{
+    const size_t pos = find_json_value(line, key);
+    if (pos == std::string::npos)
+    {
+        return false;
+    }
+    value = parse_json_string_at(line, pos, key);
+    return true;
+}
+
+bool json_int_field(const std::string& line, const std::string& key, int32_t& value)
+{
+    const size_t pos = find_json_value(line, key);
+    if (pos == std::string::npos)
+    {
+        return false;
+    }
+    size_t consumed = 0;
+    const long parsed = std::stol(line.substr(pos), &consumed);
+    if (consumed == 0 || parsed < std::numeric_limits<int32_t>::min()
+        || parsed > std::numeric_limits<int32_t>::max())
+    {
+        throw std::runtime_error("invalid integer workload field: " + key);
+    }
+    value = static_cast<int32_t>(parsed);
+    return true;
+}
+
+bool json_float_field(const std::string& line, const std::string& key, float& value)
+{
+    const size_t pos = find_json_value(line, key);
+    if (pos == std::string::npos)
+    {
+        return false;
+    }
+    size_t consumed = 0;
+    value = std::stof(line.substr(pos), &consumed);
+    if (consumed == 0)
+    {
+        throw std::runtime_error("invalid float workload field: " + key);
+    }
+    return true;
+}
+
+bool json_bool_field(const std::string& line, const std::string& key, bool& value)
+{
+    const size_t pos = find_json_value(line, key);
+    if (pos == std::string::npos)
+    {
+        return false;
+    }
+    if (line.compare(pos, 4, "true") == 0)
+    {
+        value = true;
+        return true;
+    }
+    if (line.compare(pos, 5, "false") == 0)
+    {
+        value = false;
+        return true;
+    }
+    throw std::runtime_error("invalid boolean workload field: " + key);
+}
+
+void load_workload_jsonl(Options& options)
+{
+    if (options.workload_jsonl.empty())
+    {
+        return;
+    }
+    std::ifstream input(options.workload_jsonl);
+    if (!input)
+    {
+        throw std::runtime_error("failed to open workload JSONL: " + options.workload_jsonl.string());
+    }
+
+    options.prompts.clear();
+    options.request_ids.clear();
+    std::string line;
+    int64_t line_number = 0;
+    int32_t workload_max_new_tokens = -1;
+    bool workload_ignore_eos_set = false;
+    bool workload_ignore_eos = false;
+    bool workload_temperature_set = false;
+    bool workload_top_p_set = false;
+    bool workload_top_k_set = false;
+    bool workload_repetition_penalty_set = false;
+    float workload_temperature = options.temperature;
+    float workload_top_p = options.top_p;
+    int32_t workload_top_k = options.top_k;
+    float workload_repetition_penalty = options.repetition_penalty;
+    while (std::getline(input, line))
+    {
+        ++line_number;
+        if (line.empty())
+        {
+            continue;
+        }
+        std::string prompt;
+        if (!json_string_field(line, "prompt", prompt))
+        {
+            throw std::runtime_error("workload record missing prompt at line " + std::to_string(line_number));
+        }
+        std::string request_id;
+        if (!json_string_field(line, "request_id", request_id))
+        {
+            request_id = "request-" + std::to_string(options.prompts.size());
+        }
+        int32_t max_new_tokens = 0;
+        if (json_int_field(line, "max_new_tokens", max_new_tokens))
+        {
+            if (max_new_tokens <= 0)
+            {
+                throw std::runtime_error("workload max_new_tokens must be positive.");
+            }
+            if (workload_max_new_tokens >= 0 && workload_max_new_tokens != max_new_tokens)
+            {
+                throw std::runtime_error("mixed workload max_new_tokens values are not supported by this runner.");
+            }
+            workload_max_new_tokens = max_new_tokens;
+        }
+        if (!options.ignore_eos_explicit)
+        {
+            bool ignore_eos = false;
+            if (json_bool_field(line, "ignore_eos", ignore_eos))
+            {
+                if (workload_ignore_eos_set && workload_ignore_eos != ignore_eos)
+                {
+                    throw std::runtime_error("mixed workload ignore_eos values are not supported by this runner.");
+                }
+                workload_ignore_eos = ignore_eos;
+                workload_ignore_eos_set = true;
+            }
+        }
+        if (!options.repetition_penalty_explicit)
+        {
+            float value = 0.0f;
+            if (json_float_field(line, "repetition_penalty", value))
+            {
+                if (workload_repetition_penalty_set && workload_repetition_penalty != value)
+                {
+                    throw std::runtime_error("mixed workload repetition_penalty values are not supported by this runner.");
+                }
+                workload_repetition_penalty = value;
+                workload_repetition_penalty_set = true;
+            }
+        }
+        float float_value = 0.0f;
+        if (json_float_field(line, "temperature", float_value))
+        {
+            if (workload_temperature_set && workload_temperature != float_value)
+            {
+                throw std::runtime_error("mixed workload temperature values are not supported by this runner.");
+            }
+            workload_temperature = float_value;
+            workload_temperature_set = true;
+        }
+        if (json_float_field(line, "top_p", float_value))
+        {
+            if (workload_top_p_set && workload_top_p != float_value)
+            {
+                throw std::runtime_error("mixed workload top_p values are not supported by this runner.");
+            }
+            workload_top_p = float_value;
+            workload_top_p_set = true;
+        }
+        int32_t top_k = options.top_k;
+        if (json_int_field(line, "top_k", top_k))
+        {
+            if (workload_top_k_set && workload_top_k != top_k)
+            {
+                throw std::runtime_error("mixed workload top_k values are not supported by this runner.");
+            }
+            workload_top_k = top_k;
+            workload_top_k_set = true;
+        }
+
+        options.prompts.push_back(std::move(prompt));
+        options.request_ids.push_back(std::move(request_id));
+    }
+    if (!options.max_new_tokens_explicit && workload_max_new_tokens > 0)
+    {
+        options.max_new_tokens = workload_max_new_tokens;
+    }
+    if (!options.ignore_eos_explicit && workload_ignore_eos_set)
+    {
+        options.ignore_eos = workload_ignore_eos;
+    }
+    if (workload_temperature_set)
+    {
+        options.temperature = workload_temperature;
+    }
+    if (workload_top_p_set)
+    {
+        options.top_p = workload_top_p;
+    }
+    if (workload_top_k_set)
+    {
+        options.top_k = workload_top_k;
+    }
+    if (!options.repetition_penalty_explicit && workload_repetition_penalty_set)
+    {
+        options.repetition_penalty = workload_repetition_penalty;
+        options.repetition_penalty_explicit = true;
+    }
+    if (options.prompts.empty())
+    {
+        throw std::runtime_error("workload JSONL did not contain any requests: " + options.workload_jsonl.string());
+    }
 }
 
 bool has_safetensors_weight(const std::filesystem::path& model_dir)
@@ -228,7 +630,9 @@ void print_usage(const char* argv0)
               << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
               << " [--max-new-tokens N] [--kv-num-blocks N]"
               << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
-              << " [--prompt TEXT]..."
+              << " [--temperature F] [--top-p F] [--top-k N]"
+              << " [--repetition-penalty F] [--seed N] [--stop-token-id N]..."
+              << " [--prompt TEXT]... [--workload-jsonl PATH] [--events-jsonl PATH]"
               << " [--json] [--profile-detail] [--ignore-eos] <model_dir>\n";
 }
 
@@ -262,6 +666,7 @@ Options parse_args(int argc, char** argv)
         else if (arg == "--max-new-tokens")
         {
             options.max_new_tokens = parse_positive_int(require_value("--max-new-tokens"), "max-new-tokens");
+            options.max_new_tokens_explicit = true;
         }
         else if (arg == "--kv-num-blocks")
         {
@@ -285,6 +690,40 @@ Options parse_args(int argc, char** argv)
         {
             options.prompts.push_back(require_value("--prompt"));
         }
+        else if (arg == "--workload-jsonl")
+        {
+            options.workload_jsonl = expand_user_path(require_value("--workload-jsonl"));
+        }
+        else if (arg == "--events-jsonl")
+        {
+            options.events_jsonl = expand_user_path(require_value("--events-jsonl"));
+        }
+        else if (arg == "--temperature")
+        {
+            options.temperature = parse_float(require_value("--temperature"), "temperature");
+        }
+        else if (arg == "--top-p")
+        {
+            options.top_p = parse_float(require_value("--top-p"), "top-p");
+        }
+        else if (arg == "--top-k")
+        {
+            options.top_k = parse_non_negative_int(require_value("--top-k"), "top-k");
+        }
+        else if (arg == "--repetition-penalty")
+        {
+            options.repetition_penalty = parse_float(require_value("--repetition-penalty"), "repetition-penalty");
+            options.repetition_penalty_explicit = true;
+        }
+        else if (arg == "--seed")
+        {
+            options.seed = parse_uint64(require_value("--seed"), "seed");
+        }
+        else if (arg == "--stop-token-id")
+        {
+            options.stop_token_ids.push_back(
+                parse_non_negative_int(require_value("--stop-token-id"), "stop-token-id"));
+        }
         else if (arg == "--json")
         {
             options.json = true;
@@ -296,6 +735,7 @@ Options parse_args(int argc, char** argv)
         else if (arg == "--ignore-eos")
         {
             options.ignore_eos = true;
+            options.ignore_eos_explicit = true;
         }
         else if (arg == "--help" || arg == "-h")
         {
@@ -320,9 +760,22 @@ Options parse_args(int argc, char** argv)
     {
         throw std::runtime_error("model_dir is required.");
     }
+    load_workload_jsonl(options);
     if (options.prompts.empty())
     {
         options.prompts = {"hello", "tiny llm inference"};
+    }
+    if (!options.request_ids.empty() && options.request_ids.size() != options.prompts.size())
+    {
+        throw std::runtime_error("request_ids and prompts must have the same length.");
+    }
+    if (options.request_ids.empty())
+    {
+        options.request_ids.reserve(options.prompts.size());
+        for (size_t i = 0; i < options.prompts.size(); ++i)
+        {
+            options.request_ids.push_back("request-" + std::to_string(i));
+        }
     }
     options.parallel_config.validate();
 #if !TINYLLM_ENABLE_CUDA
@@ -438,16 +891,28 @@ size_t estimate_kv_num_blocks(const std::vector<int64_t>& prompt_token_counts,
 RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_ms, bool measure)
 {
     RepeatMetrics metrics;
+    metrics.request_traces.reserve(options.prompts.size());
+    for (size_t i = 0; i < options.prompts.size(); ++i)
+    {
+        RequestTrace trace;
+        trace.request_id = options.request_ids[i];
+        trace.prompt_index = i;
+        if (i < options.prompt_token_counts.size())
+        {
+            trace.prompt_tokens = options.prompt_token_counts[i];
+        }
+        metrics.request_traces.push_back(std::move(trace));
+    }
 
-    const tiny_llm::GenerationConfig generation_config =
-        tiny_llm::load_generation_config_from_dir(options.model_dir.string());
     tiny_llm::UserSamplingParams sampling_params;
-    sampling_params.temperature = 0.0f;
-    sampling_params.top_p = 1.0f;
-    sampling_params.top_k = 0;
-    sampling_params.repetition_penalty = generation_config.repetition_penalty;
+    sampling_params.temperature = options.temperature;
+    sampling_params.top_p = options.top_p;
+    sampling_params.top_k = options.top_k;
+    sampling_params.repetition_penalty = options.repetition_penalty;
+    sampling_params.seed = options.seed;
     sampling_params.max_tokens = options.max_new_tokens;
     sampling_params.ignore_eos = options.ignore_eos;
+    sampling_params.stop_token_ids = options.stop_token_ids;
 
     bool saw_first_token = false;
     Clock::time_point first_token_time{};
@@ -457,11 +922,38 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     }
     const auto generation_start = Clock::now();
     const std::vector<tiny_llm::CompletionOutput> outputs =
-        llm.generate(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput&) {
+        llm.generate(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
             if (!saw_first_token)
             {
                 saw_first_token = true;
                 first_token_time = Clock::now();
+            }
+            if (!measure || output.prompt_index >= metrics.request_traces.size())
+            {
+                return;
+            }
+            RequestTrace& trace = metrics.request_traces[output.prompt_index];
+            const double event_ms = elapsed_ms(generation_start, Clock::now());
+            if (trace.first_token_ms < 0.0)
+            {
+                trace.first_token_ms = event_ms;
+            }
+            if (output.token_id >= 0)
+            {
+                TokenTraceEvent event;
+                event.token_index = output.token_ids.empty()
+                    ? 0
+                    : static_cast<int32_t>(output.token_ids.size() - 1);
+                event.token_id = output.token_id;
+                event.time_ms = event_ms;
+                event.delta_text = output.delta_text;
+                event.finished = output.finished;
+                trace.tokens.push_back(std::move(event));
+            }
+            if (output.finished && trace.finish_ms < 0.0)
+            {
+                trace.finish_ms = event_ms;
+                trace.finish_reason = output.finish_reason;
             }
         });
     const auto generation_end = Clock::now();
@@ -504,10 +996,22 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     metrics.prompt_tokens = options.prompt_tokens;
     metrics.generated_tokens = 0;
     metrics.samples.reserve(outputs.size());
-    for (const tiny_llm::CompletionOutput& output : outputs)
+    for (size_t i = 0; i < outputs.size(); ++i)
     {
+        const tiny_llm::CompletionOutput& output = outputs[i];
         metrics.generated_tokens += static_cast<int64_t>(output.token_ids.size());
+        if (i < metrics.request_traces.size())
+        {
+            RequestTrace& trace = metrics.request_traces[i];
+            trace.generated_tokens = static_cast<int64_t>(output.token_ids.size());
+            if (trace.finish_ms < 0.0)
+            {
+                trace.finish_ms = metrics.total_ms;
+                trace.finish_reason = output.finish_reason;
+            }
+        }
         SampleOutput sample;
+        sample.request_id = i < options.request_ids.size() ? options.request_ids[i] : "request-" + std::to_string(i);
         sample.prompt = output.prompt;
         sample.text = output.text;
         sample.generated_text = output.text;
@@ -579,6 +1083,7 @@ void print_samples_json(const std::vector<SampleOutput>& samples)
         }
         const SampleOutput& sample = samples[i];
         std::cout << "{";
+        std::cout << "\"request_id\":\"" << json_escape(sample.request_id) << "\",";
         std::cout << "\"prompt\":\"" << json_escape(sample.prompt) << "\",";
         std::cout << "\"output_text\":\"" << json_escape(sample.text) << "\",";
         std::cout << "\"generated_text\":\"" << json_escape(sample.generated_text) << "\",";
@@ -589,6 +1094,75 @@ void print_samples_json(const std::vector<SampleOutput>& samples)
         std::cout << "}";
     }
     std::cout << "]";
+}
+
+void print_request_metrics_json(const std::vector<RequestTrace>& traces)
+{
+    std::cout << "[";
+    for (size_t i = 0; i < traces.size(); ++i)
+    {
+        if (i != 0)
+        {
+            std::cout << ",";
+        }
+        const RequestTrace& trace = traces[i];
+        const double tpot_ms = trace.generated_tokens > 1
+            ? (trace.finish_ms - std::max(0.0, trace.first_token_ms))
+                  / static_cast<double>(trace.generated_tokens - 1)
+            : 0.0;
+        std::cout << "{";
+        std::cout << "\"request_id\":\"" << json_escape(trace.request_id) << "\",";
+        std::cout << "\"prompt_index\":" << trace.prompt_index << ",";
+        std::cout << "\"prompt_tokens\":" << trace.prompt_tokens << ",";
+        std::cout << "\"generated_tokens\":" << trace.generated_tokens << ",";
+        std::cout << "\"submit_ms\":" << trace.submit_ms << ",";
+        std::cout << "\"first_token_ms\":" << trace.first_token_ms << ",";
+        std::cout << "\"finish_ms\":" << trace.finish_ms << ",";
+        std::cout << "\"tpot_ms\":" << tpot_ms << ",";
+        std::cout << "\"finish_reason\":\"" << json_escape(trace.finish_reason) << "\"";
+        std::cout << "}";
+    }
+    std::cout << "]";
+}
+
+void write_trace_events(
+    const std::filesystem::path& path,
+    int32_t repeat_index,
+    const RepeatMetrics& metrics)
+{
+    if (path.empty())
+    {
+        return;
+    }
+    std::ofstream out(path, std::ios::app);
+    if (!out)
+    {
+        throw std::runtime_error("failed to open events JSONL: " + path.string());
+    }
+    for (const RequestTrace& trace : metrics.request_traces)
+    {
+        out << "{\"repeat\":" << repeat_index
+            << ",\"request_id\":\"" << json_escape(trace.request_id)
+            << "\",\"prompt_index\":" << trace.prompt_index
+            << ",\"event\":\"submit\",\"time_ms\":" << trace.submit_ms << "}\n";
+        for (const TokenTraceEvent& event : trace.tokens)
+        {
+            out << "{\"repeat\":" << repeat_index
+                << ",\"request_id\":\"" << json_escape(trace.request_id)
+                << "\",\"prompt_index\":" << trace.prompt_index
+                << ",\"event\":\"token\",\"time_ms\":" << event.time_ms
+                << ",\"token_index\":" << event.token_index
+                << ",\"token_id\":" << event.token_id
+                << ",\"finished\":" << (event.finished ? "true" : "false")
+                << ",\"delta_text\":\"" << json_escape(event.delta_text) << "\"}\n";
+        }
+        out << "{\"repeat\":" << repeat_index
+            << ",\"request_id\":\"" << json_escape(trace.request_id)
+            << "\",\"prompt_index\":" << trace.prompt_index
+            << ",\"event\":\"finish\",\"time_ms\":" << trace.finish_ms
+            << ",\"generated_tokens\":" << trace.generated_tokens
+            << ",\"finish_reason\":\"" << json_escape(trace.finish_reason) << "\"}\n";
+    }
 }
 
 void print_summary(const Options& options, const std::vector<RepeatMetrics>& repeats)
@@ -872,8 +1446,15 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"warmup\":" << options.warmup << ",";
     std::cout << "\"repeat\":" << options.repeat << ",";
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
+    std::cout << "\"temperature\":" << options.temperature << ",";
+    std::cout << "\"top_p\":" << options.top_p << ",";
+    std::cout << "\"top_k\":" << options.top_k << ",";
+    std::cout << "\"repetition_penalty\":" << options.repetition_penalty << ",";
+    std::cout << "\"seed\":" << options.seed << ",";
     std::cout << "\"ignore_eos\":" << (options.ignore_eos ? "true" : "false") << ",";
     std::cout << "\"profile_detail\":" << (options.profile_detail ? "true" : "false") << ",";
+    std::cout << "\"workload_jsonl\":\"" << json_escape(options.workload_jsonl.string()) << "\",";
+    std::cout << "\"events_jsonl\":\"" << json_escape(options.events_jsonl.string()) << "\",";
     std::cout << "\"kv_num_blocks\":" << options.kv_num_blocks << ",";
     std::cout << "\"max_num_batched_tokens\":" << options.max_num_batched_tokens << ",";
     std::cout << "\"avg_load_init_ms\":" << avg_load_ms << ",";
@@ -970,6 +1551,16 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << "[]";
     }
     std::cout << ",";
+    std::cout << "\"request_metrics\":";
+    if (!repeats.empty())
+    {
+        print_request_metrics_json(repeats.front().request_traces);
+    }
+    else
+    {
+        std::cout << "[]";
+    }
+    std::cout << ",";
     std::cout << "\"repeat_sampling_ms\":[";
     for (size_t i = 0; i < repeats.size(); ++i)
     {
@@ -993,6 +1584,12 @@ int main(int argc, char** argv)
         if (options.profile_detail)
         {
             setenv("TINYLLM_PROFILE_DETAIL", "1", 1);
+        }
+        if (!options.repetition_penalty_explicit)
+        {
+            const tiny_llm::GenerationConfig generation_config =
+                tiny_llm::load_generation_config_from_dir(options.model_dir.string());
+            options.repetition_penalty = generation_config.repetition_penalty;
         }
         const PromptTokenStats token_stats = count_prompt_tokens(options.model_dir, options.prompts);
         options.prompt_tokens = token_stats.total;
@@ -1033,9 +1630,23 @@ int main(int argc, char** argv)
 
         std::vector<RepeatMetrics> repeats;
         repeats.reserve(static_cast<size_t>(options.repeat));
+        if (!options.events_jsonl.empty())
+        {
+            if (options.events_jsonl.has_parent_path())
+            {
+                std::filesystem::create_directories(options.events_jsonl.parent_path());
+            }
+            std::ofstream clear_events(options.events_jsonl, std::ios::trunc);
+            if (!clear_events)
+            {
+                throw std::runtime_error("failed to create events JSONL: " + options.events_jsonl.string());
+            }
+        }
         for (int32_t i = 0; i < options.repeat; ++i)
         {
-            repeats.push_back(run_once(options, llm, load_ms, true));
+            RepeatMetrics metrics = run_once(options, llm, load_ms, true);
+            write_trace_events(options.events_jsonl, i, metrics);
+            repeats.push_back(std::move(metrics));
         }
         print_summary(options, repeats);
     }
