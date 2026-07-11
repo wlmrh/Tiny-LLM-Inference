@@ -31,32 +31,6 @@ int32_t kv_hidden_size(const LlamaConfig& config)
     return config.num_key_value_heads * config.head_dim;
 }
 
-Tensor load_checked_tensor(const HFSafeTensorLoader& loader,
-                           const std::string& key,
-                           const std::vector<int64_t>& expected_shape)
-{
-    if (!loader.has_tensor(key))
-    {
-        throw std::runtime_error("load_llama_weights: missing tensor key: " + key);
-    }
-
-    if (loader.dtype(key) != DType::kFloat32)
-    {
-        throw std::runtime_error("load_llama_weights: dtype mismatch for key (expect F32): " + key);
-    }
-
-    const std::vector<int64_t> loaded_shape = loader.shape(key);
-    if (loaded_shape != expected_shape)
-    {
-        throw std::runtime_error(
-            "load_llama_weights: shape mismatch for key " + key
-            + ", expected=" + shape_to_string(expected_shape)
-            + ", got=" + shape_to_string(loaded_shape));
-    }
-
-    return loader.tensor(key);
-}
-
 Tensor load_checked_tensor(const WeightMap& weight_map,
                           const std::string& key,
                           const std::vector<int64_t>& expected_shape)

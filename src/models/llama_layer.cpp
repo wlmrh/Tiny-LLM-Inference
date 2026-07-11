@@ -22,14 +22,6 @@ int32_t kv_hidden_size(const LlamaConfig& config)
     return config.num_key_value_heads * config.head_dim;
 }
 
-void validate_cpu_tensor(const Tensor& tensor, const char* name)
-{
-    if (tensor.device().is_cuda())
-    {
-        throw std::runtime_error(std::string(name) + ": CUDA tensor path is not implemented for this helper.");
-    }
-}
-
 void validate_float_tensor_2d(const Tensor& tensor,
                               int64_t rows,
                               int64_t cols,
