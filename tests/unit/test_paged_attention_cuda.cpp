@@ -104,7 +104,8 @@ CaseResult run_prefill_then_decode(bool optimized, int32_t num_attention_heads, 
                                          torch::TensorOptions().dtype(pool_type).device(torch::kCUDA));
 
     tiny_llm::BlockAllocator blocks(block_count, block_elements * tiny_llm::runtime_dtype_size(kv_dtype),
-                                    pool.data_ptr(), tiny_llm::ParallelConfig::cuda(0));
+                                    pool.data_ptr(),
+                                    tiny_llm::ParallelConfig::cuda(0));
     tiny_llm::KVCache::Config kv_cfg;
     kv_cfg.num_layers = 1;
     kv_cfg.block_size_tokens = block_size_tokens;
@@ -368,7 +369,12 @@ TEST(PagedAttentionCudaTest, BFloat16KvCacheMatchesFloat32Reference)
     }
 
     const CaseResult fp32 = run_prefill_then_decode(false, 12, 2, 128, 16, 24);
-    const CaseResult bf16 = run_prefill_then_decode(false, 12, 2, 128, 16, 24, tiny_llm::RuntimeDType::kBFloat16);
+    const CaseResult bf16 = run_prefill_then_decode(false, 12, 2, 128, 16, 24,
+                                                    tiny_llm::RuntimeDType::kBFloat16);
+    const CaseResult bf16_optimized = run_prefill_then_decode(true, 12, 2, 128, 16, 24,
+                                                              tiny_llm::RuntimeDType::kBFloat16);
     expect_close(bf16.prefill, fp32.prefill, 2e-2f);
     expect_close(bf16.decode, fp32.decode, 2e-2f);
+    expect_close(bf16_optimized.prefill, fp32.prefill, 2e-2f);
+    expect_close(bf16_optimized.decode, fp32.decode, 2e-2f);
 }
