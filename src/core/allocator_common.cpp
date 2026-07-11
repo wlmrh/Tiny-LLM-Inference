@@ -15,6 +15,7 @@ size_t dtype_size(DType dtype)
     switch (dtype)
     {
     case DType::kFloat16:
+    case DType::kBFloat16:
         return 2;
     case DType::kFloat32:
     case DType::kInt32:
