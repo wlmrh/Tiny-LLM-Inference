@@ -42,7 +42,8 @@ Tensor kv_block_tensor(KVCache &kv_cache, int32_t block_id, int32_t block_size_t
         block_ptr += static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size) * element_bytes;
     }
 
-    const c10::ScalarType scalar_type = kv_cache.dtype() == RuntimeDType::kBFloat16 ? torch::kBFloat16 : torch::kFloat32;
+    const c10::ScalarType scalar_type =
+        kv_cache.dtype() == RuntimeDType::kBFloat16 ? torch::kBFloat16 : torch::kFloat32;
     return torch::from_blob(block_ptr, {block_size_tokens, kv_size},
                             torch::TensorOptions().dtype(scalar_type).device(kv_cache.device()));
 }
