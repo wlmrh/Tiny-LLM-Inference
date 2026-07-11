@@ -52,11 +52,6 @@ bool stacked_weight_cache_enabled()
     return !(text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "OFF");
 }
 
-bool needs_torch_matmul_path(const Tensor &input, const Tensor &output, const Tensor &weight)
-{
-    return input.device().is_cuda() || output.device().is_cuda() || weight.device().is_cuda();
-}
-
 void add_bias_to_output_slice(Tensor &output, int32_t output_offset, int32_t out_features, const Tensor &bias)
 {
     if (!bias.defined())
@@ -82,27 +77,6 @@ void run_out_in_matmul(const Tensor &input, const Tensor &weight_out_in, Tensor 
         throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
     }
     at::mm_out(output, input, weight_out_in.transpose(0, 1));
-}
-
-float compute_linear_sum(const float *input_ptr, const float *weight_ptr, int32_t in_features, int32_t out_features,
-                         int32_t out_col, WeightLayout layout)
-{
-    float sum = 0.0f;
-    for (int32_t k = 0; k < in_features; ++k)
-    {
-        if (layout == WeightLayout::kInOut)
-        {
-            sum +=
-                input_ptr[static_cast<size_t>(k)] *
-                weight_ptr[static_cast<size_t>(k) * static_cast<size_t>(out_features) + static_cast<size_t>(out_col)];
-        }
-        else
-        {
-            sum += input_ptr[static_cast<size_t>(k)] *
-                   weight_ptr[static_cast<size_t>(out_col) * static_cast<size_t>(in_features) + static_cast<size_t>(k)];
-        }
-    }
-    return sum;
 }
 
 } // namespace
@@ -237,7 +211,6 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
 {
     validate_forward_inputs(input, output);
 
-    const int64_t rows = input.size(0);
     if (!use_stacked_weights_)
     {
         if (single_weight_.layout == WeightLayout::kInOut)
@@ -248,29 +221,11 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
         }
 
         Tensor weight = make_weight_tensor(single_weight_);
-        if (needs_torch_matmul_path(input, output, weight))
-        {
-            run_out_in_matmul(input, weight, output);
-            return;
-        }
-
-        const float *input_ptr = static_cast<const float *>(tensor_data(input));
-        const float *weight_ptr = static_cast<const float *>(tensor_data(weight));
-        float *output_ptr = static_cast<float *>(tensor_data(output));
-        for (int64_t row = 0; row < rows; ++row)
-        {
-            const float *input_row_ptr = input_ptr + static_cast<size_t>(row) * static_cast<size_t>(in_features_);
-            float *output_row_ptr = output_ptr + static_cast<size_t>(row) * static_cast<size_t>(out_features_total_);
-            for (int32_t out_col = 0; out_col < out_features_total_; ++out_col)
-            {
-                output_row_ptr[static_cast<size_t>(out_col)] = compute_linear_sum(
-                    input_row_ptr, weight_ptr, in_features_, out_features_total_, out_col, single_weight_.layout);
-            }
-        }
+        run_out_in_matmul(input, weight, output);
         return;
     }
 
-    if (stacked_weight_cache_.defined() && needs_torch_matmul_path(input, output, stacked_weight_cache_))
+    if (stacked_weight_cache_.defined())
     {
         if (stacked_weight_cache_layout_ == WeightLayout::kInOut)
         {
@@ -295,57 +250,20 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
     {
         Tensor weight = make_weight_tensor(desc);
 
-        if (needs_torch_matmul_path(input, output, weight))
+        Tensor output_slice = output.narrow(1, desc.output_offset, desc.out_features);
+        if (desc.layout == WeightLayout::kInOut)
         {
-            Tensor output_slice = output.narrow(1, desc.output_offset, desc.out_features);
-            if (desc.layout == WeightLayout::kInOut)
+            if (input.device() != weight.device() || input.device() != output.device())
             {
-                if (input.device() != weight.device() || input.device() != output.device())
-                {
-                    throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
-                }
-                output_slice.copy_(torch::matmul(input, weight));
+                throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
             }
-            else
-            {
-                run_out_in_matmul(input, weight, output_slice);
-            }
-            add_bias_to_output_slice(output, desc.output_offset, desc.out_features, desc.bias);
-            continue;
+            output_slice.copy_(torch::matmul(input, weight));
         }
-
-        const float *weight_ptr = static_cast<const float *>(tensor_data(weight));
-        const float *input_ptr = static_cast<const float *>(tensor_data(input));
-        float *output_ptr = static_cast<float *>(tensor_data(output));
-
-        for (int64_t row = 0; row < rows; ++row)
+        else
         {
-            const size_t input_row_offset = static_cast<size_t>(row) * static_cast<size_t>(in_features_);
-            const size_t output_row_offset = static_cast<size_t>(row) * static_cast<size_t>(out_features_total_);
-            for (int32_t out_col = 0; out_col < desc.out_features; ++out_col)
-            {
-                const float sum = compute_linear_sum(input_ptr + input_row_offset, weight_ptr, in_features_,
-                                                     desc.out_features, out_col, desc.layout);
-                output_ptr[output_row_offset + static_cast<size_t>(desc.output_offset + out_col)] = sum;
-            }
+            run_out_in_matmul(input, weight, output_slice);
         }
-        if (desc.bias.defined())
-        {
-            const float *bias_ptr = static_cast<const float *>(tensor_data(desc.bias));
-            if (bias_ptr == nullptr)
-            {
-                throw std::runtime_error("modules::Linear::forward: bias data pointer must be non-null.");
-            }
-            for (int64_t row = 0; row < rows; ++row)
-            {
-                const size_t output_row_offset = static_cast<size_t>(row) * static_cast<size_t>(out_features_total_);
-                for (int32_t out_col = 0; out_col < desc.out_features; ++out_col)
-                {
-                    output_ptr[output_row_offset + static_cast<size_t>(desc.output_offset + out_col)] +=
-                        bias_ptr[static_cast<size_t>(out_col)];
-                }
-            }
-        }
+        add_bias_to_output_slice(output, desc.output_offset, desc.out_features, desc.bias);
     }
 }
 
