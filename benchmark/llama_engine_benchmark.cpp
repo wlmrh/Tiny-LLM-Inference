@@ -32,6 +32,8 @@ struct Options
 {
     tiny_llm::ParallelConfig parallel_config = tiny_llm::ParallelConfig::cpu();
     std::string device_text = "cpu";
+    tiny_llm::RuntimeDType compute_dtype = tiny_llm::RuntimeDType::kFloat32;
+    tiny_llm::RuntimeDType kv_cache_dtype = tiny_llm::RuntimeDType::kFloat32;
     int32_t warmup = 1;
     int32_t repeat = 3;
     int32_t max_new_tokens = 8;
@@ -652,7 +654,9 @@ void validate_model_dir(const std::filesystem::path &model_dir)
 
 void print_usage(const char *argv0)
 {
-    std::cerr << "usage: " << argv0 << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
+    std::cerr << "usage: " << argv0
+              << " [--device cpu|cuda[:id]] [--dtype fp32|bf16] [--kv-cache-dtype fp32|bf16]"
+              << " [--warmup N] [--repeat N]"
               << " [--max-new-tokens N] [--kv-num-blocks N]"
               << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
               << " [--temperature F] [--top-p F] [--top-k N]"
@@ -680,6 +684,14 @@ Options parse_args(int argc, char **argv)
         {
             options.device_text = require_value("--device");
             options.parallel_config = parse_device(options.device_text);
+        }
+        else if (arg == "--dtype")
+        {
+            options.compute_dtype = tiny_llm::parse_runtime_dtype(require_value("--dtype"));
+        }
+        else if (arg == "--kv-cache-dtype")
+        {
+            options.kv_cache_dtype = tiny_llm::parse_runtime_dtype(require_value("--kv-cache-dtype"));
         }
         else if (arg == "--warmup")
         {
@@ -1326,6 +1338,8 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "llama_engine_benchmark\n";
     std::cout << "  model: " << options.model_dir.string() << "\n";
     std::cout << "  device: " << options.device_text << "\n";
+    std::cout << "  compute dtype: " << tiny_llm::runtime_dtype_name(options.compute_dtype) << "\n";
+    std::cout << "  KV cache dtype: " << tiny_llm::runtime_dtype_name(options.kv_cache_dtype) << "\n";
     std::cout << "  prompts: " << options.prompts.size() << ", warmup: " << options.warmup
               << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens
               << ", ignore_eos: " << (options.ignore_eos ? "on" : "off")
@@ -1465,6 +1479,8 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "\"backend\":\"tinyllm\",";
     std::cout << "\"model\":\"" << json_escape(options.model_dir.string()) << "\",";
     std::cout << "\"device\":\"" << json_escape(options.device_text) << "\",";
+    std::cout << "\"compute_dtype\":\"" << tiny_llm::runtime_dtype_name(options.compute_dtype) << "\",";
+    std::cout << "\"kv_cache_dtype\":\"" << tiny_llm::runtime_dtype_name(options.kv_cache_dtype) << "\",";
     std::cout << "\"prompt_count\":" << options.prompts.size() << ",";
     std::cout << "\"prompt_tokens\":" << prompt_tokens << ",";
     std::cout << "\"warmup\":" << options.warmup << ",";
@@ -1637,6 +1653,8 @@ int main(int argc, char **argv)
 
         const auto load_start = Clock::now();
         tiny_llm::LLMOptions llm_options(options.model_dir.string(), options.parallel_config);
+        llm_options.compute_dtype = options.compute_dtype;
+        llm_options.kv_cache_dtype = options.kv_cache_dtype;
         llm_options.max_tokens = options.max_new_tokens;
         llm_options.scheduler_config.max_prefill_tokens_per_step = options.max_num_batched_tokens;
         llm_options.block_size_tokens = kBlockSizeTokens;

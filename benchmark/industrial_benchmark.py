@@ -3,6 +3,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -143,6 +144,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     parser.add_argument("--tinyllm-binary", default=DEFAULT_TINYLLM_BINARY)
     parser.add_argument("--device", default=DEFAULT_DEVICE)
+    parser.add_argument("--tinyllm-dtype", default="fp32", choices=("fp32", "bf16"))
+    parser.add_argument("--tinyllm-kv-cache-dtype", default="fp32", choices=("fp32", "bf16"))
     parser.add_argument("--warmup", type=non_negative_int, default=1)
     parser.add_argument("--repeat", type=positive_int, default=3)
     parser.add_argument(
@@ -358,6 +361,10 @@ def command_for(
         backend,
         "--device",
         args.device,
+        "--tinyllm-dtype",
+        args.tinyllm_dtype,
+        "--tinyllm-kv-cache-dtype",
+        args.tinyllm_kv_cache_dtype,
         "--warmup",
         str(warmup),
         "--repeat",
@@ -425,6 +432,35 @@ def query_gpu() -> Dict[str, Any]:
     parts = [part.strip() for part in line.split(",")]
     keys = ["name", "memory_total", "driver_version"]
     return {key: parts[idx] for idx, key in enumerate(keys) if idx < len(parts)}
+
+
+def command_text(command: Sequence[str]) -> str:
+    try:
+        run = subprocess.run(command, check=True, capture_output=True, text=True)
+        return run.stdout.strip()
+    except Exception as exc:
+        return f"unavailable: {exc}"
+
+
+def query_environment() -> Dict[str, Any]:
+    torch_info: Dict[str, Any] = {}
+    try:
+        import torch
+
+        torch_info = {
+            "version": torch.__version__,
+            "cuda_version": torch.version.cuda,
+        }
+    except Exception as exc:
+        torch_info = {"error": str(exc)}
+    return {
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
+        "git_commit": command_text(["git", "rev-parse", "HEAD"]),
+        "git_status": command_text(["git", "status", "--short"]),
+        "cmake": command_text(["cmake", "--version"]).splitlines()[0],
+        "torch": torch_info,
+    }
 
 
 def flatten_results(comparison: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -731,7 +767,10 @@ def main() -> int:
         "selected_backends": args.selected_backends,
         "preset": args.preset,
         "profile_detail": args.profile_detail or env_flag_enabled("TINYLLM_PROFILE_DETAIL"),
+        "tinyllm_dtype": args.tinyllm_dtype,
+        "tinyllm_kv_cache_dtype": args.tinyllm_kv_cache_dtype,
         "gpu": query_gpu(),
+        "environment": query_environment(),
         "vllm": {
             "python": args.vllm_python,
             "dtype": args.vllm_dtype,

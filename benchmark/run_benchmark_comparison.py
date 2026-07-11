@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
         help="backend to run: all, tinyllm, transformers, vllm, or a comma-separated subset",
     )
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--tinyllm-dtype", default="fp32", choices=("fp32", "bf16"))
+    parser.add_argument("--tinyllm-kv-cache-dtype", default="fp32", choices=("fp32", "bf16"))
     parser.add_argument("--warmup", type=non_negative_int, default=1)
     parser.add_argument("--repeat", type=positive_int, default=3)
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
@@ -150,6 +152,12 @@ def run_tinyllm(args: argparse.Namespace) -> Dict[str, Any]:
     common = command_common_args(args)
     json_index = len(common) - 2
     common[json_index:json_index] = ["--max-num-batched-token-cap", str(args.max_num_batched_token_cap)]
+    common[json_index:json_index] = [
+        "--dtype",
+        args.tinyllm_dtype,
+        "--kv-cache-dtype",
+        args.tinyllm_kv_cache_dtype,
+    ]
     if args.profile_detail:
         common.insert(-1, "--profile-detail")
     if args.events_jsonl:
