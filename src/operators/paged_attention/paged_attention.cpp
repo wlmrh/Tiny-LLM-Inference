@@ -417,6 +417,9 @@ PagedAttentionRuntimeMetadataGuard::~PagedAttentionRuntimeMetadataGuard()
 
 void attention_paged(const Tensor& q, Tensor& out, ExecutionContext& ctx)
 {
+#if !TINYLLM_ENABLE_CUDA
+    (void)ctx;
+#endif
     if (tensor_dtype(q) != DType::kFloat32 || tensor_dtype(out) != DType::kFloat32)
     {
         throw std::runtime_error("attention_paged: only float32 tensors are supported.");

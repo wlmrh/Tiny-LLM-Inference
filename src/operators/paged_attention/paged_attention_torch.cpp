@@ -47,6 +47,7 @@ Tensor kv_block_tensor(KVCache& kv_cache,
         torch::TensorOptions().dtype(torch::kFloat32).device(kv_cache.device()));
 }
 
+#if TINYLLM_ENABLE_CUDA
 bool collect_full_prefill_segments(const LlamaAttentionParams& params,
                                    int64_t rows,
                                    int64_t num_seqs,
@@ -91,6 +92,7 @@ bool collect_full_prefill_segments(const LlamaAttentionParams& params,
     }
     return !segments.empty();
 }
+#endif
 
 #if TINYLLM_ENABLE_CUDA
 bool try_run_full_prefill_sdpa_cuda(const LlamaAttentionParams& params,

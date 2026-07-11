@@ -122,6 +122,9 @@ void validate_same_device(const Tensor& x, const Tensor& w, const Tensor& y)
 
 void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx, float eps)
 {
+#if !TINYLLM_ENABLE_CUDA
+    (void)ctx;
+#endif
     validate_rmsnorm_inputs(x, w, y, eps);
     validate_same_device(x, w, y);
     const RmsNormShape shape = parse_xy_shape(x);

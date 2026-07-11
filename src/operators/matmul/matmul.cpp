@@ -130,6 +130,9 @@ bool can_run_cuda_gemm(const float* a_ptr, const float* b_ptr, const float* c_pt
 
 void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx)
 {
+#if !TINYLLM_ENABLE_CUDA
+    (void)ctx;
+#endif
     validate_gemm_inputs(a, b, c);
 
     const std::vector<int64_t> a_shape = tensor_shape(a);
