@@ -112,6 +112,8 @@ inline c10::Device infer_blob_device(const void* data)
 
         (void)cudaGetLastError();
     }
+#else
+    (void)data;
 #endif
 
     return c10::Device(c10::DeviceType::CPU);

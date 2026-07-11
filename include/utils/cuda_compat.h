@@ -23,13 +23,13 @@
       cudaMemcpyDeviceToDevice = 3,
   };
 
-  // Stub functions that will cause link errors if actually called.
-  inline cudaError_t cudaMalloc(void** devPtr, size_t size) {
-      return cudaError_t::cudaSuccess;
+  // Stubs fail explicitly when a CUDA-only allocation API is reached.
+  inline cudaError_t cudaMalloc(void**, size_t) {
+      return cudaError_t::cudaErrorInvalidValue;
   }
 
-  inline cudaError_t cudaFree(void* devPtr) {
-      return cudaError_t::cudaSuccess;
+  inline cudaError_t cudaFree(void*) {
+      return cudaError_t::cudaErrorInvalidValue;
   }
 
   inline cudaError_t cudaMemcpy(void* dst, const void* src, size_t count,
@@ -45,7 +45,7 @@
       return cudaError_t::cudaSuccess;
   }
 
-  inline const char* cudaGetErrorString(cudaError_t error) {
+  inline const char* cudaGetErrorString(cudaError_t) {
       return "CUDA stub (CPU-only mode)";
   }
 #endif
