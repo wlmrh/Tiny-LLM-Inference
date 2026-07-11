@@ -259,8 +259,7 @@ void LLM::initialize()
     validate_model_dir(model_dir, options_.weight_file);
 
     const LlamaConfig config = HFLlamaConfigLoader::load_from_dir(options_.model);
-    const size_t kv_block_bytes =
-        llama_kv_block_bytes(config, options_.block_size_tokens, options_.kv_cache_dtype);
+    const size_t kv_block_bytes = llama_kv_block_bytes(config, options_.block_size_tokens, options_.kv_cache_dtype);
     const size_t kv_pool_bytes = checked_mul(options_.kv_num_blocks, kv_block_bytes, "KV pool bytes");
 
     try

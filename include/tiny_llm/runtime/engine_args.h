@@ -5,8 +5,8 @@
 #include <string>
 
 #include "tiny_llm/runtime/parallel_config.h"
-#include "tiny_llm/runtime/scheduler_config.h"
 #include "tiny_llm/runtime/runtime_dtype.h"
+#include "tiny_llm/runtime/scheduler_config.h"
 #include "utils/cuda_compat.h"
 
 namespace tiny_llm

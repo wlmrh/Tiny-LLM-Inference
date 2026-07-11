@@ -93,8 +93,7 @@ size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig &config, int32_t block_s
     }
     const size_t kv_hidden_size =
         static_cast<size_t>(config.num_key_value_heads) * static_cast<size_t>(config.head_dim);
-    return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size *
-           tiny_llm::runtime_dtype_size(kv_cache_dtype);
+    return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size * tiny_llm::runtime_dtype_size(kv_cache_dtype);
 }
 
 size_t estimate_kv_num_blocks(tiny_llm::HFLlamaTokenizer &tokenizer, const tiny_llm::LlamaConfig &config,

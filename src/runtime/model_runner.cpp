@@ -403,7 +403,8 @@ void ModelRunner::init_from_args(const EngineArgs &args)
     args.parallel_config.validate();
     if (args.compute_dtype != RuntimeDType::kFloat32 || args.kv_cache_dtype != RuntimeDType::kFloat32)
     {
-        throw std::runtime_error("ModelRunner: bfloat16 execution is not enabled until all runtime kernels support it.");
+        throw std::runtime_error(
+            "ModelRunner: bfloat16 execution is not enabled until all runtime kernels support it.");
     }
 
     if (args.kv_block_size_tokens <= 0)
