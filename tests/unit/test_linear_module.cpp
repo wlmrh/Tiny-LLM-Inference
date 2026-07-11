@@ -59,6 +59,29 @@ TEST(LinearModuleTest, ComputesStackedWeightsWithBias)
 }
 
 #if TINYLLM_ENABLE_CUDA
+TEST(LinearModuleTest, CudaBFloat16ComputeReturnsFloat32Boundary)
+{
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr, tiny_llm::ParallelConfig::cuda(0),
+                                   tiny_llm::RuntimeDType::kBFloat16);
+    tiny_llm::Tensor input = torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}},
+                                           torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor weight = torch::tensor({{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
+                                            torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::modules::Linear linear(3, 2);
+    linear.bind_weight(weight, tiny_llm::modules::WeightLayout::kOutIn);
+
+    tiny_llm::Tensor output = linear.forward(input, ctx);
+    EXPECT_EQ(output.scalar_type(), torch::kFloat32);
+    tiny_llm::Tensor output_cpu = output.cpu();
+    EXPECT_NEAR(output_cpu[0][0].item<float>(), 4.0f, 1e-2f);
+    EXPECT_NEAR(output_cpu[1][1].item<float>(), 11.0f, 1e-2f);
+}
+
 TEST(LinearModuleTest, CudaStackedWeightsUseCombinedMatmulPath)
 {
     if (!torch::cuda::is_available())

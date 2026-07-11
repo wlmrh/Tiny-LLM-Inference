@@ -247,13 +247,14 @@ void LLM::initialize()
     }
 
     options_.parallel_config.validate();
-    if (options_.compute_dtype == RuntimeDType::kBFloat16 || options_.kv_cache_dtype == RuntimeDType::kBFloat16)
+    if ((options_.compute_dtype == RuntimeDType::kBFloat16 || options_.kv_cache_dtype == RuntimeDType::kBFloat16) &&
+        options_.parallel_config.is_cpu())
     {
-        if (options_.parallel_config.is_cpu())
-        {
-            throw std::runtime_error("LLM: bfloat16 compute and KV cache require a CUDA device.");
-        }
-        throw std::runtime_error("LLM: bfloat16 execution is not enabled until all CUDA kernels support it.");
+        throw std::runtime_error("LLM: bfloat16 compute and KV cache require a CUDA device.");
+    }
+    if (options_.kv_cache_dtype == RuntimeDType::kBFloat16)
+    {
+        throw std::runtime_error("LLM: bfloat16 KV cache is not enabled until paged attention supports it.");
     }
     const std::filesystem::path model_dir(options_.model);
     validate_model_dir(model_dir, options_.weight_file);

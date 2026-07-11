@@ -401,10 +401,13 @@ void ModelRunner::init_from_args(const EngineArgs &args)
 {
     owned_hf_loaders_.clear();
     args.parallel_config.validate();
-    if (args.compute_dtype != RuntimeDType::kFloat32 || args.kv_cache_dtype != RuntimeDType::kFloat32)
+    if (args.kv_cache_dtype != RuntimeDType::kFloat32)
     {
-        throw std::runtime_error(
-            "ModelRunner: bfloat16 execution is not enabled until all runtime kernels support it.");
+        throw std::runtime_error("ModelRunner: bfloat16 KV cache is not enabled until paged attention supports it.");
+    }
+    if (args.compute_dtype == RuntimeDType::kBFloat16 && !args.parallel_config.is_cuda())
+    {
+        throw std::runtime_error("ModelRunner: bfloat16 compute requires a CUDA device.");
     }
 
     if (args.kv_block_size_tokens <= 0)
@@ -450,13 +453,17 @@ void ModelRunner::init_from_args(const EngineArgs &args)
         {
             throw std::runtime_error("ModelRunner: workspace device does not match parallel_config.");
         }
-        owned_execution_context_ =
-            std::make_unique<ExecutionContext>(args.execution_stream, args.workspace, kv_, args.parallel_config);
+        owned_execution_context_ = std::make_unique<ExecutionContext>(args.execution_stream, args.workspace, kv_,
+                                                                      args.parallel_config, args.compute_dtype);
         execution_context_ = owned_execution_context_.get();
     }
     if (execution_context_->parallel_config() != args.parallel_config)
     {
         throw std::runtime_error("ModelRunner: execution context device does not match parallel_config.");
+    }
+    if (execution_context_->compute_dtype() != args.compute_dtype)
+    {
+        throw std::runtime_error("ModelRunner: execution context compute dtype does not match EngineArgs.");
     }
 }
 

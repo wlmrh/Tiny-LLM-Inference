@@ -2,6 +2,7 @@
 #include <c10/core/Device.h>
 
 #include "tiny_llm/runtime/parallel_config.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 #include "utils/cuda_compat.h"
 
 namespace tiny_llm
@@ -46,8 +47,9 @@ class ExecutionContext
      * @param kv Optional KV cache handle (non-owning).
      */
     ExecutionContext(cudaStream_t stream, StackAllocator *ws, KVCache *kv,
-                     ParallelConfig parallel_config = ParallelConfig::cpu())
-        : stream_(stream), ws_(ws), kv_(kv), parallel_config_(parallel_config)
+                     ParallelConfig parallel_config = ParallelConfig::cpu(),
+                     RuntimeDType compute_dtype = RuntimeDType::kFloat32)
+        : stream_(stream), ws_(ws), kv_(kv), parallel_config_(parallel_config), compute_dtype_(compute_dtype)
     {
     }
 
@@ -91,6 +93,11 @@ class ExecutionContext
         return parallel_config_.torch_device();
     }
 
+    RuntimeDType compute_dtype() const
+    {
+        return compute_dtype_;
+    }
+
     /**
      * @brief Start a new step and recycle temporary workspace allocations.
      */
@@ -113,6 +120,7 @@ class ExecutionContext
     KVCache *kv_{nullptr};
     /// Runtime device and v1 single-device parallel configuration.
     ParallelConfig parallel_config_{};
+    RuntimeDType compute_dtype_ = RuntimeDType::kFloat32;
 };
 
 } // namespace tiny_llm

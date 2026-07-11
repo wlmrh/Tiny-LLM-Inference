@@ -70,13 +70,23 @@ void add_bias_to_output_slice(Tensor &output, int32_t output_offset, int32_t out
     output.narrow(1, output_offset, out_features).add_(bias);
 }
 
-void run_out_in_matmul(const Tensor &input, const Tensor &weight_out_in, Tensor &output)
+void run_matmul(const Tensor &input, const Tensor &weight, WeightLayout layout, Tensor &output, ExecutionContext &ctx)
 {
-    if (input.device() != weight_out_in.device() || input.device() != output.device())
+    if (input.device() != weight.device() || input.device() != output.device())
     {
         throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
     }
-    at::mm_out(output, input, weight_out_in.transpose(0, 1));
+    const Tensor rhs = layout == WeightLayout::kOutIn ? weight.transpose(0, 1) : weight;
+    if (ctx.compute_dtype() == RuntimeDType::kBFloat16)
+    {
+        if (!input.device().is_cuda())
+        {
+            throw std::runtime_error("modules::Linear::forward: bfloat16 compute requires CUDA tensors.");
+        }
+        output.copy_(torch::matmul(input.to(torch::kBFloat16), rhs.to(torch::kBFloat16)).to(torch::kFloat32));
+        return;
+    }
+    at::mm_out(output, input, rhs);
 }
 
 } // namespace
@@ -216,12 +226,12 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
         if (single_weight_.layout == WeightLayout::kInOut)
         {
             Tensor weight = make_weight_tensor(single_weight_);
-            ops::gemm(input, weight, output, ctx);
+            run_matmul(input, weight, single_weight_.layout, output, ctx);
             return;
         }
 
         Tensor weight = make_weight_tensor(single_weight_);
-        run_out_in_matmul(input, weight, output);
+        run_matmul(input, weight, single_weight_.layout, output, ctx);
         return;
     }
 
@@ -229,11 +239,11 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
     {
         if (stacked_weight_cache_layout_ == WeightLayout::kInOut)
         {
-            ops::gemm(input, stacked_weight_cache_, output, ctx);
+            run_matmul(input, stacked_weight_cache_, stacked_weight_cache_layout_, output, ctx);
         }
         else
         {
-            run_out_in_matmul(input, stacked_weight_cache_, output);
+            run_matmul(input, stacked_weight_cache_, stacked_weight_cache_layout_, output, ctx);
         }
         if (stacked_bias_cache_.defined())
         {
@@ -253,15 +263,11 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
         Tensor output_slice = output.narrow(1, desc.output_offset, desc.out_features);
         if (desc.layout == WeightLayout::kInOut)
         {
-            if (input.device() != weight.device() || input.device() != output.device())
-            {
-                throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
-            }
-            output_slice.copy_(torch::matmul(input, weight));
+            run_matmul(input, weight, desc.layout, output_slice, ctx);
         }
         else
         {
-            run_out_in_matmul(input, weight, output_slice);
+            run_matmul(input, weight, desc.layout, output_slice, ctx);
         }
         add_bias_to_output_slice(output, desc.output_offset, desc.out_features, desc.bias);
     }
