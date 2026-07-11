@@ -218,3 +218,17 @@ TEST(ModelRunnerPreparedInputsTest, RejectsInvalidTokensDuringRun)
     output.scheduled_reqs[0].new_token_ids[2] = model.vocab_size();
     EXPECT_THROW(runner.run(output), std::runtime_error);
 }
+
+TEST(ModelRunnerPreparedInputsTest, RejectsUnimplementedRuntimeDTypesWithoutFallback)
+{
+    FakeModel model;
+    tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
+
+    tiny_llm::EngineArgs compute_args = make_model_runner_args(&model, &exec_ctx);
+    compute_args.compute_dtype = tiny_llm::RuntimeDType::kBFloat16;
+    EXPECT_THROW({ tiny_llm::ModelRunner runner(compute_args, nullptr); }, std::runtime_error);
+
+    tiny_llm::EngineArgs kv_args = make_model_runner_args(&model, &exec_ctx);
+    kv_args.kv_cache_dtype = tiny_llm::RuntimeDType::kBFloat16;
+    EXPECT_THROW({ tiny_llm::ModelRunner runner(kv_args, nullptr); }, std::runtime_error);
+}
