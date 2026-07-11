@@ -44,17 +44,17 @@ double elapsed_profile_ms(ProfileClock::time_point start, ProfileClock::time_poi
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-void synchronize_for_profile(const c10::Device &device)
+void synchronize_for_profile(const ExecutionContext &ctx)
 {
 #if TINYLLM_ENABLE_CUDA
-    if (device.is_cuda())
+    if (ctx.device().is_cuda())
     {
-        const int device_index = device.index() >= 0 ? static_cast<int>(device.index()) : 0;
+        const int device_index = ctx.device().index() >= 0 ? static_cast<int>(ctx.device().index()) : 0;
         cudaSetDevice(device_index);
-        cudaDeviceSynchronize();
+        cudaStreamSynchronize(ctx.stream());
     }
 #else
-    (void)device;
+    (void)ctx;
 #endif
 }
 
@@ -708,13 +708,11 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput &scheduler_output)
     }
     validate_handles();
     ExecutionContext &exec_ctx = *execution_context_;
-    const c10::Device runtime_device = exec_ctx.device();
-
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto prepare_start = ProfileClock::now();
     PreparedBatch batch = prepare_batch(scheduler_output, exec_ctx);
     const PreparedInputs &inputs = batch.inputs;
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto prepare_end = ProfileClock::now();
 
     ModelRunnerOutput output;
@@ -728,10 +726,10 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput &scheduler_output)
         return output;
     }
 
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto model_start = ProfileClock::now();
     Tensor logits = run_model(inputs, exec_ctx, &output.profiling);
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto model_end = ProfileClock::now();
 
     std::vector<int32_t> logit_sample_rows = inputs.sample_row_offsets;
@@ -851,12 +849,12 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput &scheduler_output)
         output.profiling.decode_ms_total = model_ms;
     }
 
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto sampling_start = ProfileClock::now();
     const SamplerBatch sampler_batch{logit_sample_rows, model_->vocab_size(), &batch.token_histories,
                                      &batch.sampling_params, &batch.req_ids};
     std::vector<int32_t> sampled_rows = sample_rows(logits, sampler_batch);
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto sampling_end = ProfileClock::now();
     output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);
     output.profiling.sampled_tokens = static_cast<int64_t>(inputs.sample_row_offsets.size());
