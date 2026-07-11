@@ -229,9 +229,9 @@ void LlamaMLP::forward(const Tensor &hidden_states, LlamaMLPBuffers &buffers, Ru
     {
         ScopedRuntimeProfile profile(ctx, &RuntimeProfilingStats::mlp_ms);
         gate_up_proj_->forward(hidden_states, buffers.gate_up, ctx.execution());
-        Tensor gate = buffers.gate_up.narrow(1, 0, config_.intermediate_size);
-        Tensor up = buffers.gate_up.narrow(1, config_.intermediate_size, config_.intermediate_size);
-        apply_activation(gate, up, buffers.activated);
+        buffers.gate.copy_(buffers.gate_up.narrow(1, 0, config_.intermediate_size));
+        buffers.up.copy_(buffers.gate_up.narrow(1, config_.intermediate_size, config_.intermediate_size));
+        apply_activation(buffers.gate, buffers.up, buffers.activated);
         down_proj_->forward(buffers.activated, buffers.down, ctx.execution());
     }
 }
