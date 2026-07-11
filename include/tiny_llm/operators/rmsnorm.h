@@ -2,10 +2,12 @@
 
 #include "tiny_llm/core/tensor.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 class ExecutionContext;
 
-namespace ops {
+namespace ops
+{
 /**
  * feat(ops): implement optimized RMSNorm kernel
  * * @param x Input tensor
@@ -14,7 +16,7 @@ namespace ops {
  * @param ctx Execution context for resource management
  * @param eps Small constant for numerical stability
  */
-void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx, float eps);
-}
+void rmsnorm(const Tensor &x, const Tensor &w, Tensor &y, ExecutionContext &ctx, float eps);
+} // namespace ops
 
 } // namespace tiny_llm

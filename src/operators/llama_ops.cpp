@@ -9,42 +9,29 @@
 #include <ATen/cuda/CUDAContext.h>
 #endif
 
-namespace tiny_llm {
-namespace ops {
+namespace tiny_llm
+{
+namespace ops
+{
 
 #if TINYLLM_ENABLE_CUDA
-namespace cuda {
-void launch_apply_rope_cached_f32(const int32_t* positions,
-                                  float* q,
-                                  float* k,
-                                  const float* cos_cache,
-                                  const float* sin_cache,
-                                  int64_t rows,
-                                  int32_t num_attention_heads,
-                                  int32_t num_key_value_heads,
-                                  int32_t head_dim,
-                                  int64_t cache_rows,
-                                  int64_t q_stride,
-                                  int64_t k_stride,
-                                  cudaStream_t stream);
-void launch_silu_multiply_f32(const float* gate,
-                              const float* up,
-                              float* out,
-                              int64_t numel,
-                              cudaStream_t stream);
-void launch_add_f32(const float* lhs,
-                    const float* rhs,
-                    float* out,
-                    int64_t numel,
-                    cudaStream_t stream);
+namespace cuda
+{
+void launch_apply_rope_cached_f32(const int32_t *positions, float *q, float *k, const float *cos_cache,
+                                  const float *sin_cache, int64_t rows, int32_t num_attention_heads,
+                                  int32_t num_key_value_heads, int32_t head_dim, int64_t cache_rows, int64_t q_stride,
+                                  int64_t k_stride, cudaStream_t stream);
+void launch_silu_multiply_f32(const float *gate, const float *up, float *out, int64_t numel, cudaStream_t stream);
+void launch_add_f32(const float *lhs, const float *rhs, float *out, int64_t numel, cudaStream_t stream);
 } // namespace cuda
 #endif
 
-namespace {
+namespace
+{
 
 bool any_cuda(std::initializer_list<std::reference_wrapper<const Tensor>> tensors)
 {
-    for (const Tensor& tensor : tensors)
+    for (const Tensor &tensor : tensors)
     {
         if (tensor.defined() && tensor.device().is_cuda())
         {
@@ -54,11 +41,11 @@ bool any_cuda(std::initializer_list<std::reference_wrapper<const Tensor>> tensor
     return false;
 }
 
-void validate_same_device(std::initializer_list<std::reference_wrapper<const Tensor>> tensors, const char* name)
+void validate_same_device(std::initializer_list<std::reference_wrapper<const Tensor>> tensors, const char *name)
 {
     bool have_device = false;
     c10::Device device(c10::kCPU);
-    for (const Tensor& tensor : tensors)
+    for (const Tensor &tensor : tensors)
     {
         if (!tensor.defined())
         {
@@ -77,7 +64,7 @@ void validate_same_device(std::initializer_list<std::reference_wrapper<const Ten
     }
 }
 
-void validate_cpu_tensor(const Tensor& tensor, const char* name)
+void validate_cpu_tensor(const Tensor &tensor, const char *name)
 {
     if (tensor.device().is_cuda())
     {
@@ -85,7 +72,7 @@ void validate_cpu_tensor(const Tensor& tensor, const char* name)
     }
 }
 
-void validate_int_tensor_1d(const Tensor& tensor, int64_t size, const char* name)
+void validate_int_tensor_1d(const Tensor &tensor, int64_t size, const char *name)
 {
     if (!tensor.defined())
     {
@@ -105,7 +92,7 @@ void validate_int_tensor_1d(const Tensor& tensor, int64_t size, const char* name
     }
 }
 
-void validate_float_tensor_1d(const Tensor& tensor, int64_t size, const char* name)
+void validate_float_tensor_1d(const Tensor &tensor, int64_t size, const char *name)
 {
     if (!tensor.defined())
     {
@@ -125,10 +112,7 @@ void validate_float_tensor_1d(const Tensor& tensor, int64_t size, const char* na
     }
 }
 
-void validate_float_tensor_2d(const Tensor& tensor,
-                              int64_t rows,
-                              int64_t cols,
-                              const char* name)
+void validate_float_tensor_2d(const Tensor &tensor, int64_t rows, int64_t cols, const char *name)
 {
     if (!tensor.defined())
     {
@@ -148,26 +132,17 @@ void validate_float_tensor_2d(const Tensor& tensor,
     }
 }
 
-void run_embedding_lookup_device(const Tensor& ids,
-                                 const Tensor& embedding,
-                                 Tensor& out,
+void run_embedding_lookup_device(const Tensor &ids, const Tensor &embedding, Tensor &out,
                                  bool embedding_is_vocab_hidden)
 {
     validate_same_device({std::cref(ids), std::cref(embedding), std::cref(out)}, "embedding_lookup");
     const Tensor ids_long = ids.to(torch::TensorOptions().dtype(torch::kInt64).device(ids.device()));
-    const Tensor embedding_vocab_hidden = embedding_is_vocab_hidden
-        ? embedding
-        : embedding.transpose(0, 1);
+    const Tensor embedding_vocab_hidden = embedding_is_vocab_hidden ? embedding : embedding.transpose(0, 1);
     out.copy_(embedding_vocab_hidden.index_select(0, ids_long));
 }
 
-void run_apply_rope_device_with_inv_freq(const Tensor& positions,
-                                        Tensor& q,
-                                        Tensor& k,
-                                        int32_t num_attention_heads,
-                                        int32_t num_key_value_heads,
-                                        int32_t head_dim,
-                                        const Tensor& inv_freq)
+void run_apply_rope_device_with_inv_freq(const Tensor &positions, Tensor &q, Tensor &k, int32_t num_attention_heads,
+                                         int32_t num_key_value_heads, int32_t head_dim, const Tensor &inv_freq)
 {
     validate_same_device({std::cref(positions), std::cref(q), std::cref(k), std::cref(inv_freq)}, "apply_rope");
     const int64_t rows = q.size(0);
@@ -195,42 +170,21 @@ void run_apply_rope_device_with_inv_freq(const Tensor& positions,
     k_second.copy_(k_second_old * cos_theta + k_first_old * sin_theta);
 }
 
-void run_apply_rope_device_with_cache(const Tensor& positions,
-                                      Tensor& q,
-                                      Tensor& k,
-                                      int32_t num_attention_heads,
-                                      int32_t num_key_value_heads,
-                                      int32_t head_dim,
-                                      const Tensor& cos_cache,
-                                      const Tensor& sin_cache)
+void run_apply_rope_device_with_cache(const Tensor &positions, Tensor &q, Tensor &k, int32_t num_attention_heads,
+                                      int32_t num_key_value_heads, int32_t head_dim, const Tensor &cos_cache,
+                                      const Tensor &sin_cache)
 {
-    validate_same_device({std::cref(positions), std::cref(q), std::cref(k), std::cref(cos_cache), std::cref(sin_cache)}, "apply_rope");
+    validate_same_device({std::cref(positions), std::cref(q), std::cref(k), std::cref(cos_cache), std::cref(sin_cache)},
+                         "apply_rope");
 #if TINYLLM_ENABLE_CUDA
-    if (positions.device().is_cuda()
-        && q.device().is_cuda()
-        && k.device().is_cuda()
-        && cos_cache.device().is_cuda()
-        && sin_cache.device().is_cuda()
-        && positions.is_contiguous()
-        && q.is_contiguous()
-        && k.is_contiguous()
-        && cos_cache.is_contiguous()
-        && sin_cache.is_contiguous())
+    if (positions.device().is_cuda() && q.device().is_cuda() && k.device().is_cuda() && cos_cache.device().is_cuda() &&
+        sin_cache.device().is_cuda() && positions.is_contiguous() && q.is_contiguous() && k.is_contiguous() &&
+        cos_cache.is_contiguous() && sin_cache.is_contiguous())
     {
         cuda::launch_apply_rope_cached_f32(
-            positions.data_ptr<int32_t>(),
-            q.data_ptr<float>(),
-            k.data_ptr<float>(),
-            cos_cache.data_ptr<float>(),
-            sin_cache.data_ptr<float>(),
-            q.size(0),
-            num_attention_heads,
-            num_key_value_heads,
-            head_dim,
-            cos_cache.size(0),
-            q.stride(0),
-            k.stride(0),
-            at::cuda::getCurrentCUDAStream(q.device().index()));
+            positions.data_ptr<int32_t>(), q.data_ptr<float>(), k.data_ptr<float>(), cos_cache.data_ptr<float>(),
+            sin_cache.data_ptr<float>(), q.size(0), num_attention_heads, num_key_value_heads, head_dim,
+            cos_cache.size(0), q.stride(0), k.stride(0), at::cuda::getCurrentCUDAStream(q.device().index()));
         return;
     }
 #endif
@@ -257,17 +211,10 @@ void run_apply_rope_device_with_cache(const Tensor& positions,
     k_second.copy_(k_second_old * cos_theta + k_first_old * sin_theta);
 }
 
-void run_apply_rope_device(const Tensor& positions,
-                           Tensor& q,
-                           Tensor& k,
-                           int32_t num_attention_heads,
-                           int32_t num_key_value_heads,
-                           int32_t head_dim,
-                           float rope_theta,
-                           const std::string& rope_scaling_type,
-                           float rope_scaling_factor,
-                           float rope_scaling_low_freq_factor,
-                           float rope_scaling_high_freq_factor,
+void run_apply_rope_device(const Tensor &positions, Tensor &q, Tensor &k, int32_t num_attention_heads,
+                           int32_t num_key_value_heads, int32_t head_dim, float rope_theta,
+                           const std::string &rope_scaling_type, float rope_scaling_factor,
+                           float rope_scaling_low_freq_factor, float rope_scaling_high_freq_factor,
                            int32_t rope_scaling_original_max_position_embeddings)
 {
     validate_same_device({std::cref(positions), std::cref(q), std::cref(k)}, "apply_rope");
@@ -284,42 +231,27 @@ void run_apply_rope_device(const Tensor& positions,
         const float high_freq_wavelen =
             static_cast<float>(rope_scaling_original_max_position_embeddings) / rope_scaling_high_freq_factor;
         const Tensor wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
-        const Tensor smooth_factor =
-            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen
-             - rope_scaling_low_freq_factor)
-            / (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
-        const Tensor medium_freq =
-            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
-        inv_freq = torch::where(
-            wavelen > low_freq_wavelen,
-            inv_freq / rope_scaling_factor,
-            torch::where(wavelen < high_freq_wavelen, inv_freq, medium_freq));
+        const Tensor smooth_factor = (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen -
+                                      rope_scaling_low_freq_factor) /
+                                     (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
+        const Tensor medium_freq = (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
+        inv_freq = torch::where(wavelen > low_freq_wavelen, inv_freq / rope_scaling_factor,
+                                torch::where(wavelen < high_freq_wavelen, inv_freq, medium_freq));
     }
     else if (!rope_scaling_type.empty())
     {
         inv_freq = inv_freq / rope_scaling_factor;
     }
-    run_apply_rope_device_with_inv_freq(
-        positions,
-        q,
-        k,
-        num_attention_heads,
-        num_key_value_heads,
-        head_dim,
-        inv_freq);
+    run_apply_rope_device_with_inv_freq(positions, q, k, num_attention_heads, num_key_value_heads, head_dim, inv_freq);
 }
 
 } // namespace
 
-void embedding_lookup(const Tensor& ids,
-                      const Tensor& embedding,
-                      Tensor& out,
-                      int32_t vocab_size,
-                      int32_t hidden_size,
+void embedding_lookup(const Tensor &ids, const Tensor &embedding, Tensor &out, int32_t vocab_size, int32_t hidden_size,
                       bool embedding_is_vocab_hidden)
 {
-    if (tensor_dtype(ids) != DType::kInt32 || tensor_dtype(embedding) != DType::kFloat32
-        || tensor_dtype(out) != DType::kFloat32)
+    if (tensor_dtype(ids) != DType::kInt32 || tensor_dtype(embedding) != DType::kFloat32 ||
+        tensor_dtype(out) != DType::kFloat32)
     {
         throw std::runtime_error("embedding_lookup: dtype mismatch.");
     }
@@ -340,9 +272,9 @@ void embedding_lookup(const Tensor& ids,
     validate_cpu_tensor(embedding, "embedding_lookup");
     validate_cpu_tensor(out, "embedding_lookup");
 
-    const int32_t* ids_ptr = static_cast<const int32_t*>(tensor_data(ids));
-    const float* embed_ptr = static_cast<const float*>(tensor_data(embedding));
-    float* out_ptr = static_cast<float*>(tensor_data(out));
+    const int32_t *ids_ptr = static_cast<const int32_t *>(tensor_data(ids));
+    const float *embed_ptr = static_cast<const float *>(tensor_data(embedding));
+    float *out_ptr = static_cast<float *>(tensor_data(out));
 
     const int64_t stride0 = embedding.stride(0);
     const int64_t stride1 = embedding.stride(1);
@@ -355,31 +287,26 @@ void embedding_lookup(const Tensor& ids,
             throw std::runtime_error("embedding_lookup: token id is out of range.");
         }
 
-        float* out_row = out_ptr + static_cast<size_t>(row) * static_cast<size_t>(hidden_size);
+        float *out_row = out_ptr + static_cast<size_t>(row) * static_cast<size_t>(hidden_size);
         for (int32_t col = 0; col < hidden_size; ++col)
         {
             if (embedding_is_vocab_hidden)
             {
-                out_row[static_cast<size_t>(col)] = embed_ptr[
-                    static_cast<size_t>(token_id) * static_cast<size_t>(stride0)
-                    + static_cast<size_t>(col) * static_cast<size_t>(stride1)];
+                out_row[static_cast<size_t>(col)] =
+                    embed_ptr[static_cast<size_t>(token_id) * static_cast<size_t>(stride0) +
+                              static_cast<size_t>(col) * static_cast<size_t>(stride1)];
             }
             else
             {
-                out_row[static_cast<size_t>(col)] = embed_ptr[
-                    static_cast<size_t>(col) * static_cast<size_t>(stride0)
-                    + static_cast<size_t>(token_id) * static_cast<size_t>(stride1)];
+                out_row[static_cast<size_t>(col)] =
+                    embed_ptr[static_cast<size_t>(col) * static_cast<size_t>(stride0) +
+                              static_cast<size_t>(token_id) * static_cast<size_t>(stride1)];
             }
         }
     }
 }
 
-void split_qkv(const Tensor& qkv,
-               Tensor& q,
-               Tensor& k,
-               Tensor& v,
-               int32_t hidden_size,
-               int32_t kv_hidden_size)
+void split_qkv(const Tensor &qkv, Tensor &q, Tensor &k, Tensor &v, int32_t hidden_size, int32_t kv_hidden_size)
 {
     const int64_t rows = qkv.size(0);
     validate_float_tensor_2d(qkv, rows, hidden_size + 2 * kv_hidden_size, "split_qkv::qkv");
@@ -401,15 +328,14 @@ void split_qkv(const Tensor& qkv,
     validate_cpu_tensor(k, "split_qkv");
     validate_cpu_tensor(v, "split_qkv");
 
-    const float* qkv_ptr = static_cast<const float*>(tensor_data(qkv));
-    float* q_ptr = static_cast<float*>(tensor_data(q));
-    float* k_ptr = static_cast<float*>(tensor_data(k));
-    float* v_ptr = static_cast<float*>(tensor_data(v));
+    const float *qkv_ptr = static_cast<const float *>(tensor_data(qkv));
+    float *q_ptr = static_cast<float *>(tensor_data(q));
+    float *k_ptr = static_cast<float *>(tensor_data(k));
+    float *v_ptr = static_cast<float *>(tensor_data(v));
 
     for (int64_t row = 0; row < rows; ++row)
     {
-        const size_t qkv_offset =
-            static_cast<size_t>(row) * static_cast<size_t>(hidden_size + 2 * kv_hidden_size);
+        const size_t qkv_offset = static_cast<size_t>(row) * static_cast<size_t>(hidden_size + 2 * kv_hidden_size);
         const size_t out_offset = static_cast<size_t>(row) * static_cast<size_t>(hidden_size);
         const size_t kv_out_offset = static_cast<size_t>(row) * static_cast<size_t>(kv_hidden_size);
         for (int32_t col = 0; col < hidden_size; ++col)
@@ -426,17 +352,9 @@ void split_qkv(const Tensor& qkv,
     }
 }
 
-void apply_rope(const Tensor& positions,
-                Tensor& q,
-                Tensor& k,
-                int32_t num_attention_heads,
-                int32_t num_key_value_heads,
-                int32_t head_dim,
-                float rope_theta,
-                const char* rope_scaling_type,
-                float rope_scaling_factor,
-                float rope_scaling_low_freq_factor,
-                float rope_scaling_high_freq_factor,
+void apply_rope(const Tensor &positions, Tensor &q, Tensor &k, int32_t num_attention_heads, int32_t num_key_value_heads,
+                int32_t head_dim, float rope_theta, const char *rope_scaling_type, float rope_scaling_factor,
+                float rope_scaling_low_freq_factor, float rope_scaling_high_freq_factor,
                 int32_t rope_scaling_original_max_position_embeddings)
 {
     const int64_t rows = q.size(0);
@@ -454,29 +372,18 @@ void apply_rope(const Tensor& positions,
     {
         throw std::runtime_error("apply_rope: rope theta and scaling factor must be positive.");
     }
-    if (scaling_type == "llama3"
-        && (rope_scaling_low_freq_factor <= 0.0f
-            || rope_scaling_high_freq_factor <= rope_scaling_low_freq_factor
-            || rope_scaling_original_max_position_embeddings <= 0))
+    if (scaling_type == "llama3" &&
+        (rope_scaling_low_freq_factor <= 0.0f || rope_scaling_high_freq_factor <= rope_scaling_low_freq_factor ||
+         rope_scaling_original_max_position_embeddings <= 0))
     {
         throw std::runtime_error("apply_rope: invalid llama3 rope scaling configuration.");
     }
 
     if (any_cuda({std::cref(positions), std::cref(q), std::cref(k)}))
     {
-        run_apply_rope_device(
-            positions,
-            q,
-            k,
-            num_attention_heads,
-            num_key_value_heads,
-            head_dim,
-            rope_theta,
-            scaling_type,
-            rope_scaling_factor,
-            rope_scaling_low_freq_factor,
-            rope_scaling_high_freq_factor,
-            rope_scaling_original_max_position_embeddings);
+        run_apply_rope_device(positions, q, k, num_attention_heads, num_key_value_heads, head_dim, rope_theta,
+                              scaling_type, rope_scaling_factor, rope_scaling_low_freq_factor,
+                              rope_scaling_high_freq_factor, rope_scaling_original_max_position_embeddings);
         return;
     }
 
@@ -484,9 +391,9 @@ void apply_rope(const Tensor& positions,
     validate_cpu_tensor(q, "apply_rope");
     validate_cpu_tensor(k, "apply_rope");
 
-    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
-    float* q_ptr = static_cast<float*>(tensor_data(q));
-    float* k_ptr = static_cast<float*>(tensor_data(k));
+    const int32_t *positions_ptr = static_cast<const int32_t *>(tensor_data(positions));
+    float *q_ptr = static_cast<float *>(tensor_data(q));
+    float *k_ptr = static_cast<float *>(tensor_data(k));
 
     for (int64_t row = 0; row < rows; ++row)
     {
@@ -500,18 +407,15 @@ void apply_rope(const Tensor& positions,
             {
                 const int32_t idx0 = head_offset + dim;
                 const int32_t idx1 = head_offset + rotary_half + dim;
-                float inv_freq = 1.0f / std::pow(
-                    rope_theta,
-                    static_cast<float>(2 * dim) / static_cast<float>(head_dim));
+                float inv_freq =
+                    1.0f / std::pow(rope_theta, static_cast<float>(2 * dim) / static_cast<float>(head_dim));
                 if (scaling_type == "llama3")
                 {
                     const float wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
-                    const float low_freq_wavelen =
-                        static_cast<float>(rope_scaling_original_max_position_embeddings)
-                        / rope_scaling_low_freq_factor;
-                    const float high_freq_wavelen =
-                        static_cast<float>(rope_scaling_original_max_position_embeddings)
-                        / rope_scaling_high_freq_factor;
+                    const float low_freq_wavelen = static_cast<float>(rope_scaling_original_max_position_embeddings) /
+                                                   rope_scaling_low_freq_factor;
+                    const float high_freq_wavelen = static_cast<float>(rope_scaling_original_max_position_embeddings) /
+                                                    rope_scaling_high_freq_factor;
                     if (wavelen > low_freq_wavelen)
                     {
                         inv_freq /= rope_scaling_factor;
@@ -519,11 +423,10 @@ void apply_rope(const Tensor& positions,
                     else if (wavelen >= high_freq_wavelen)
                     {
                         const float smooth_factor =
-                            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen
-                             - rope_scaling_low_freq_factor)
-                            / (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
-                        inv_freq =
-                            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
+                            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen -
+                             rope_scaling_low_freq_factor) /
+                            (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
+                        inv_freq = (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
                     }
                 }
                 else if (!scaling_type.empty())
@@ -552,18 +455,15 @@ void apply_rope(const Tensor& positions,
             {
                 const int32_t idx0 = head_offset + dim;
                 const int32_t idx1 = head_offset + rotary_half + dim;
-                float inv_freq = 1.0f / std::pow(
-                    rope_theta,
-                    static_cast<float>(2 * dim) / static_cast<float>(head_dim));
+                float inv_freq =
+                    1.0f / std::pow(rope_theta, static_cast<float>(2 * dim) / static_cast<float>(head_dim));
                 if (scaling_type == "llama3")
                 {
                     const float wavelen = (2.0f * static_cast<float>(M_PI)) / inv_freq;
-                    const float low_freq_wavelen =
-                        static_cast<float>(rope_scaling_original_max_position_embeddings)
-                        / rope_scaling_low_freq_factor;
-                    const float high_freq_wavelen =
-                        static_cast<float>(rope_scaling_original_max_position_embeddings)
-                        / rope_scaling_high_freq_factor;
+                    const float low_freq_wavelen = static_cast<float>(rope_scaling_original_max_position_embeddings) /
+                                                   rope_scaling_low_freq_factor;
+                    const float high_freq_wavelen = static_cast<float>(rope_scaling_original_max_position_embeddings) /
+                                                    rope_scaling_high_freq_factor;
                     if (wavelen > low_freq_wavelen)
                     {
                         inv_freq /= rope_scaling_factor;
@@ -571,11 +471,10 @@ void apply_rope(const Tensor& positions,
                     else if (wavelen >= high_freq_wavelen)
                     {
                         const float smooth_factor =
-                            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen
-                             - rope_scaling_low_freq_factor)
-                            / (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
-                        inv_freq =
-                            (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
+                            (static_cast<float>(rope_scaling_original_max_position_embeddings) / wavelen -
+                             rope_scaling_low_freq_factor) /
+                            (rope_scaling_high_freq_factor - rope_scaling_low_freq_factor);
+                        inv_freq = (1.0f - smooth_factor) * (inv_freq / rope_scaling_factor) + smooth_factor * inv_freq;
                     }
                 }
                 else if (!scaling_type.empty())
@@ -597,13 +496,8 @@ void apply_rope(const Tensor& positions,
     }
 }
 
-void apply_rope(const Tensor& positions,
-                Tensor& q,
-                Tensor& k,
-                int32_t num_attention_heads,
-                int32_t num_key_value_heads,
-                int32_t head_dim,
-                const Tensor& inv_freq)
+void apply_rope(const Tensor &positions, Tensor &q, Tensor &k, int32_t num_attention_heads, int32_t num_key_value_heads,
+                int32_t head_dim, const Tensor &inv_freq)
 {
     const int64_t rows = q.size(0);
     const int32_t hidden_size = num_attention_heads * head_dim;
@@ -620,14 +514,8 @@ void apply_rope(const Tensor& positions,
 
     if (any_cuda({std::cref(positions), std::cref(q), std::cref(k), std::cref(inv_freq)}))
     {
-        run_apply_rope_device_with_inv_freq(
-            positions,
-            q,
-            k,
-            num_attention_heads,
-            num_key_value_heads,
-            head_dim,
-            inv_freq);
+        run_apply_rope_device_with_inv_freq(positions, q, k, num_attention_heads, num_key_value_heads, head_dim,
+                                            inv_freq);
         return;
     }
 
@@ -637,10 +525,10 @@ void apply_rope(const Tensor& positions,
     validate_cpu_tensor(inv_freq, "apply_rope");
 
     const Tensor inv_freq_contiguous = inv_freq.contiguous();
-    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
-    const float* inv_freq_ptr = static_cast<const float*>(tensor_data(inv_freq_contiguous));
-    float* q_ptr = static_cast<float*>(tensor_data(q));
-    float* k_ptr = static_cast<float*>(tensor_data(k));
+    const int32_t *positions_ptr = static_cast<const int32_t *>(tensor_data(positions));
+    const float *inv_freq_ptr = static_cast<const float *>(tensor_data(inv_freq_contiguous));
+    float *q_ptr = static_cast<float *>(tensor_data(q));
+    float *k_ptr = static_cast<float *>(tensor_data(k));
 
     for (int64_t row = 0; row < rows; ++row)
     {
@@ -687,14 +575,8 @@ void apply_rope(const Tensor& positions,
     }
 }
 
-void apply_rope(const Tensor& positions,
-                Tensor& q,
-                Tensor& k,
-                int32_t num_attention_heads,
-                int32_t num_key_value_heads,
-                int32_t head_dim,
-                const Tensor& cos_cache,
-                const Tensor& sin_cache)
+void apply_rope(const Tensor &positions, Tensor &q, Tensor &k, int32_t num_attention_heads, int32_t num_key_value_heads,
+                int32_t head_dim, const Tensor &cos_cache, const Tensor &sin_cache)
 {
     const int64_t rows = q.size(0);
     const int32_t hidden_size = num_attention_heads * head_dim;
@@ -707,29 +589,17 @@ void apply_rope(const Tensor& positions,
     {
         throw std::runtime_error("apply_rope: head_dim must be a positive even number.");
     }
-    if (!cos_cache.defined() || !sin_cache.defined()
-        || tensor_dtype(cos_cache) != DType::kFloat32
-        || tensor_dtype(sin_cache) != DType::kFloat32
-        || cos_cache.dim() != 2
-        || sin_cache.dim() != 2
-        || cos_cache.size(1) != rotary_half
-        || sin_cache.size(1) != rotary_half
-        || cos_cache.size(0) != sin_cache.size(0))
+    if (!cos_cache.defined() || !sin_cache.defined() || tensor_dtype(cos_cache) != DType::kFloat32 ||
+        tensor_dtype(sin_cache) != DType::kFloat32 || cos_cache.dim() != 2 || sin_cache.dim() != 2 ||
+        cos_cache.size(1) != rotary_half || sin_cache.size(1) != rotary_half || cos_cache.size(0) != sin_cache.size(0))
     {
         throw std::runtime_error("apply_rope: cos/sin cache shape mismatch.");
     }
 
     if (any_cuda({std::cref(positions), std::cref(q), std::cref(k), std::cref(cos_cache), std::cref(sin_cache)}))
     {
-        run_apply_rope_device_with_cache(
-            positions,
-            q,
-            k,
-            num_attention_heads,
-            num_key_value_heads,
-            head_dim,
-            cos_cache,
-            sin_cache);
+        run_apply_rope_device_with_cache(positions, q, k, num_attention_heads, num_key_value_heads, head_dim, cos_cache,
+                                         sin_cache);
         return;
     }
 
@@ -741,11 +611,11 @@ void apply_rope(const Tensor& positions,
 
     const Tensor cos_contiguous = cos_cache.contiguous();
     const Tensor sin_contiguous = sin_cache.contiguous();
-    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(positions));
-    const float* cos_ptr = static_cast<const float*>(tensor_data(cos_contiguous));
-    const float* sin_ptr = static_cast<const float*>(tensor_data(sin_contiguous));
-    float* q_ptr = static_cast<float*>(tensor_data(q));
-    float* k_ptr = static_cast<float*>(tensor_data(k));
+    const int32_t *positions_ptr = static_cast<const int32_t *>(tensor_data(positions));
+    const float *cos_ptr = static_cast<const float *>(tensor_data(cos_contiguous));
+    const float *sin_ptr = static_cast<const float *>(tensor_data(sin_contiguous));
+    float *q_ptr = static_cast<float *>(tensor_data(q));
+    float *k_ptr = static_cast<float *>(tensor_data(k));
 
     for (int64_t row = 0; row < rows; ++row)
     {
@@ -754,8 +624,8 @@ void apply_rope(const Tensor& positions,
         {
             throw std::runtime_error("apply_rope: position exceeds cos/sin cache length.");
         }
-        const float* cos_row = cos_ptr + static_cast<size_t>(position) * static_cast<size_t>(rotary_half);
-        const float* sin_row = sin_ptr + static_cast<size_t>(position) * static_cast<size_t>(rotary_half);
+        const float *cos_row = cos_ptr + static_cast<size_t>(position) * static_cast<size_t>(rotary_half);
+        const float *sin_row = sin_ptr + static_cast<size_t>(position) * static_cast<size_t>(rotary_half);
         const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(hidden_size);
         for (int32_t head = 0; head < num_attention_heads; ++head)
         {
@@ -792,10 +662,10 @@ void apply_rope(const Tensor& positions,
     }
 }
 
-void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out)
+void silu_multiply(const Tensor &gate, const Tensor &up, Tensor &out)
 {
-    if (tensor_dtype(gate) != DType::kFloat32 || tensor_dtype(up) != DType::kFloat32
-        || tensor_dtype(out) != DType::kFloat32)
+    if (tensor_dtype(gate) != DType::kFloat32 || tensor_dtype(up) != DType::kFloat32 ||
+        tensor_dtype(out) != DType::kFloat32)
     {
         throw std::runtime_error("silu_multiply: tensors must be float32.");
     }
@@ -807,17 +677,11 @@ void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out)
     {
         validate_same_device({std::cref(gate), std::cref(up), std::cref(out)}, "silu_multiply");
 #if TINYLLM_ENABLE_CUDA
-        if (gate.device().is_cuda()
-            && gate.is_contiguous()
-            && up.is_contiguous()
-            && out.is_contiguous())
+        if (gate.device().is_cuda() && gate.is_contiguous() && up.is_contiguous() && out.is_contiguous())
         {
-            cuda::launch_silu_multiply_f32(
-                gate.data_ptr<float>(),
-                up.data_ptr<float>(),
-                out.data_ptr<float>(),
-                static_cast<int64_t>(tensor_numel(gate)),
-                at::cuda::getCurrentCUDAStream(gate.device().index()));
+            cuda::launch_silu_multiply_f32(gate.data_ptr<float>(), up.data_ptr<float>(), out.data_ptr<float>(),
+                                           static_cast<int64_t>(tensor_numel(gate)),
+                                           at::cuda::getCurrentCUDAStream(gate.device().index()));
             return;
         }
 #endif
@@ -830,9 +694,9 @@ void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out)
     validate_cpu_tensor(out, "silu_multiply");
 
     const size_t count = tensor_numel(gate);
-    const float* gate_ptr = static_cast<const float*>(tensor_data(gate));
-    const float* up_ptr = static_cast<const float*>(tensor_data(up));
-    float* out_ptr = static_cast<float*>(tensor_data(out));
+    const float *gate_ptr = static_cast<const float *>(tensor_data(gate));
+    const float *up_ptr = static_cast<const float *>(tensor_data(up));
+    float *out_ptr = static_cast<float *>(tensor_data(out));
     for (size_t i = 0; i < count; ++i)
     {
         const float gate_value = gate_ptr[i];
@@ -841,7 +705,7 @@ void silu_multiply(const Tensor& gate, const Tensor& up, Tensor& out)
     }
 }
 
-void copy_tensor(const Tensor& src, Tensor& dst)
+void copy_tensor(const Tensor &src, Tensor &dst)
 {
     if (tensor_dtype(src) != DType::kFloat32 || tensor_dtype(dst) != DType::kFloat32)
     {
@@ -862,18 +726,18 @@ void copy_tensor(const Tensor& src, Tensor& dst)
     validate_cpu_tensor(dst, "copy_tensor");
 
     const size_t count = tensor_numel(src);
-    const float* src_ptr = static_cast<const float*>(tensor_data(src));
-    float* dst_ptr = static_cast<float*>(tensor_data(dst));
+    const float *src_ptr = static_cast<const float *>(tensor_data(src));
+    float *dst_ptr = static_cast<float *>(tensor_data(dst));
     for (size_t i = 0; i < count; ++i)
     {
         dst_ptr[i] = src_ptr[i];
     }
 }
 
-void add_tensors(const Tensor& lhs, const Tensor& rhs, Tensor& out)
+void add_tensors(const Tensor &lhs, const Tensor &rhs, Tensor &out)
 {
-    if (tensor_dtype(lhs) != DType::kFloat32 || tensor_dtype(rhs) != DType::kFloat32
-        || tensor_dtype(out) != DType::kFloat32)
+    if (tensor_dtype(lhs) != DType::kFloat32 || tensor_dtype(rhs) != DType::kFloat32 ||
+        tensor_dtype(out) != DType::kFloat32)
     {
         throw std::runtime_error("add_tensors: tensors must be float32.");
     }
@@ -885,17 +749,11 @@ void add_tensors(const Tensor& lhs, const Tensor& rhs, Tensor& out)
     {
         validate_same_device({std::cref(lhs), std::cref(rhs), std::cref(out)}, "add_tensors");
 #if TINYLLM_ENABLE_CUDA
-        if (lhs.device().is_cuda()
-            && lhs.is_contiguous()
-            && rhs.is_contiguous()
-            && out.is_contiguous())
+        if (lhs.device().is_cuda() && lhs.is_contiguous() && rhs.is_contiguous() && out.is_contiguous())
         {
-            cuda::launch_add_f32(
-                lhs.data_ptr<float>(),
-                rhs.data_ptr<float>(),
-                out.data_ptr<float>(),
-                static_cast<int64_t>(tensor_numel(lhs)),
-                at::cuda::getCurrentCUDAStream(lhs.device().index()));
+            cuda::launch_add_f32(lhs.data_ptr<float>(), rhs.data_ptr<float>(), out.data_ptr<float>(),
+                                 static_cast<int64_t>(tensor_numel(lhs)),
+                                 at::cuda::getCurrentCUDAStream(lhs.device().index()));
             return;
         }
 #endif
@@ -908,9 +766,9 @@ void add_tensors(const Tensor& lhs, const Tensor& rhs, Tensor& out)
     validate_cpu_tensor(out, "add_tensors");
 
     const size_t count = tensor_numel(lhs);
-    const float* lhs_ptr = static_cast<const float*>(tensor_data(lhs));
-    const float* rhs_ptr = static_cast<const float*>(tensor_data(rhs));
-    float* out_ptr = static_cast<float*>(tensor_data(out));
+    const float *lhs_ptr = static_cast<const float *>(tensor_data(lhs));
+    const float *rhs_ptr = static_cast<const float *>(tensor_data(rhs));
+    float *out_ptr = static_cast<float *>(tensor_data(out));
     for (size_t i = 0; i < count; ++i)
     {
         out_ptr[i] = lhs_ptr[i] + rhs_ptr[i];

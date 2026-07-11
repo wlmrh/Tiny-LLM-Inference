@@ -4,8 +4,8 @@
 #include "tiny_llm/runtime/tokenizer.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -23,11 +23,13 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #endif
 
-namespace {
+namespace
+{
 
 using Clock = std::chrono::steady_clock;
 
-struct Options {
+struct Options
+{
     tiny_llm::ParallelConfig parallel_config = tiny_llm::ParallelConfig::cpu();
     std::string device_text = "cpu";
     int32_t warmup = 1;
@@ -59,12 +61,14 @@ struct Options {
     std::vector<int32_t> stop_token_ids;
 };
 
-struct PromptTokenStats {
+struct PromptTokenStats
+{
     int64_t total = 0;
     std::vector<int64_t> per_prompt;
 };
 
-struct SampleOutput {
+struct SampleOutput
+{
     std::string request_id;
     std::string prompt;
     std::string text;
@@ -74,7 +78,8 @@ struct SampleOutput {
     std::string finish_reason;
 };
 
-struct TokenTraceEvent {
+struct TokenTraceEvent
+{
     int32_t token_index = 0;
     int32_t token_id = -1;
     double time_ms = 0.0;
@@ -82,7 +87,8 @@ struct TokenTraceEvent {
     bool finished = false;
 };
 
-struct RequestTrace {
+struct RequestTrace
+{
     std::string request_id;
     size_t prompt_index = 0;
     double submit_ms = 0.0;
@@ -94,7 +100,8 @@ struct RequestTrace {
     std::vector<TokenTraceEvent> tokens;
 };
 
-struct RepeatMetrics {
+struct RepeatMetrics
+{
     double load_ms = 0.0;
     double total_ms = 0.0;
     double first_token_ms = 0.0;
@@ -129,7 +136,8 @@ struct RepeatMetrics {
     std::vector<RequestTrace> request_traces;
 };
 
-struct CudaMemoryMetrics {
+struct CudaMemoryMetrics
+{
     bool available = false;
     double allocated_mb = 0.0;
     double reserved_mb = 0.0;
@@ -137,14 +145,14 @@ struct CudaMemoryMetrics {
     double peak_reserved_mb = 0.0;
 };
 
-std::filesystem::path expand_user_path(const std::string& path)
+std::filesystem::path expand_user_path(const std::string &path)
 {
     if (path.empty() || path[0] != '~')
     {
         return std::filesystem::path(path);
     }
 
-    const char* home = std::getenv("HOME");
+    const char *home = std::getenv("HOME");
     if (home == nullptr || *home == '\0')
     {
         return std::filesystem::path(path);
@@ -160,7 +168,7 @@ std::filesystem::path expand_user_path(const std::string& path)
     return std::filesystem::path(path);
 }
 
-int32_t parse_positive_int(const char* text, const char* name)
+int32_t parse_positive_int(const char *text, const char *name)
 {
     try
     {
@@ -172,13 +180,13 @@ int32_t parse_positive_int(const char* text, const char* name)
         }
         return static_cast<int32_t>(value);
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
     }
 }
 
-int32_t parse_non_negative_int(const char* text, const char* name)
+int32_t parse_non_negative_int(const char *text, const char *name)
 {
     try
     {
@@ -190,13 +198,13 @@ int32_t parse_non_negative_int(const char* text, const char* name)
         }
         return static_cast<int32_t>(value);
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
     }
 }
 
-float parse_float(const char* text, const char* name)
+float parse_float(const char *text, const char *name)
 {
     try
     {
@@ -208,13 +216,13 @@ float parse_float(const char* text, const char* name)
         }
         return value;
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
     }
 }
 
-uint64_t parse_uint64(const char* text, const char* name)
+uint64_t parse_uint64(const char *text, const char *name)
 {
     try
     {
@@ -226,13 +234,13 @@ uint64_t parse_uint64(const char* text, const char* name)
         }
         return static_cast<uint64_t>(value);
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
     }
 }
 
-tiny_llm::ParallelConfig parse_device(const std::string& text)
+tiny_llm::ParallelConfig parse_device(const std::string &text)
 {
     if (text == "cpu")
     {
@@ -253,9 +261,9 @@ tiny_llm::ParallelConfig parse_device(const std::string& text)
     throw std::runtime_error("device must be cpu, cuda, or cuda:<device_id>.");
 }
 
-std::string json_escape(const std::string& text);
+std::string json_escape(const std::string &text);
 
-size_t find_json_value(const std::string& line, const std::string& key)
+size_t find_json_value(const std::string &line, const std::string &key)
 {
     const std::string needle = "\"" + key + "\"";
     const size_t key_pos = line.find(needle);
@@ -293,7 +301,7 @@ int hex_digit(char ch)
     return -1;
 }
 
-void append_utf8(std::string& out, uint32_t codepoint)
+void append_utf8(std::string &out, uint32_t codepoint)
 {
     if (codepoint <= 0x7f)
     {
@@ -312,7 +320,7 @@ void append_utf8(std::string& out, uint32_t codepoint)
     }
 }
 
-std::string parse_json_string_at(const std::string& line, size_t pos, const std::string& key)
+std::string parse_json_string_at(const std::string &line, size_t pos, const std::string &key)
 {
     if (pos >= line.size() || line[pos] != '"')
     {
@@ -338,15 +346,32 @@ std::string parse_json_string_at(const std::string& line, size_t pos, const std:
         const char esc = line[i];
         switch (esc)
         {
-        case '"': out.push_back('"'); break;
-        case '\\': out.push_back('\\'); break;
-        case '/': out.push_back('/'); break;
-        case 'b': out.push_back('\b'); break;
-        case 'f': out.push_back('\f'); break;
-        case 'n': out.push_back('\n'); break;
-        case 'r': out.push_back('\r'); break;
-        case 't': out.push_back('\t'); break;
-        case 'u': {
+        case '"':
+            out.push_back('"');
+            break;
+        case '\\':
+            out.push_back('\\');
+            break;
+        case '/':
+            out.push_back('/');
+            break;
+        case 'b':
+            out.push_back('\b');
+            break;
+        case 'f':
+            out.push_back('\f');
+            break;
+        case 'n':
+            out.push_back('\n');
+            break;
+        case 'r':
+            out.push_back('\r');
+            break;
+        case 't':
+            out.push_back('\t');
+            break;
+        case 'u':
+        {
             if (i + 4 >= line.size())
             {
                 throw std::runtime_error("short JSON unicode escape for key: " + key);
@@ -371,7 +396,7 @@ std::string parse_json_string_at(const std::string& line, size_t pos, const std:
     throw std::runtime_error("unterminated JSON string for key: " + key);
 }
 
-bool json_string_field(const std::string& line, const std::string& key, std::string& value)
+bool json_string_field(const std::string &line, const std::string &key, std::string &value)
 {
     const size_t pos = find_json_value(line, key);
     if (pos == std::string::npos)
@@ -382,7 +407,7 @@ bool json_string_field(const std::string& line, const std::string& key, std::str
     return true;
 }
 
-bool json_int_field(const std::string& line, const std::string& key, int32_t& value)
+bool json_int_field(const std::string &line, const std::string &key, int32_t &value)
 {
     const size_t pos = find_json_value(line, key);
     if (pos == std::string::npos)
@@ -391,8 +416,7 @@ bool json_int_field(const std::string& line, const std::string& key, int32_t& va
     }
     size_t consumed = 0;
     const long parsed = std::stol(line.substr(pos), &consumed);
-    if (consumed == 0 || parsed < std::numeric_limits<int32_t>::min()
-        || parsed > std::numeric_limits<int32_t>::max())
+    if (consumed == 0 || parsed < std::numeric_limits<int32_t>::min() || parsed > std::numeric_limits<int32_t>::max())
     {
         throw std::runtime_error("invalid integer workload field: " + key);
     }
@@ -400,7 +424,7 @@ bool json_int_field(const std::string& line, const std::string& key, int32_t& va
     return true;
 }
 
-bool json_float_field(const std::string& line, const std::string& key, float& value)
+bool json_float_field(const std::string &line, const std::string &key, float &value)
 {
     const size_t pos = find_json_value(line, key);
     if (pos == std::string::npos)
@@ -416,7 +440,7 @@ bool json_float_field(const std::string& line, const std::string& key, float& va
     return true;
 }
 
-bool json_bool_field(const std::string& line, const std::string& key, bool& value)
+bool json_bool_field(const std::string &line, const std::string &key, bool &value)
 {
     const size_t pos = find_json_value(line, key);
     if (pos == std::string::npos)
@@ -436,7 +460,7 @@ bool json_bool_field(const std::string& line, const std::string& key, bool& valu
     throw std::runtime_error("invalid boolean workload field: " + key);
 }
 
-void load_workload_jsonl(Options& options)
+void load_workload_jsonl(Options &options)
 {
     if (options.workload_jsonl.empty())
     {
@@ -513,7 +537,8 @@ void load_workload_jsonl(Options& options)
             {
                 if (workload_repetition_penalty_set && workload_repetition_penalty != value)
                 {
-                    throw std::runtime_error("mixed workload repetition_penalty values are not supported by this runner.");
+                    throw std::runtime_error(
+                        "mixed workload repetition_penalty values are not supported by this runner.");
                 }
                 workload_repetition_penalty = value;
                 workload_repetition_penalty_set = true;
@@ -583,7 +608,7 @@ void load_workload_jsonl(Options& options)
     }
 }
 
-bool has_safetensors_weight(const std::filesystem::path& model_dir)
+bool has_safetensors_weight(const std::filesystem::path &model_dir)
 {
     if (std::filesystem::exists(model_dir / "model.safetensors"))
     {
@@ -593,7 +618,7 @@ bool has_safetensors_weight(const std::filesystem::path& model_dir)
     {
         return false;
     }
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(model_dir))
     {
         if (entry.is_regular_file() && entry.path().extension() == ".safetensors")
         {
@@ -603,7 +628,7 @@ bool has_safetensors_weight(const std::filesystem::path& model_dir)
     return false;
 }
 
-void validate_model_dir(const std::filesystem::path& model_dir)
+void validate_model_dir(const std::filesystem::path &model_dir)
 {
     if (!std::filesystem::is_directory(model_dir))
     {
@@ -613,21 +638,21 @@ void validate_model_dir(const std::filesystem::path& model_dir)
     {
         throw std::runtime_error("model_dir must contain config.json: " + model_dir.string());
     }
-    if (!std::filesystem::exists(model_dir / "tokenizer.json")
-        && !std::filesystem::exists(model_dir / "tokenizer.model"))
+    if (!std::filesystem::exists(model_dir / "tokenizer.json") &&
+        !std::filesystem::exists(model_dir / "tokenizer.model"))
     {
         throw std::runtime_error("model_dir must contain tokenizer.json or tokenizer.model: " + model_dir.string());
     }
     if (!has_safetensors_weight(model_dir))
     {
-        throw std::runtime_error("model_dir must contain model.safetensors or safetensors shards: " + model_dir.string());
+        throw std::runtime_error("model_dir must contain model.safetensors or safetensors shards: " +
+                                 model_dir.string());
     }
 }
 
-void print_usage(const char* argv0)
+void print_usage(const char *argv0)
 {
-    std::cerr << "usage: " << argv0
-              << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
+    std::cerr << "usage: " << argv0 << " [--device cpu|cuda[:id]] [--warmup N] [--repeat N]"
               << " [--max-new-tokens N] [--kv-num-blocks N]"
               << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
               << " [--temperature F] [--top-p F] [--top-k N]"
@@ -636,13 +661,14 @@ void print_usage(const char* argv0)
               << " [--json] [--profile-detail] [--ignore-eos] <model_dir>\n";
 }
 
-Options parse_args(int argc, char** argv)
+Options parse_args(int argc, char **argv)
 {
     Options options;
     for (int i = 1; i < argc; ++i)
     {
         const std::string arg(argv[i]);
-        auto require_value = [&](const char* name) -> const char* {
+        auto require_value = [&](const char *name) -> const char *
+        {
             if (i + 1 >= argc)
             {
                 throw std::runtime_error(std::string(name) + " requires a value.");
@@ -670,21 +696,20 @@ Options parse_args(int argc, char** argv)
         }
         else if (arg == "--kv-num-blocks")
         {
-            options.kv_num_blocks = static_cast<size_t>(parse_positive_int(require_value("--kv-num-blocks"), "kv-num-blocks"));
+            options.kv_num_blocks =
+                static_cast<size_t>(parse_positive_int(require_value("--kv-num-blocks"), "kv-num-blocks"));
             options.kv_num_blocks_explicit = true;
         }
         else if (arg == "--max-num-batched-tokens")
         {
-            options.max_num_batched_tokens = parse_positive_int(
-                require_value("--max-num-batched-tokens"),
-                "max-num-batched-tokens");
+            options.max_num_batched_tokens =
+                parse_positive_int(require_value("--max-num-batched-tokens"), "max-num-batched-tokens");
             options.max_num_batched_tokens_explicit = true;
         }
         else if (arg == "--max-num-batched-token-cap")
         {
-            options.max_num_batched_token_cap = parse_positive_int(
-                require_value("--max-num-batched-token-cap"),
-                "max-num-batched-token-cap");
+            options.max_num_batched_token_cap =
+                parse_positive_int(require_value("--max-num-batched-token-cap"), "max-num-batched-token-cap");
         }
         else if (arg == "--prompt")
         {
@@ -721,8 +746,7 @@ Options parse_args(int argc, char** argv)
         }
         else if (arg == "--stop-token-id")
         {
-            options.stop_token_ids.push_back(
-                parse_non_negative_int(require_value("--stop-token-id"), "stop-token-id"));
+            options.stop_token_ids.push_back(parse_non_negative_int(require_value("--stop-token-id"), "stop-token-id"));
         }
         else if (arg == "--json")
         {
@@ -793,7 +817,7 @@ double bytes_to_mb(int64_t bytes)
     return static_cast<double>(bytes) / (1024.0 * 1024.0);
 }
 
-CudaMemoryMetrics current_cuda_memory(const tiny_llm::ParallelConfig& parallel_config)
+CudaMemoryMetrics current_cuda_memory(const tiny_llm::ParallelConfig &parallel_config)
 {
     CudaMemoryMetrics metrics;
 #if TINYLLM_ENABLE_CUDA
@@ -801,8 +825,8 @@ CudaMemoryMetrics current_cuda_memory(const tiny_llm::ParallelConfig& parallel_c
     {
         return metrics;
     }
-    const auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(
-        static_cast<c10::DeviceIndex>(parallel_config.device_id()));
+    const auto stats =
+        c10::cuda::CUDACachingAllocator::getDeviceStats(static_cast<c10::DeviceIndex>(parallel_config.device_id()));
     constexpr size_t kAggregate = static_cast<size_t>(c10::CachingAllocator::StatType::AGGREGATE);
     metrics.available = true;
     metrics.allocated_mb = bytes_to_mb(stats.allocated_bytes[kAggregate].current);
@@ -815,13 +839,12 @@ CudaMemoryMetrics current_cuda_memory(const tiny_llm::ParallelConfig& parallel_c
     return metrics;
 }
 
-void reset_cuda_peak_memory(const tiny_llm::ParallelConfig& parallel_config)
+void reset_cuda_peak_memory(const tiny_llm::ParallelConfig &parallel_config)
 {
 #if TINYLLM_ENABLE_CUDA
     if (parallel_config.is_cuda())
     {
-        c10::cuda::CUDACachingAllocator::resetPeakStats(
-            static_cast<c10::DeviceIndex>(parallel_config.device_id()));
+        c10::cuda::CUDACachingAllocator::resetPeakStats(static_cast<c10::DeviceIndex>(parallel_config.device_id()));
     }
 #else
     (void)parallel_config;
@@ -833,9 +856,9 @@ double elapsed_ms(Clock::time_point start, Clock::time_point end)
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-bool env_flag_enabled(const char* name)
+bool env_flag_enabled(const char *name)
 {
-    const char* value = std::getenv(name);
+    const char *value = std::getenv(name);
     if (value == nullptr)
     {
         return false;
@@ -844,7 +867,7 @@ bool env_flag_enabled(const char* name)
     return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
 }
 
-double mean(const std::vector<double>& values)
+double mean(const std::vector<double> &values)
 {
     if (values.empty())
     {
@@ -853,12 +876,12 @@ double mean(const std::vector<double>& values)
     return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
 }
 
-PromptTokenStats count_prompt_tokens(const std::filesystem::path& model_dir, const std::vector<std::string>& prompts)
+PromptTokenStats count_prompt_tokens(const std::filesystem::path &model_dir, const std::vector<std::string> &prompts)
 {
     tiny_llm::HFLlamaTokenizer tokenizer = tiny_llm::HFLlamaTokenizer::from_model_dir(model_dir.string());
     PromptTokenStats stats;
     stats.per_prompt.reserve(prompts.size());
-    for (const std::string& prompt : prompts)
+    for (const std::string &prompt : prompts)
     {
         const int64_t count = static_cast<int64_t>(tokenizer.encode(prompt).size());
         stats.total += count;
@@ -867,10 +890,8 @@ PromptTokenStats count_prompt_tokens(const std::filesystem::path& model_dir, con
     return stats;
 }
 
-size_t estimate_kv_num_blocks(const std::vector<int64_t>& prompt_token_counts,
-                              int32_t max_new_tokens,
-                              int32_t block_size_tokens,
-                              int32_t num_layers)
+size_t estimate_kv_num_blocks(const std::vector<int64_t> &prompt_token_counts, int32_t max_new_tokens,
+                              int32_t block_size_tokens, int32_t num_layers)
 {
     if (block_size_tokens <= 0 || num_layers <= 0)
     {
@@ -880,15 +901,14 @@ size_t estimate_kv_num_blocks(const std::vector<int64_t>& prompt_token_counts,
     for (int64_t prompt_tokens : prompt_token_counts)
     {
         const int64_t total_tokens = prompt_tokens + max_new_tokens;
-        const int64_t blocks_per_layer =
-            (total_tokens + block_size_tokens - 1) / block_size_tokens;
+        const int64_t blocks_per_layer = (total_tokens + block_size_tokens - 1) / block_size_tokens;
         required += static_cast<size_t>(blocks_per_layer) * static_cast<size_t>(num_layers);
     }
     const size_t with_slack = (required * 6 + 4) / 5;
     return std::max<size_t>(256, with_slack);
 }
 
-RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_ms, bool measure)
+RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_ms, bool measure)
 {
     RepeatMetrics metrics;
     metrics.request_traces.reserve(options.prompts.size());
@@ -922,40 +942,41 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     }
     const auto generation_start = Clock::now();
     const std::vector<tiny_llm::CompletionOutput> outputs =
-        llm.generate(options.prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
-            if (!saw_first_token)
-            {
-                saw_first_token = true;
-                first_token_time = Clock::now();
-            }
-            if (!measure || output.prompt_index >= metrics.request_traces.size())
-            {
-                return;
-            }
-            RequestTrace& trace = metrics.request_traces[output.prompt_index];
-            const double event_ms = elapsed_ms(generation_start, Clock::now());
-            if (trace.first_token_ms < 0.0)
-            {
-                trace.first_token_ms = event_ms;
-            }
-            if (output.token_id >= 0)
-            {
-                TokenTraceEvent event;
-                event.token_index = output.token_ids.empty()
-                    ? 0
-                    : static_cast<int32_t>(output.token_ids.size() - 1);
-                event.token_id = output.token_id;
-                event.time_ms = event_ms;
-                event.delta_text = output.delta_text;
-                event.finished = output.finished;
-                trace.tokens.push_back(std::move(event));
-            }
-            if (output.finished && trace.finish_ms < 0.0)
-            {
-                trace.finish_ms = event_ms;
-                trace.finish_reason = output.finish_reason;
-            }
-        });
+        llm.generate(options.prompts, sampling_params,
+                     [&](const tiny_llm::CompletionStreamOutput &output)
+                     {
+                         if (!saw_first_token)
+                         {
+                             saw_first_token = true;
+                             first_token_time = Clock::now();
+                         }
+                         if (!measure || output.prompt_index >= metrics.request_traces.size())
+                         {
+                             return;
+                         }
+                         RequestTrace &trace = metrics.request_traces[output.prompt_index];
+                         const double event_ms = elapsed_ms(generation_start, Clock::now());
+                         if (trace.first_token_ms < 0.0)
+                         {
+                             trace.first_token_ms = event_ms;
+                         }
+                         if (output.token_id >= 0)
+                         {
+                             TokenTraceEvent event;
+                             event.token_index =
+                                 output.token_ids.empty() ? 0 : static_cast<int32_t>(output.token_ids.size() - 1);
+                             event.token_id = output.token_id;
+                             event.time_ms = event_ms;
+                             event.delta_text = output.delta_text;
+                             event.finished = output.finished;
+                             trace.tokens.push_back(std::move(event));
+                         }
+                         if (output.finished && trace.finish_ms < 0.0)
+                         {
+                             trace.finish_ms = event_ms;
+                             trace.finish_reason = output.finish_reason;
+                         }
+                     });
     const auto generation_end = Clock::now();
 
     if (!measure)
@@ -966,7 +987,7 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     metrics.load_ms = load_ms;
     metrics.total_ms = elapsed_ms(generation_start, generation_end);
     metrics.first_token_ms = saw_first_token ? elapsed_ms(generation_start, first_token_time) : 0.0;
-    const tiny_llm::RuntimeProfilingStats& profile = llm.last_generation_profile();
+    const tiny_llm::RuntimeProfilingStats &profile = llm.last_generation_profile();
     metrics.prepare_inputs_ms = profile.prepare_inputs_ms;
     metrics.prefill_ms = profile.prefill_ms;
     metrics.decode_ms_total = profile.decode_ms_total;
@@ -998,11 +1019,11 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     metrics.samples.reserve(outputs.size());
     for (size_t i = 0; i < outputs.size(); ++i)
     {
-        const tiny_llm::CompletionOutput& output = outputs[i];
+        const tiny_llm::CompletionOutput &output = outputs[i];
         metrics.generated_tokens += static_cast<int64_t>(output.token_ids.size());
         if (i < metrics.request_traces.size())
         {
-            RequestTrace& trace = metrics.request_traces[i];
+            RequestTrace &trace = metrics.request_traces[i];
             trace.generated_tokens = static_cast<int64_t>(output.token_ids.size());
             if (trace.finish_ms < 0.0)
             {
@@ -1027,24 +1048,38 @@ RepeatMetrics run_once(const Options& options, tiny_llm::LLM& llm, double load_m
     return metrics;
 }
 
-std::string json_escape(const std::string& text)
+std::string json_escape(const std::string &text)
 {
     std::ostringstream out;
     for (unsigned char ch : text)
     {
         switch (ch)
         {
-        case '"': out << "\\\""; break;
-        case '\\': out << "\\\\"; break;
-        case '\b': out << "\\b"; break;
-        case '\f': out << "\\f"; break;
-        case '\n': out << "\\n"; break;
-        case '\r': out << "\\r"; break;
-        case '\t': out << "\\t"; break;
+        case '"':
+            out << "\\\"";
+            break;
+        case '\\':
+            out << "\\\\";
+            break;
+        case '\b':
+            out << "\\b";
+            break;
+        case '\f':
+            out << "\\f";
+            break;
+        case '\n':
+            out << "\\n";
+            break;
+        case '\r':
+            out << "\\r";
+            break;
+        case '\t':
+            out << "\\t";
+            break;
         default:
             if (ch < 0x20)
             {
-                const char* hex = "0123456789abcdef";
+                const char *hex = "0123456789abcdef";
                 out << "\\u00" << hex[(ch >> 4) & 0x0f] << hex[ch & 0x0f];
             }
             else
@@ -1057,8 +1092,7 @@ std::string json_escape(const std::string& text)
     return out.str();
 }
 
-
-void print_json_int_array(const std::vector<int32_t>& values)
+void print_json_int_array(const std::vector<int32_t> &values)
 {
     std::cout << "[";
     for (size_t i = 0; i < values.size(); ++i)
@@ -1072,7 +1106,7 @@ void print_json_int_array(const std::vector<int32_t>& values)
     std::cout << "]";
 }
 
-void print_samples_json(const std::vector<SampleOutput>& samples)
+void print_samples_json(const std::vector<SampleOutput> &samples)
 {
     std::cout << "[";
     for (size_t i = 0; i < samples.size(); ++i)
@@ -1081,7 +1115,7 @@ void print_samples_json(const std::vector<SampleOutput>& samples)
         {
             std::cout << ",";
         }
-        const SampleOutput& sample = samples[i];
+        const SampleOutput &sample = samples[i];
         std::cout << "{";
         std::cout << "\"request_id\":\"" << json_escape(sample.request_id) << "\",";
         std::cout << "\"prompt\":\"" << json_escape(sample.prompt) << "\",";
@@ -1096,7 +1130,7 @@ void print_samples_json(const std::vector<SampleOutput>& samples)
     std::cout << "]";
 }
 
-void print_request_metrics_json(const std::vector<RequestTrace>& traces)
+void print_request_metrics_json(const std::vector<RequestTrace> &traces)
 {
     std::cout << "[";
     for (size_t i = 0; i < traces.size(); ++i)
@@ -1105,11 +1139,10 @@ void print_request_metrics_json(const std::vector<RequestTrace>& traces)
         {
             std::cout << ",";
         }
-        const RequestTrace& trace = traces[i];
-        const double tpot_ms = trace.generated_tokens > 1
-            ? (trace.finish_ms - std::max(0.0, trace.first_token_ms))
-                  / static_cast<double>(trace.generated_tokens - 1)
-            : 0.0;
+        const RequestTrace &trace = traces[i];
+        const double tpot_ms = trace.generated_tokens > 1 ? (trace.finish_ms - std::max(0.0, trace.first_token_ms)) /
+                                                                static_cast<double>(trace.generated_tokens - 1)
+                                                          : 0.0;
         std::cout << "{";
         std::cout << "\"request_id\":\"" << json_escape(trace.request_id) << "\",";
         std::cout << "\"prompt_index\":" << trace.prompt_index << ",";
@@ -1125,10 +1158,7 @@ void print_request_metrics_json(const std::vector<RequestTrace>& traces)
     std::cout << "]";
 }
 
-void write_trace_events(
-    const std::filesystem::path& path,
-    int32_t repeat_index,
-    const RepeatMetrics& metrics)
+void write_trace_events(const std::filesystem::path &path, int32_t repeat_index, const RepeatMetrics &metrics)
 {
     if (path.empty())
     {
@@ -1139,33 +1169,27 @@ void write_trace_events(
     {
         throw std::runtime_error("failed to open events JSONL: " + path.string());
     }
-    for (const RequestTrace& trace : metrics.request_traces)
+    for (const RequestTrace &trace : metrics.request_traces)
     {
-        out << "{\"repeat\":" << repeat_index
-            << ",\"request_id\":\"" << json_escape(trace.request_id)
-            << "\",\"prompt_index\":" << trace.prompt_index
-            << ",\"event\":\"submit\",\"time_ms\":" << trace.submit_ms << "}\n";
-        for (const TokenTraceEvent& event : trace.tokens)
+        out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
+            << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"submit\",\"time_ms\":" << trace.submit_ms
+            << "}\n";
+        for (const TokenTraceEvent &event : trace.tokens)
         {
-            out << "{\"repeat\":" << repeat_index
-                << ",\"request_id\":\"" << json_escape(trace.request_id)
-                << "\",\"prompt_index\":" << trace.prompt_index
-                << ",\"event\":\"token\",\"time_ms\":" << event.time_ms
-                << ",\"token_index\":" << event.token_index
-                << ",\"token_id\":" << event.token_id
-                << ",\"finished\":" << (event.finished ? "true" : "false")
-                << ",\"delta_text\":\"" << json_escape(event.delta_text) << "\"}\n";
+            out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
+                << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"token\",\"time_ms\":" << event.time_ms
+                << ",\"token_index\":" << event.token_index << ",\"token_id\":" << event.token_id
+                << ",\"finished\":" << (event.finished ? "true" : "false") << ",\"delta_text\":\""
+                << json_escape(event.delta_text) << "\"}\n";
         }
-        out << "{\"repeat\":" << repeat_index
-            << ",\"request_id\":\"" << json_escape(trace.request_id)
-            << "\",\"prompt_index\":" << trace.prompt_index
-            << ",\"event\":\"finish\",\"time_ms\":" << trace.finish_ms
-            << ",\"generated_tokens\":" << trace.generated_tokens
-            << ",\"finish_reason\":\"" << json_escape(trace.finish_reason) << "\"}\n";
+        out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
+            << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"finish\",\"time_ms\":" << trace.finish_ms
+            << ",\"generated_tokens\":" << trace.generated_tokens << ",\"finish_reason\":\""
+            << json_escape(trace.finish_reason) << "\"}\n";
     }
 }
 
-void print_summary(const Options& options, const std::vector<RepeatMetrics>& repeats)
+void print_summary(const Options &options, const std::vector<RepeatMetrics> &repeats)
 {
     std::vector<double> load_ms;
     std::vector<double> total_ms;
@@ -1223,7 +1247,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     int64_t prompt_tokens = -1;
     int64_t prefill_tokens = 0;
     int64_t decode_tokens = 0;
-    for (const RepeatMetrics& metrics : repeats)
+    for (const RepeatMetrics &metrics : repeats)
     {
         load_ms.push_back(metrics.load_ms);
         total_ms.push_back(metrics.total_ms);
@@ -1231,9 +1255,8 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         prepare_inputs_ms.push_back(metrics.prepare_inputs_ms);
         prefill_ms.push_back(metrics.prefill_ms);
         decode_ms_total.push_back(metrics.decode_ms_total);
-        decode_ms_per_token.push_back(metrics.decode_tokens > 0
-            ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens)
-            : 0.0);
+        decode_ms_per_token.push_back(
+            metrics.decode_tokens > 0 ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens) : 0.0);
         sampling_ms.push_back(metrics.sampling_ms);
         embedding_ms.push_back(metrics.embedding_ms);
         qkv_proj_ms.push_back(metrics.qkv_proj_ms);
@@ -1288,17 +1311,16 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     const double avg_decode_requests = mean(decode_requests);
     const double avg_max_context_len = mean(max_context_len);
     const double avg_profiled_steps = mean(profiled_steps);
-    const double avg_scheduled_requests_per_step = avg_profiled_steps > 0.0
-        ? avg_scheduled_requests / avg_profiled_steps
-        : 0.0;
-    const double avg_scheduled_tokens_per_step = avg_profiled_steps > 0.0
-        ? avg_scheduled_tokens / avg_profiled_steps
-        : 0.0;
+    const double avg_scheduled_requests_per_step =
+        avg_profiled_steps > 0.0 ? avg_scheduled_requests / avg_profiled_steps : 0.0;
+    const double avg_scheduled_tokens_per_step =
+        avg_profiled_steps > 0.0 ? avg_scheduled_tokens / avg_profiled_steps : 0.0;
     const bool has_cuda_memory = !cuda_memory_allocated_mb.empty();
     const double avg_generated_tokens = repeats.empty() ? 0.0 : static_cast<double>(generated_tokens) / repeats.size();
     const double e2e_tokens_per_s = avg_total_ms > 0.0 ? avg_generated_tokens / (avg_total_ms / 1000.0) : 0.0;
     const double decode_ms = std::max(0.0, avg_total_ms - avg_first_ms);
-    const double generated_decode_tokens = std::max(0.0, avg_generated_tokens - static_cast<double>(options.prompts.size()));
+    const double generated_decode_tokens =
+        std::max(0.0, avg_generated_tokens - static_cast<double>(options.prompts.size()));
     const double decode_tokens_per_s = decode_ms > 0.0 ? generated_decode_tokens / (decode_ms / 1000.0) : 0.0;
 
     std::cout << "llama_engine_benchmark\n";
@@ -1338,8 +1360,10 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << "  norm_ms: " << avg_norm_ms << "\n";
         std::cout << "  lm_head_ms: " << avg_lm_head_ms << "\n";
     }
-    std::cout << "  avg_prefill_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << "\n";
-    std::cout << "  avg_decode_tokens: " << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << "\n";
+    std::cout << "  avg_prefill_tokens: "
+              << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << "\n";
+    std::cout << "  avg_decode_tokens: "
+              << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << "\n";
     std::cout << "  avg_scheduled_requests: " << avg_scheduled_requests << "\n";
     std::cout << "  avg_scheduled_tokens: " << avg_scheduled_tokens << "\n";
     std::cout << "  avg_profiled_steps: " << avg_profiled_steps << "\n";
@@ -1423,7 +1447,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
         std::cout << "  samples:\n";
         for (size_t i = 0; i < repeats.front().samples.size(); ++i)
         {
-            const SampleOutput& sample = repeats.front().samples[i];
+            const SampleOutput &sample = repeats.front().samples[i];
             std::cout << "    [" << i << "] prompt: " << sample.prompt << "\n";
             std::cout << "    [" << i << "] output_text: " << sample.text << "\n";
             std::cout << "    [" << i << "] generated_text: " << sample.generated_text << "\n";
@@ -1479,8 +1503,10 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
     std::cout << "\"cuda_memory_reserved_mb\":" << avg_cuda_memory_reserved_mb << ",";
     std::cout << "\"cuda_memory_peak_allocated_mb\":" << avg_cuda_memory_peak_allocated_mb << ",";
     std::cout << "\"cuda_memory_peak_reserved_mb\":" << avg_cuda_memory_peak_reserved_mb << ",";
-    std::cout << "\"avg_prefill_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << ",";
-    std::cout << "\"avg_decode_tokens\":" << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << ",";
+    std::cout << "\"avg_prefill_tokens\":"
+              << (repeats.empty() ? 0.0 : static_cast<double>(prefill_tokens) / repeats.size()) << ",";
+    std::cout << "\"avg_decode_tokens\":"
+              << (repeats.empty() ? 0.0 : static_cast<double>(decode_tokens) / repeats.size()) << ",";
     std::cout << "\"avg_scheduled_requests\":" << avg_scheduled_requests << ",";
     std::cout << "\"avg_scheduled_tokens\":" << avg_scheduled_tokens << ",";
     std::cout << "\"avg_profiled_steps\":" << avg_profiled_steps << ",";
@@ -1575,7 +1601,7 @@ void print_summary(const Options& options, const std::vector<RepeatMetrics>& rep
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     try
     {
@@ -1598,20 +1624,15 @@ int main(int argc, char** argv)
             tiny_llm::HFLlamaConfigLoader::load_from_dir(options.model_dir.string());
         if (!options.max_num_batched_tokens_explicit)
         {
-            options.max_num_batched_tokens = std::max<int32_t>(
-                1,
-                std::min<int64_t>(
-                    static_cast<int64_t>(options.max_num_batched_token_cap),
-                    std::max<int64_t>(1, options.prompt_tokens)));
+            options.max_num_batched_tokens =
+                std::max<int32_t>(1, std::min<int64_t>(static_cast<int64_t>(options.max_num_batched_token_cap),
+                                                       std::max<int64_t>(1, options.prompt_tokens)));
         }
         constexpr int32_t kBlockSizeTokens = 16;
         if (!options.kv_num_blocks_explicit)
         {
-            options.kv_num_blocks = estimate_kv_num_blocks(
-                options.prompt_token_counts,
-                options.max_new_tokens,
-                kBlockSizeTokens,
-                hf_config.num_hidden_layers);
+            options.kv_num_blocks = estimate_kv_num_blocks(options.prompt_token_counts, options.max_new_tokens,
+                                                           kBlockSizeTokens, hf_config.num_hidden_layers);
         }
 
         const auto load_start = Clock::now();
@@ -1650,7 +1671,7 @@ int main(int argc, char** argv)
         }
         print_summary(options, repeats);
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         std::cerr << "llama_engine_benchmark failed: " << ex.what() << "\n";
         print_usage(argv[0]);

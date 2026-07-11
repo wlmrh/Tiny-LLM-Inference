@@ -5,19 +5,23 @@
 
 #include "tiny_llm/core/tensor.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class ExecutionContext;
 
-namespace modules {
+namespace modules
+{
 
-enum class WeightLayout {
+enum class WeightLayout
+{
     kInOut = 0,
     kOutIn = 1,
 };
 
-struct StackedWeightDesc {
-    float* data = nullptr;
+struct StackedWeightDesc
+{
+    float *data = nullptr;
     int32_t out_features = 0;
     int32_t in_features = 0;
     int32_t output_offset = 0;
@@ -26,26 +30,30 @@ struct StackedWeightDesc {
     Tensor bias;
 };
 
-class Linear : public torch::nn::Module {
-public:
+class Linear : public torch::nn::Module
+{
+  public:
     Linear(int32_t in_features, int32_t out_features_total);
 
-    void bind_weight(const Tensor& weight,
+    void bind_weight(const Tensor &weight, WeightLayout layout = WeightLayout::kInOut);
+    void bind_weight(float *weight, int32_t out_features, int32_t in_features,
                      WeightLayout layout = WeightLayout::kInOut);
-    void bind_weight(float* weight,
-                     int32_t out_features,
-                     int32_t in_features,
-                     WeightLayout layout = WeightLayout::kInOut);
-    void bind_stacked_weights(const StackedWeightDesc* descs, int32_t count);
-    Tensor forward(const Tensor& input, ExecutionContext& ctx) const;
-    void forward(const Tensor& input, Tensor& output, ExecutionContext& ctx) const;
+    void bind_stacked_weights(const StackedWeightDesc *descs, int32_t count);
+    Tensor forward(const Tensor &input, ExecutionContext &ctx) const;
+    void forward(const Tensor &input, Tensor &output, ExecutionContext &ctx) const;
 
-    int32_t in_features() const { return in_features_; }
-    int32_t out_features_total() const { return out_features_total_; }
+    int32_t in_features() const
+    {
+        return in_features_;
+    }
+    int32_t out_features_total() const
+    {
+        return out_features_total_;
+    }
 
-private:
-    void validate_forward_inputs(const Tensor& input, const Tensor& output) const;
-    void validate_descs(const StackedWeightDesc* descs, int32_t count) const;
+  private:
+    void validate_forward_inputs(const Tensor &input, const Tensor &output) const;
+    void validate_descs(const StackedWeightDesc *descs, int32_t count) const;
     void build_stacked_weight_cache();
 
     StackedWeightDesc single_weight_{};

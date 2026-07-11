@@ -18,17 +18,19 @@
 #include <cuda_runtime_api.h>
 #endif
 
-namespace tiny_llm {
-namespace {
+namespace tiny_llm
+{
+namespace
+{
 
-std::string expand_user_path(const std::string& path)
+std::string expand_user_path(const std::string &path)
 {
     if (path.empty() || path[0] != '~')
     {
         return path;
     }
 
-    const char* home = std::getenv("HOME");
+    const char *home = std::getenv("HOME");
     if (home == nullptr || *home == '\0')
     {
         throw std::runtime_error("LLM: cannot expand '~' because HOME is not set.");
@@ -46,7 +48,7 @@ std::string expand_user_path(const std::string& path)
     return path;
 }
 
-size_t checked_mul(size_t lhs, size_t rhs, const std::string& field)
+size_t checked_mul(size_t lhs, size_t rhs, const std::string &field)
 {
     if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs)
     {
@@ -55,7 +57,7 @@ size_t checked_mul(size_t lhs, size_t rhs, const std::string& field)
     return lhs * rhs;
 }
 
-size_t llama_kv_block_bytes(const LlamaConfig& config, int32_t block_size_tokens)
+size_t llama_kv_block_bytes(const LlamaConfig &config, int32_t block_size_tokens)
 {
     if (block_size_tokens <= 0)
     {
@@ -71,22 +73,20 @@ size_t llama_kv_block_bytes(const LlamaConfig& config, int32_t block_size_tokens
     }
 
     const int32_t head_dim = config.hidden_size / config.num_attention_heads;
-    const size_t kv_hidden_size = checked_mul(static_cast<size_t>(config.num_key_value_heads),
-                                              static_cast<size_t>(head_dim),
-                                              "kv_hidden_size");
+    const size_t kv_hidden_size =
+        checked_mul(static_cast<size_t>(config.num_key_value_heads), static_cast<size_t>(head_dim), "kv_hidden_size");
     const size_t tokens = static_cast<size_t>(block_size_tokens);
     return checked_mul(checked_mul(2, tokens, "kv block tokens"),
-                       checked_mul(kv_hidden_size, sizeof(float), "kv block width"),
-                       "kv block bytes");
+                       checked_mul(kv_hidden_size, sizeof(float), "kv block width"), "kv block bytes");
 }
 
-bool has_any_safetensors_file(const std::filesystem::path& model_dir)
+bool has_any_safetensors_file(const std::filesystem::path &model_dir)
 {
     if (!std::filesystem::exists(model_dir) || !std::filesystem::is_directory(model_dir))
     {
         return false;
     }
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(model_dir))
     {
         if (entry.is_regular_file() && entry.path().extension() == ".safetensors")
         {
@@ -96,7 +96,7 @@ bool has_any_safetensors_file(const std::filesystem::path& model_dir)
     return false;
 }
 
-void validate_model_dir(const std::filesystem::path& model_dir, const std::string& weight_file)
+void validate_model_dir(const std::filesystem::path &model_dir, const std::string &weight_file)
 {
     if (!std::filesystem::is_directory(model_dir))
     {
@@ -109,23 +109,23 @@ void validate_model_dir(const std::filesystem::path& model_dir, const std::strin
     const bool uses_default_weight = weight_file.empty() || weight_file == "model.safetensors";
     if (!uses_default_weight && !std::filesystem::exists(model_dir / weight_file))
     {
-        throw std::runtime_error("LLM: missing weight file under model directory: " + (model_dir / weight_file).string());
+        throw std::runtime_error("LLM: missing weight file under model directory: " +
+                                 (model_dir / weight_file).string());
     }
-    if (uses_default_weight
-        && !std::filesystem::exists(model_dir / "model.safetensors")
-        && !has_any_safetensors_file(model_dir))
+    if (uses_default_weight && !std::filesystem::exists(model_dir / "model.safetensors") &&
+        !has_any_safetensors_file(model_dir))
     {
         throw std::runtime_error("LLM: missing safetensors weight file under model directory: " + model_dir.string());
     }
-    if (!std::filesystem::exists(model_dir / "tokenizer.json")
-        && !std::filesystem::exists(model_dir / "tokenizer.model"))
+    if (!std::filesystem::exists(model_dir / "tokenizer.json") &&
+        !std::filesystem::exists(model_dir / "tokenizer.model"))
     {
-        throw std::runtime_error("LLM: missing tokenizer.json or tokenizer.model under model directory: "
-                                 + model_dir.string());
+        throw std::runtime_error("LLM: missing tokenizer.json or tokenizer.model under model directory: " +
+                                 model_dir.string());
     }
 }
 
-void* allocate_kv_pool(size_t bytes, const ParallelConfig& parallel_config)
+void *allocate_kv_pool(size_t bytes, const ParallelConfig &parallel_config)
 {
     if (bytes == 0)
     {
@@ -134,7 +134,7 @@ void* allocate_kv_pool(size_t bytes, const ParallelConfig& parallel_config)
 
     if (parallel_config.is_cpu())
     {
-        void* ptr = std::malloc(bytes);
+        void *ptr = std::malloc(bytes);
         if (ptr == nullptr)
         {
             throw std::runtime_error("LLM: failed to allocate CPU KV block pool.");
@@ -143,7 +143,7 @@ void* allocate_kv_pool(size_t bytes, const ParallelConfig& parallel_config)
     }
 
 #if TINYLLM_ENABLE_CUDA
-    void* ptr = nullptr;
+    void *ptr = nullptr;
     if (cudaSetDevice(parallel_config.device_id()) != cudaSuccess)
     {
         throw std::runtime_error("LLM: failed to set CUDA device for KV block pool.");
@@ -160,9 +160,7 @@ void* allocate_kv_pool(size_t bytes, const ParallelConfig& parallel_config)
 
 } // namespace
 
-LLMOptions::LLMOptions(std::string model_path) : model(std::move(model_path))
-{
-}
+LLMOptions::LLMOptions(std::string model_path) : model(std::move(model_path)) {}
 
 LLMOptions::LLMOptions(std::string model_path, ParallelConfig parallel_config)
     : model(std::move(model_path)), parallel_config(parallel_config)
@@ -174,8 +172,7 @@ LLM::LLM(std::string model) : options_(std::move(model))
     initialize();
 }
 
-LLM::LLM(std::string model, ParallelConfig parallel_config)
-    : options_(std::move(model), parallel_config)
+LLM::LLM(std::string model, ParallelConfig parallel_config) : options_(std::move(model), parallel_config)
 {
     initialize();
 }
@@ -193,19 +190,16 @@ LLM::~LLM()
     release_kv_pool();
 }
 
-LLM::LLM(LLM&& other) noexcept
-    : options_(std::move(other.options_)),
-      tokenizer_(std::move(other.tokenizer_)),
-      workspace_(std::move(other.workspace_)),
-      engine_(std::move(other.engine_)),
-      kv_pool_(other.kv_pool_),
+LLM::LLM(LLM &&other) noexcept
+    : options_(std::move(other.options_)), tokenizer_(std::move(other.tokenizer_)),
+      workspace_(std::move(other.workspace_)), engine_(std::move(other.engine_)), kv_pool_(other.kv_pool_),
       last_generation_profile_(other.last_generation_profile_)
 {
     other.kv_pool_ = nullptr;
     other.last_generation_profile_ = RuntimeProfilingStats{};
 }
 
-LLM& LLM::operator=(LLM&& other) noexcept
+LLM &LLM::operator=(LLM &&other) noexcept
 {
     if (this != &other)
     {
@@ -228,7 +222,7 @@ LLM& LLM::operator=(LLM&& other) noexcept
 
 void LLM::initialize()
 {
-    constexpr const char* kErr = "LLM";
+    constexpr const char *kErr = "LLM";
     options_.model = expand_user_path(options_.model);
     if (options_.model.empty())
     {
@@ -272,7 +266,8 @@ void LLM::initialize()
         }
         if (scheduler_config.max_prefill_tokens_per_step <= 0)
         {
-            throw std::runtime_error(std::string(kErr) + ": scheduler_config.max_prefill_tokens_per_step must be positive.");
+            throw std::runtime_error(std::string(kErr) +
+                                     ": scheduler_config.max_prefill_tokens_per_step must be positive.");
         }
 
         EngineArgs args;
@@ -324,9 +319,8 @@ void LLM::release_kv_pool() noexcept
     kv_pool_ = nullptr;
 }
 
-std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prompts,
-                                            const LLMSamplingParams& sampling_params,
-                                            CompletionStreamCallback callback)
+std::vector<CompletionOutput> LLM::generate(const std::vector<std::string> &prompts,
+                                            const LLMSamplingParams &sampling_params, CompletionStreamCallback callback)
 {
     if (engine_ == nullptr)
     {
@@ -354,7 +348,7 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prom
     {
         const std::vector<UserOutput> step_outputs = engine_->step();
         last_generation_profile_.add(engine_->last_step_profile());
-        for (const UserOutput& output : step_outputs)
+        for (const UserOutput &output : step_outputs)
         {
             auto it = request_to_index.find(output.internal_id);
             if (it == request_to_index.end())
@@ -363,12 +357,12 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prom
             }
             if (!output.error_message.empty())
             {
-                throw std::runtime_error("LLM::generate: request " + std::to_string(output.internal_id) + " failed: "
-                                         + output.error_message);
+                throw std::runtime_error("LLM::generate: request " + std::to_string(output.internal_id) +
+                                         " failed: " + output.error_message);
             }
 
             const size_t prompt_index = it->second;
-            CompletionOutput& result = results[prompt_index];
+            CompletionOutput &result = results[prompt_index];
             result.text = output.text;
             result.token_ids = output.generated_token_ids;
             result.finished = output.is_finished;
@@ -377,7 +371,7 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prom
             if (callback)
             {
                 CompletionStreamOutput stream_output;
-                static_cast<CompletionOutput&>(stream_output) = result;
+                static_cast<CompletionOutput &>(stream_output) = result;
                 stream_output.prompt_index = prompt_index;
                 stream_output.delta_text = output.delta_text;
                 stream_output.token_id = result.token_ids.empty() ? -1 : result.token_ids.back();
@@ -389,8 +383,7 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string>& prom
     return results;
 }
 
-CompletionOutput LLM::generate(const std::string& prompt,
-                               const LLMSamplingParams& sampling_params,
+CompletionOutput LLM::generate(const std::string &prompt, const LLMSamplingParams &sampling_params,
                                CompletionStreamCallback callback)
 {
     std::vector<CompletionOutput> outputs =

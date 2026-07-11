@@ -6,19 +6,21 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 std::string g_model_dir_arg;
 }
 
-namespace {
-std::filesystem::path expand_user_path(const std::string& path)
+namespace
+{
+std::filesystem::path expand_user_path(const std::string &path)
 {
     if (path.empty() || path[0] != '~')
     {
         return std::filesystem::path(path);
     }
 
-    const char* home = std::getenv("HOME");
+    const char *home = std::getenv("HOME");
     if (home == nullptr || *home == '\0')
     {
         return std::filesystem::path(path);
@@ -40,14 +42,14 @@ std::string resolve_model_dir()
     {
         return expand_user_path(g_model_dir_arg).string();
     }
-    if (const char* env_hf_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR"))
+    if (const char *env_hf_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR"))
     {
         return expand_user_path(env_hf_dir).string();
     }
     return {};
 }
 
-bool has_required_model_files(const std::filesystem::path& model_dir, std::string& reason)
+bool has_required_model_files(const std::filesystem::path &model_dir, std::string &reason)
 {
     if (model_dir.empty())
     {
@@ -69,15 +71,15 @@ bool has_required_model_files(const std::filesystem::path& model_dir, std::strin
         reason = "Missing model.safetensors under: " + model_dir.string();
         return false;
     }
-    if (!std::filesystem::exists(model_dir / "tokenizer.json")
-        && !std::filesystem::exists(model_dir / "tokenizer.model"))
+    if (!std::filesystem::exists(model_dir / "tokenizer.json") &&
+        !std::filesystem::exists(model_dir / "tokenizer.model"))
     {
         reason = "Missing tokenizer.json or tokenizer.model under: " + model_dir.string();
         return false;
     }
     return true;
 }
-}
+} // namespace
 
 TEST(LLMRuntimeIntegrationTest, GenerateWithCallbackReturnsEventsAndFinalOutputs)
 {
@@ -104,13 +106,15 @@ TEST(LLMRuntimeIntegrationTest, GenerateWithCallbackReturnsEventsAndFinalOutputs
     std::vector<std::string> streamed_text(prompts.size());
 
     const std::vector<tiny_llm::CompletionOutput> outputs =
-        llm.generate(prompts, sampling_params, [&](const tiny_llm::CompletionStreamOutput& output) {
-            ASSERT_LT(output.prompt_index, prompts.size());
-            EXPECT_EQ(output.prompt, prompts[output.prompt_index]);
-            EXPECT_GE(output.token_id, 0);
-            ++stream_event_counts[output.prompt_index];
-            streamed_text[output.prompt_index] += output.delta_text;
-        });
+        llm.generate(prompts, sampling_params,
+                     [&](const tiny_llm::CompletionStreamOutput &output)
+                     {
+                         ASSERT_LT(output.prompt_index, prompts.size());
+                         EXPECT_EQ(output.prompt, prompts[output.prompt_index]);
+                         EXPECT_GE(output.token_id, 0);
+                         ++stream_event_counts[output.prompt_index];
+                         streamed_text[output.prompt_index] += output.delta_text;
+                     });
 
     ASSERT_EQ(outputs.size(), prompts.size());
     for (size_t i = 0; i < outputs.size(); ++i)
@@ -124,7 +128,7 @@ TEST(LLMRuntimeIntegrationTest, GenerateWithCallbackReturnsEventsAndFinalOutputs
     }
 }
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; ++i)
     {

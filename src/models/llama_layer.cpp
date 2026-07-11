@@ -6,26 +6,25 @@
 #include "tiny_llm/runtime/profiling.h"
 
 #include <algorithm>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-namespace {
+namespace
+{
 
-int32_t kv_hidden_size(const LlamaConfig& config)
+int32_t kv_hidden_size(const LlamaConfig &config)
 {
     return config.num_key_value_heads * config.head_dim;
 }
 
-void validate_float_tensor_2d(const Tensor& tensor,
-                              int64_t rows,
-                              int64_t cols,
-                              const char* name)
+void validate_float_tensor_2d(const Tensor &tensor, int64_t rows, int64_t cols, const char *name)
 {
     if (!tensor.defined())
     {
@@ -45,7 +44,7 @@ void validate_float_tensor_2d(const Tensor& tensor,
     }
 }
 
-void validate_int_tensor_1d(const Tensor& tensor, int64_t size, const char* name)
+void validate_int_tensor_1d(const Tensor &tensor, int64_t size, const char *name)
 {
     if (!tensor.defined())
     {
@@ -67,31 +66,20 @@ void validate_int_tensor_1d(const Tensor& tensor, int64_t size, const char* name
 
 } // namespace
 
-LlamaSelfAttention::LlamaSelfAttention(const LlamaConfig& config)
-    : config_(config)
+LlamaSelfAttention::LlamaSelfAttention(const LlamaConfig &config) : config_(config)
 {
-    qkv_proj_ = register_module(
-        "qkv_proj",
-        std::make_shared<modules::Linear>(config.hidden_size, config.hidden_size + 2 * kv_hidden_size(config)));
-    o_proj_ = register_module(
-        "o_proj",
-        std::make_shared<modules::Linear>(config.hidden_size, config.hidden_size));
-    rotary_ = register_module(
-        "rotary",
-        std::make_shared<modules::RotaryEmbedding>(
-            config.num_attention_heads,
-            config.num_key_value_heads,
-            config.head_dim,
-            config.rope_theta,
-            config.rope_scaling_type,
-            config.rope_scaling_factor,
-            config.rope_scaling_low_freq_factor,
-            config.rope_scaling_high_freq_factor,
-            config.rope_scaling_original_max_position_embeddings,
-            config.max_position_embeddings));
+    qkv_proj_ = register_module("qkv_proj", std::make_shared<modules::Linear>(
+                                                config.hidden_size, config.hidden_size + 2 * kv_hidden_size(config)));
+    o_proj_ = register_module("o_proj", std::make_shared<modules::Linear>(config.hidden_size, config.hidden_size));
+    rotary_ = register_module("rotary", std::make_shared<modules::RotaryEmbedding>(
+                                            config.num_attention_heads, config.num_key_value_heads, config.head_dim,
+                                            config.rope_theta, config.rope_scaling_type, config.rope_scaling_factor,
+                                            config.rope_scaling_low_freq_factor, config.rope_scaling_high_freq_factor,
+                                            config.rope_scaling_original_max_position_embeddings,
+                                            config.max_position_embeddings));
 }
 
-void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::string& prefix, int32_t layer_id)
+void LlamaSelfAttention::load_weights(const WeightMap &weight_map, const std::string &prefix, int32_t layer_id)
 {
     if (layer_id < 0)
     {
@@ -135,10 +123,8 @@ void LlamaSelfAttention::load_weights(const WeightMap& weight_map, const std::st
     o_proj_->bind_weight(weight_map.get_tensor_view(prefix + "self_attn.o_proj.weight"), modules::WeightLayout::kOutIn);
 }
 
-void LlamaSelfAttention::forward(const Tensor& hidden_states,
-                                 const Tensor& positions,
-                                 LlamaAttentionBuffers& buffers,
-                                 RuntimeContext& ctx) const
+void LlamaSelfAttention::forward(const Tensor &hidden_states, const Tensor &positions, LlamaAttentionBuffers &buffers,
+                                 RuntimeContext &ctx) const
 {
     validate_forward_inputs(hidden_states, positions, buffers);
 
@@ -161,18 +147,14 @@ void LlamaSelfAttention::forward(const Tensor& hidden_states,
     }
 }
 
-void LlamaSelfAttention::validate_forward_inputs(const Tensor& hidden_states,
-                                                 const Tensor& positions,
-                                                 const LlamaAttentionBuffers& buffers) const
+void LlamaSelfAttention::validate_forward_inputs(const Tensor &hidden_states, const Tensor &positions,
+                                                 const LlamaAttentionBuffers &buffers) const
 {
     const int64_t rows = hidden_states.size(0);
     validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaSelfAttention::hidden_states");
     validate_int_tensor_1d(positions, rows, "LlamaSelfAttention::positions");
-    validate_float_tensor_2d(
-        buffers.qkv,
-        rows,
-        config_.hidden_size + 2 * kv_hidden_size(config_),
-        "LlamaSelfAttention::qkv");
+    validate_float_tensor_2d(buffers.qkv, rows, config_.hidden_size + 2 * kv_hidden_size(config_),
+                             "LlamaSelfAttention::qkv");
     validate_float_tensor_2d(buffers.q, rows, config_.hidden_size, "LlamaSelfAttention::q");
     validate_float_tensor_2d(buffers.k, rows, kv_hidden_size(config_), "LlamaSelfAttention::k");
     validate_float_tensor_2d(buffers.v, rows, kv_hidden_size(config_), "LlamaSelfAttention::v");
@@ -181,22 +163,18 @@ void LlamaSelfAttention::validate_forward_inputs(const Tensor& hidden_states,
     validate_float_tensor_2d(buffers.proj_output, rows, config_.hidden_size, "LlamaSelfAttention::proj_output");
 }
 
-void LlamaSelfAttention::split_qkv(const Tensor& qkv, Tensor& q, Tensor& k, Tensor& v) const
+void LlamaSelfAttention::split_qkv(const Tensor &qkv, Tensor &q, Tensor &k, Tensor &v) const
 {
     ops::split_qkv(qkv, q, k, v, config_.hidden_size, kv_hidden_size(config_));
 }
 
-void LlamaSelfAttention::apply_rope(const Tensor& positions, Tensor& q, Tensor& k) const
+void LlamaSelfAttention::apply_rope(const Tensor &positions, Tensor &q, Tensor &k) const
 {
     rotary_->forward(positions, q, k);
 }
 
-void LlamaSelfAttention::compute_attention(const Tensor& positions,
-                                           const Tensor& q,
-                                           const Tensor& k,
-                                           const Tensor& v,
-                                           Tensor& out,
-                                           RuntimeContext& ctx) const
+void LlamaSelfAttention::compute_attention(const Tensor &positions, const Tensor &q, const Tensor &k, const Tensor &v,
+                                           Tensor &out, RuntimeContext &ctx) const
 {
     ops::LlamaAttentionParams params;
     params.positions = &positions;
@@ -213,30 +191,23 @@ void LlamaSelfAttention::compute_attention(const Tensor& positions,
     ops::llama_attention_forward(params);
 }
 
-LlamaMLP::LlamaMLP(const LlamaConfig& config)
-    : config_(config)
+LlamaMLP::LlamaMLP(const LlamaConfig &config) : config_(config)
 {
     if (config_.hidden_act != "silu")
     {
         throw std::runtime_error("LlamaMLP: only silu hidden_act is supported in Phase 3.");
     }
     gate_up_proj_ = register_module(
-        "gate_up_proj",
-        std::make_shared<modules::Linear>(config.hidden_size, 2 * config.intermediate_size));
-    down_proj_ = register_module(
-        "down_proj",
-        std::make_shared<modules::Linear>(config.intermediate_size, config.hidden_size));
+        "gate_up_proj", std::make_shared<modules::Linear>(config.hidden_size, 2 * config.intermediate_size));
+    down_proj_ =
+        register_module("down_proj", std::make_shared<modules::Linear>(config.intermediate_size, config.hidden_size));
 }
 
-void LlamaMLP::load_weights(const WeightMap& weight_map, const std::string& prefix)
+void LlamaMLP::load_weights(const WeightMap &weight_map, const std::string &prefix)
 {
     gate_up_descs_[0] = {
-        nullptr,
-        config_.intermediate_size,
-        config_.hidden_size,
-        0,
-        modules::WeightLayout::kOutIn,
-        weight_map.get_tensor_view(prefix + "mlp.gate_proj.weight"),
+        nullptr,  config_.intermediate_size,     config_.hidden_size,
+        0,        modules::WeightLayout::kOutIn, weight_map.get_tensor_view(prefix + "mlp.gate_proj.weight"),
         Tensor{},
     };
     gate_up_descs_[1] = {
@@ -248,15 +219,11 @@ void LlamaMLP::load_weights(const WeightMap& weight_map, const std::string& pref
         weight_map.get_tensor_view(prefix + "mlp.up_proj.weight"),
         Tensor{},
     };
-    gate_up_proj_->bind_stacked_weights(
-        gate_up_descs_.data(),
-        static_cast<int32_t>(gate_up_descs_.size()));
+    gate_up_proj_->bind_stacked_weights(gate_up_descs_.data(), static_cast<int32_t>(gate_up_descs_.size()));
     down_proj_->bind_weight(weight_map.get_tensor_view(prefix + "mlp.down_proj.weight"), modules::WeightLayout::kOutIn);
 }
 
-void LlamaMLP::forward(const Tensor& hidden_states,
-                       LlamaMLPBuffers& buffers,
-                       RuntimeContext& ctx) const
+void LlamaMLP::forward(const Tensor &hidden_states, LlamaMLPBuffers &buffers, RuntimeContext &ctx) const
 {
     validate_forward_inputs(hidden_states, buffers);
     {
@@ -269,8 +236,7 @@ void LlamaMLP::forward(const Tensor& hidden_states,
     }
 }
 
-void LlamaMLP::validate_forward_inputs(const Tensor& hidden_states,
-                                       const LlamaMLPBuffers& buffers) const
+void LlamaMLP::validate_forward_inputs(const Tensor &hidden_states, const LlamaMLPBuffers &buffers) const
 {
     const int64_t rows = hidden_states.size(0);
     validate_float_tensor_2d(hidden_states, rows, config_.hidden_size, "LlamaMLP::hidden_states");
@@ -281,29 +247,22 @@ void LlamaMLP::validate_forward_inputs(const Tensor& hidden_states,
     validate_float_tensor_2d(buffers.down, rows, config_.hidden_size, "LlamaMLP::down");
 }
 
-void LlamaMLP::apply_activation(const Tensor& gate, const Tensor& up, Tensor& activated) const
+void LlamaMLP::apply_activation(const Tensor &gate, const Tensor &up, Tensor &activated) const
 {
     ops::silu_multiply(gate, up, activated);
 }
 
-LlamaDecoderLayer::LlamaDecoderLayer(const LlamaConfig& config)
-    : config_(config)
+LlamaDecoderLayer::LlamaDecoderLayer(const LlamaConfig &config) : config_(config)
 {
-    input_layernorm_ = register_module(
-        "input_layernorm",
-        std::make_shared<modules::RMSNorm>(config.hidden_size, config.rms_norm_eps));
-    self_attn_ = register_module(
-        "self_attn",
-        std::make_shared<LlamaSelfAttention>(config));
+    input_layernorm_ =
+        register_module("input_layernorm", std::make_shared<modules::RMSNorm>(config.hidden_size, config.rms_norm_eps));
+    self_attn_ = register_module("self_attn", std::make_shared<LlamaSelfAttention>(config));
     post_attention_layernorm_ = register_module(
-        "post_attention_layernorm",
-        std::make_shared<modules::RMSNorm>(config.hidden_size, config.rms_norm_eps));
-    mlp_ = register_module(
-        "mlp",
-        std::make_shared<LlamaMLP>(config));
+        "post_attention_layernorm", std::make_shared<modules::RMSNorm>(config.hidden_size, config.rms_norm_eps));
+    mlp_ = register_module("mlp", std::make_shared<LlamaMLP>(config));
 }
 
-void LlamaDecoderLayer::load_weights(const WeightMap& weight_map, int layer_id)
+void LlamaDecoderLayer::load_weights(const WeightMap &weight_map, int layer_id)
 {
     if (layer_id < 0)
     {
@@ -318,10 +277,8 @@ void LlamaDecoderLayer::load_weights(const WeightMap& weight_map, int layer_id)
     mlp_->load_weights(weight_map, prefix);
 }
 
-void LlamaDecoderLayer::forward(Tensor& hidden_states,
-                                const Tensor& positions,
-                                LlamaDecoderLayerBuffers& buffers,
-                                RuntimeContext& ctx) const
+void LlamaDecoderLayer::forward(Tensor &hidden_states, const Tensor &positions, LlamaDecoderLayerBuffers &buffers,
+                                RuntimeContext &ctx) const
 {
     validate_forward_inputs(hidden_states, positions, buffers);
 
@@ -342,9 +299,8 @@ void LlamaDecoderLayer::forward(Tensor& hidden_states,
     add_inplace(buffers.residual, buffers.mlp.down, hidden_states);
 }
 
-void LlamaDecoderLayer::validate_forward_inputs(const Tensor& hidden_states,
-                                                const Tensor& positions,
-                                                const LlamaDecoderLayerBuffers& buffers) const
+void LlamaDecoderLayer::validate_forward_inputs(const Tensor &hidden_states, const Tensor &positions,
+                                                const LlamaDecoderLayerBuffers &buffers) const
 {
     if (layer_id_ < 0)
     {
@@ -360,12 +316,12 @@ void LlamaDecoderLayer::validate_forward_inputs(const Tensor& hidden_states,
     mlp_->validate_forward_inputs(buffers.norm_output, buffers.mlp);
 }
 
-void LlamaDecoderLayer::copy_tensor(const Tensor& src, Tensor& dst) const
+void LlamaDecoderLayer::copy_tensor(const Tensor &src, Tensor &dst) const
 {
     ops::copy_tensor(src, dst);
 }
 
-void LlamaDecoderLayer::add_inplace(const Tensor& residual, const Tensor& update, Tensor& output) const
+void LlamaDecoderLayer::add_inplace(const Tensor &residual, const Tensor &update, Tensor &output) const
 {
     ops::add_tensors(residual, update, output);
 }

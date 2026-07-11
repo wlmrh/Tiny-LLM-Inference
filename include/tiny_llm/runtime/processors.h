@@ -6,7 +6,8 @@
 #include <unordered_map>
 #include <vector>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class Tokenizer;
 struct EngineArgs;
@@ -14,7 +15,8 @@ struct EngineArgs;
 /**
  * @brief Sampling fields shared by user-facing and normalized engine parameters.
  */
-struct SamplingParamsCommon {
+struct SamplingParamsCommon
+{
     float temperature = 0.0f;
     float top_p = 1.0f;
     int32_t top_k = 0;
@@ -29,21 +31,24 @@ struct SamplingParamsCommon {
  *
  * A max_tokens value of 0 means the runtime default should be used.
  */
-struct UserSamplingParams : public SamplingParamsCommon {
+struct UserSamplingParams : public SamplingParamsCommon
+{
     int32_t max_tokens = 0;
 };
 
 /**
  * @brief Engine-ready normalized sampling configuration.
  */
-struct SamplingParams : public SamplingParamsCommon {
+struct SamplingParams : public SamplingParamsCommon
+{
     int32_t max_tokens = 32;
 };
 
 /**
  * @brief Input protocol object consumed by scheduler and model executor.
  */
-struct EngineCoreRequest {
+struct EngineCoreRequest
+{
     uint64_t internal_id = 0;
     std::vector<int32_t> prompt_token_ids;
     SamplingParams sampling_params;
@@ -52,14 +57,16 @@ struct EngineCoreRequest {
 /**
  * @brief Core output message produced per decode step.
  */
-struct EngineCoreOutput {
+struct EngineCoreOutput
+{
     uint64_t internal_id = 0;
     int32_t new_token_id = -1;
 };
 /**
  * @brief User-facing output emitted by OutPreprocessor.
  */
-struct UserOutput {
+struct UserOutput
+{
     uint64_t internal_id = 0;
     std::string delta_text;
     std::string text;
@@ -72,7 +79,8 @@ struct UserOutput {
 /**
  * @brief Mutable request state managed by OutPreprocessor.
  */
-struct RequestState {
+struct RequestState
+{
     uint64_t internal_id = 0;
     SamplingParams sampling_params;
     std::vector<int32_t> prompt_token_ids;
@@ -86,22 +94,22 @@ struct RequestState {
 /**
  * @brief Stateless input translator and validator.
  */
-class InputPreprocessor {
-public:
-    explicit InputPreprocessor(const EngineArgs& args);
+class InputPreprocessor
+{
+  public:
+    explicit InputPreprocessor(const EngineArgs &args);
 
-    EngineCoreRequest process_inputs(const std::string& prompt,
-                                     const UserSamplingParams& user_params) const;
+    EngineCoreRequest process_inputs(const std::string &prompt, const UserSamplingParams &user_params) const;
 
-private:
+  private:
     uint64_t assign_internal_id() const;
-    std::vector<int32_t> tokenize(const std::string& text) const;
-    SamplingParams normalize_sampling_params(const UserSamplingParams& user_params) const;
+    std::vector<int32_t> tokenize(const std::string &text) const;
+    SamplingParams normalize_sampling_params(const UserSamplingParams &user_params) const;
     void validate_tokenizer_contract() const;
-    void validate_prompt_tokens(const std::vector<int32_t>& token_ids) const;
-    void validate_sampling_params(const SamplingParams& sampling_params) const;
+    void validate_prompt_tokens(const std::vector<int32_t> &token_ids) const;
+    void validate_sampling_params(const SamplingParams &sampling_params) const;
 
-    const Tokenizer* tokenizer_ = nullptr;
+    const Tokenizer *tokenizer_ = nullptr;
     int32_t default_max_tokens_ = 32;
     mutable uint64_t next_internal_id_ = 1;
 };
@@ -109,19 +117,20 @@ private:
 /**
  * @brief Stateful output assembler and termination checker.
  */
-class OutPreprocessor {
-public:
-    explicit OutPreprocessor(const EngineArgs& args);
+class OutPreprocessor
+{
+  public:
+    explicit OutPreprocessor(const EngineArgs &args);
 
-    void add_request(const EngineCoreRequest& request);
-    std::vector<UserOutput> process_outputs(const std::vector<EngineCoreOutput>& core_outputs);
+    void add_request(const EngineCoreRequest &request);
+    std::vector<UserOutput> process_outputs(const std::vector<EngineCoreOutput> &core_outputs);
     bool has_unfinished_requests() const;
 
-private:
-    std::string incremental_decode(RequestState& state, int32_t new_token_id);
-    bool check_stop_criteria(RequestState& state, int32_t latest_token);
+  private:
+    std::string incremental_decode(RequestState &state, int32_t new_token_id);
+    bool check_stop_criteria(RequestState &state, int32_t latest_token);
 
-    const Tokenizer* tokenizer_ = nullptr;
+    const Tokenizer *tokenizer_ = nullptr;
     std::unordered_map<uint64_t, std::unique_ptr<RequestState>> states_;
 };
 

@@ -9,13 +9,19 @@
 
 #include "utils/cuda_compat.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 /**
  * @enum DType
  * @brief Supported element data types for tensor operations.
  */
-enum class DType { kFloat16, kFloat32, kInt32 };
+enum class DType
+{
+    kFloat16,
+    kFloat32,
+    kInt32
+};
 
 using Tensor = torch::Tensor;
 
@@ -23,12 +29,12 @@ inline c10::ScalarType to_torch_scalar_type(DType dtype)
 {
     switch (dtype)
     {
-        case DType::kFloat16:
-            return c10::ScalarType::Half;
-        case DType::kFloat32:
-            return c10::ScalarType::Float;
-        case DType::kInt32:
-            return c10::ScalarType::Int;
+    case DType::kFloat16:
+        return c10::ScalarType::Half;
+    case DType::kFloat32:
+        return c10::ScalarType::Float;
+    case DType::kInt32:
+        return c10::ScalarType::Int;
     }
 
     throw std::runtime_error("to_torch_scalar_type: unsupported DType.");
@@ -38,18 +44,18 @@ inline DType from_torch_scalar_type(c10::ScalarType scalar_type)
 {
     switch (scalar_type)
     {
-        case c10::ScalarType::Half:
-            return DType::kFloat16;
-        case c10::ScalarType::Float:
-            return DType::kFloat32;
-        case c10::ScalarType::Int:
-            return DType::kInt32;
-        default:
-            throw std::runtime_error("from_torch_scalar_type: unsupported torch scalar type.");
+    case c10::ScalarType::Half:
+        return DType::kFloat16;
+    case c10::ScalarType::Float:
+        return DType::kFloat32;
+    case c10::ScalarType::Int:
+        return DType::kInt32;
+    default:
+        throw std::runtime_error("from_torch_scalar_type: unsupported torch scalar type.");
     }
 }
 
-inline DType tensor_dtype(const Tensor& tensor)
+inline DType tensor_dtype(const Tensor &tensor)
 {
     if (!tensor.defined())
     {
@@ -58,7 +64,7 @@ inline DType tensor_dtype(const Tensor& tensor)
     return from_torch_scalar_type(tensor.scalar_type());
 }
 
-inline std::vector<int64_t> tensor_shape(const Tensor& tensor)
+inline std::vector<int64_t> tensor_shape(const Tensor &tensor)
 {
     if (!tensor.defined())
     {
@@ -69,7 +75,7 @@ inline std::vector<int64_t> tensor_shape(const Tensor& tensor)
     return std::vector<int64_t>(sizes.begin(), sizes.end());
 }
 
-inline void* tensor_data(const Tensor& tensor)
+inline void *tensor_data(const Tensor &tensor)
 {
     if (!tensor.defined())
     {
@@ -78,7 +84,7 @@ inline void* tensor_data(const Tensor& tensor)
     return tensor.data_ptr();
 }
 
-inline size_t tensor_numel(const Tensor& tensor)
+inline size_t tensor_numel(const Tensor &tensor)
 {
     if (!tensor.defined())
     {
@@ -87,7 +93,7 @@ inline size_t tensor_numel(const Tensor& tensor)
     return static_cast<size_t>(tensor.numel());
 }
 
-inline c10::Device infer_blob_device(const void* data)
+inline c10::Device infer_blob_device(const void *data)
 {
 #if TINYLLM_ENABLE_CUDA
     if (data != nullptr)
@@ -119,13 +125,9 @@ inline c10::Device infer_blob_device(const void* data)
     return c10::Device(c10::DeviceType::CPU);
 }
 
-inline Tensor make_tensor_from_blob(void* data,
-                                    const std::vector<int64_t>& shape,
-                                    DType dtype)
+inline Tensor make_tensor_from_blob(void *data, const std::vector<int64_t> &shape, DType dtype)
 {
-    const auto options = torch::TensorOptions()
-        .dtype(to_torch_scalar_type(dtype))
-        .device(infer_blob_device(data));
+    const auto options = torch::TensorOptions().dtype(to_torch_scalar_type(dtype)).device(infer_blob_device(data));
 
     if (data == nullptr)
     {

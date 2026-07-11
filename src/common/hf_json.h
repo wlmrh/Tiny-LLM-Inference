@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cctype>
-#include <cstddef>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -11,10 +11,13 @@
 #include <unordered_map>
 #include <vector>
 
-namespace tiny_llm {
-namespace hf_json {
+namespace tiny_llm
+{
+namespace hf_json
+{
 
-enum class ValueType {
+enum class ValueType
+{
     kNull,
     kBool,
     kNumber,
@@ -23,7 +26,8 @@ enum class ValueType {
     kObject,
 };
 
-struct Value {
+struct Value
+{
     ValueType type = ValueType::kNull;
     bool bool_value = false;
     double number_value = 0.0;
@@ -33,15 +37,12 @@ struct Value {
 
     Value() = default;
 
-    Value(const Value& other)
-        : type(other.type),
-          bool_value(other.bool_value),
-          number_value(other.number_value),
-          string_value(other.string_value),
-          array_value(other.array_value)
+    Value(const Value &other)
+        : type(other.type), bool_value(other.bool_value), number_value(other.number_value),
+          string_value(other.string_value), array_value(other.array_value)
     {
         object_value.reserve(other.object_value.size());
-        for (const auto& item : other.object_value)
+        for (const auto &item : other.object_value)
         {
             if (item.second)
             {
@@ -54,7 +55,7 @@ struct Value {
         }
     }
 
-    Value& operator=(const Value& other)
+    Value &operator=(const Value &other)
     {
         if (this == &other)
         {
@@ -68,7 +69,7 @@ struct Value {
         array_value = other.array_value;
         object_value.clear();
         object_value.reserve(other.object_value.size());
-        for (const auto& item : other.object_value)
+        for (const auto &item : other.object_value)
         {
             if (item.second)
             {
@@ -83,8 +84,8 @@ struct Value {
         return *this;
     }
 
-    Value(Value&&) noexcept = default;
-    Value& operator=(Value&&) noexcept = default;
+    Value(Value &&) noexcept = default;
+    Value &operator=(Value &&) noexcept = default;
     ~Value() = default;
 
     static Value make_null()
@@ -132,12 +133,24 @@ struct Value {
         return out;
     }
 
-    bool is_object() const { return type == ValueType::kObject; }
-    bool is_array() const { return type == ValueType::kArray; }
-    bool is_string() const { return type == ValueType::kString; }
-    bool is_number() const { return type == ValueType::kNumber; }
+    bool is_object() const
+    {
+        return type == ValueType::kObject;
+    }
+    bool is_array() const
+    {
+        return type == ValueType::kArray;
+    }
+    bool is_string() const
+    {
+        return type == ValueType::kString;
+    }
+    bool is_number() const
+    {
+        return type == ValueType::kNumber;
+    }
 
-    const std::unordered_map<std::string, std::unique_ptr<Value>>& as_object(const std::string& error_prefix) const
+    const std::unordered_map<std::string, std::unique_ptr<Value>> &as_object(const std::string &error_prefix) const
     {
         if (!is_object())
         {
@@ -146,7 +159,7 @@ struct Value {
         return object_value;
     }
 
-    const std::vector<Value>& as_array(const std::string& error_prefix) const
+    const std::vector<Value> &as_array(const std::string &error_prefix) const
     {
         if (!is_array())
         {
@@ -155,7 +168,7 @@ struct Value {
         return array_value;
     }
 
-    const std::string& as_string(const std::string& error_prefix) const
+    const std::string &as_string(const std::string &error_prefix) const
     {
         if (!is_string())
         {
@@ -164,7 +177,7 @@ struct Value {
         return string_value;
     }
 
-    double as_number(const std::string& error_prefix) const
+    double as_number(const std::string &error_prefix) const
     {
         if (!is_number())
         {
@@ -173,7 +186,7 @@ struct Value {
         return number_value;
     }
 
-    int64_t as_int64(const std::string& error_prefix) const
+    int64_t as_int64(const std::string &error_prefix) const
     {
         const double value = as_number(error_prefix);
         if (!std::isfinite(value) || std::floor(value) != value)
@@ -189,11 +202,10 @@ struct Value {
     }
 };
 
-class Parser {
-public:
-    Parser(std::string text, std::string error_prefix)
-        : text_(std::move(text)),
-          error_prefix_(std::move(error_prefix))
+class Parser
+{
+  public:
+    Parser(std::string text, std::string error_prefix) : text_(std::move(text)), error_prefix_(std::move(error_prefix))
     {
     }
 
@@ -209,12 +221,10 @@ public:
         return value;
     }
 
-private:
+  private:
     static bool is_hex_digit(char ch)
     {
-        return (ch >= '0' && ch <= '9')
-            || (ch >= 'a' && ch <= 'f')
-            || (ch >= 'A' && ch <= 'F');
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
     }
 
     static int hex_value(char ch)
@@ -277,7 +287,7 @@ private:
         }
     }
 
-    void expect_literal(const char* literal)
+    void expect_literal(const char *literal)
     {
         const size_t start = pos_;
         size_t i = 0;
@@ -319,68 +329,68 @@ private:
                 const char esc = get();
                 switch (esc)
                 {
-                    case '"':
-                        out.push_back('"');
-                        break;
-                    case '\\':
-                        out.push_back('\\');
-                        break;
-                    case '/':
-                        out.push_back('/');
-                        break;
-                    case 'b':
-                        out.push_back('\b');
-                        break;
-                    case 'f':
-                        out.push_back('\f');
-                        break;
-                    case 'n':
-                        out.push_back('\n');
-                        break;
-                    case 'r':
-                        out.push_back('\r');
-                        break;
-                    case 't':
-                        out.push_back('\t');
-                        break;
-                    case 'u':
+                case '"':
+                    out.push_back('"');
+                    break;
+                case '\\':
+                    out.push_back('\\');
+                    break;
+                case '/':
+                    out.push_back('/');
+                    break;
+                case 'b':
+                    out.push_back('\b');
+                    break;
+                case 'f':
+                    out.push_back('\f');
+                    break;
+                case 'n':
+                    out.push_back('\n');
+                    break;
+                case 'r':
+                    out.push_back('\r');
+                    break;
+                case 't':
+                    out.push_back('\t');
+                    break;
+                case 'u':
+                {
+                    if (pos_ + 4 > text_.size())
                     {
-                        if (pos_ + 4 > text_.size())
+                        fail("invalid unicode escape");
+                    }
+
+                    int code_point = 0;
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        const char hex = text_[pos_ + static_cast<size_t>(i)];
+                        if (!is_hex_digit(hex))
                         {
                             fail("invalid unicode escape");
                         }
-
-                        int code_point = 0;
-                        for (int i = 0; i < 4; ++i)
-                        {
-                            const char hex = text_[pos_ + static_cast<size_t>(i)];
-                            if (!is_hex_digit(hex))
-                            {
-                                fail("invalid unicode escape");
-                            }
-                            code_point = (code_point << 4) | hex_value(hex);
-                        }
-                        pos_ += 4;
-
-                        if (code_point <= 0x7F)
-                        {
-                            out.push_back(static_cast<char>(code_point));
-                        }
-                        else if (code_point <= 0x7FF)
-                        {
-                            out.push_back(static_cast<char>(0xC0 | ((code_point >> 6) & 0x1F)));
-                            out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
-                        }
-                        else
-                        {
-                            out.push_back(static_cast<char>(0xE0 | ((code_point >> 12) & 0x0F)));
-                            out.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
-                            out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
-                        }
-                        break;
+                        code_point = (code_point << 4) | hex_value(hex);
                     }
-                    default:
-                        fail("unsupported escape character");
+                    pos_ += 4;
+
+                    if (code_point <= 0x7F)
+                    {
+                        out.push_back(static_cast<char>(code_point));
+                    }
+                    else if (code_point <= 0x7FF)
+                    {
+                        out.push_back(static_cast<char>(0xC0 | ((code_point >> 6) & 0x1F)));
+                        out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+                    }
+                    else
+                    {
+                        out.push_back(static_cast<char>(0xE0 | ((code_point >> 12) & 0x0F)));
+                        out.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+                        out.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+                    }
+                    break;
+                }
+                default:
+                    fail("unsupported escape character");
                 }
                 continue;
             }
@@ -393,8 +403,8 @@ private:
 
     Value parse_number()
     {
-        const char* begin = text_.c_str() + static_cast<std::ptrdiff_t>(pos_);
-        char* end = nullptr;
+        const char *begin = text_.c_str() + static_cast<std::ptrdiff_t>(pos_);
+        char *end = nullptr;
         const double value = std::strtod(begin, &end);
         if (end == begin)
         {
@@ -479,34 +489,33 @@ private:
         const char ch = peek();
         switch (ch)
         {
-            case '{':
-                return parse_object();
-            case '[':
-                return parse_array();
-            case '"':
-                return Value::make_string(parse_string());
-            case 't':
-                expect_literal("true");
-                return Value::make_bool(true);
-            case 'f':
-                expect_literal("false");
-                return Value::make_bool(false);
-            case 'n':
-                expect_literal("null");
-                return Value::make_null();
-            default:
-                if (ch == '-' || std::isdigit(static_cast<unsigned char>(ch)) != 0)
-                {
-                    return parse_number();
-                }
-                fail("unexpected character while parsing value");
+        case '{':
+            return parse_object();
+        case '[':
+            return parse_array();
+        case '"':
+            return Value::make_string(parse_string());
+        case 't':
+            expect_literal("true");
+            return Value::make_bool(true);
+        case 'f':
+            expect_literal("false");
+            return Value::make_bool(false);
+        case 'n':
+            expect_literal("null");
+            return Value::make_null();
+        default:
+            if (ch == '-' || std::isdigit(static_cast<unsigned char>(ch)) != 0)
+            {
+                return parse_number();
+            }
+            fail("unexpected character while parsing value");
         }
     }
 
-    [[noreturn]] void fail(const std::string& message) const
+    [[noreturn]] void fail(const std::string &message) const
     {
-        throw std::runtime_error(
-            error_prefix_ + ": " + message + " at byte offset " + std::to_string(pos_) + ".");
+        throw std::runtime_error(error_prefix_ + ": " + message + " at byte offset " + std::to_string(pos_) + ".");
     }
 
     std::string text_;
@@ -514,17 +523,15 @@ private:
     size_t pos_ = 0;
 };
 
-inline Value parse(const std::string& text, const std::string& error_prefix)
+inline Value parse(const std::string &text, const std::string &error_prefix)
 {
     Parser parser(text, error_prefix);
     return parser.parse();
 }
 
-inline const Value* find_object_field(const Value& object,
-                                      const std::string& key,
-                                      const std::string& error_prefix)
+inline const Value *find_object_field(const Value &object, const std::string &key, const std::string &error_prefix)
 {
-    const auto& map = object.as_object(error_prefix);
+    const auto &map = object.as_object(error_prefix);
     const auto it = map.find(key);
     if (it == map.end())
     {
@@ -533,11 +540,9 @@ inline const Value* find_object_field(const Value& object,
     return it->second.get();
 }
 
-inline const Value& require_object_field(const Value& object,
-                                         const std::string& key,
-                                         const std::string& error_prefix)
+inline const Value &require_object_field(const Value &object, const std::string &key, const std::string &error_prefix)
 {
-    const auto* value = find_object_field(object, key, error_prefix);
+    const auto *value = find_object_field(object, key, error_prefix);
     if (value == nullptr)
     {
         throw std::runtime_error(error_prefix + ": missing required key: " + key);

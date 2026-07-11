@@ -14,9 +14,10 @@
 #include "tiny_llm/models/llama_model.h"
 #include "tiny_llm/models/llama_weight_map.h"
 
-namespace {
+namespace
+{
 
-int32_t parse_int32(const char* text, const char* name)
+int32_t parse_int32(const char *text, const char *name)
 {
     try
     {
@@ -32,15 +33,15 @@ int32_t parse_int32(const char* text, const char* name)
         }
         return static_cast<int32_t>(value);
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         throw std::runtime_error(std::string("invalid ") + name + ": " + text + " (" + ex.what() + ")");
     }
 }
 
-void write_exact(std::ofstream& out, const void* data, std::streamsize bytes)
+void write_exact(std::ofstream &out, const void *data, std::streamsize bytes)
 {
-    out.write(static_cast<const char*>(data), bytes);
+    out.write(static_cast<const char *>(data), bytes);
     if (!out)
     {
         throw std::runtime_error("failed to write logits output file.");
@@ -49,7 +50,7 @@ void write_exact(std::ofstream& out, const void* data, std::streamsize bytes)
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     if (argc < 5)
     {
@@ -87,21 +88,20 @@ int main(int argc, char** argv)
             }
         }
 
-        const tiny_llm::HFSafeTensorLoader loader =
-            tiny_llm::HFSafeTensorLoader::from_file(weight_path.string());
+        const tiny_llm::HFSafeTensorLoader loader = tiny_llm::HFSafeTensorLoader::from_file(weight_path.string());
         const tiny_llm::WeightMap weight_map = tiny_llm::WeightMap::from_safetensors(loader);
 
         tiny_llm::LlamaForCausalLM model(config, weight_map);
         model.allocate_buffers(static_cast<int32_t>(input_ids_data.size()));
 
-        torch::Tensor input_ids = torch::from_blob(
-            const_cast<int32_t*>(input_ids_data.data()),
-            {static_cast<int64_t>(input_ids_data.size())},
-            torch::TensorOptions().dtype(torch::kInt32)).clone();
-        torch::Tensor positions = torch::from_blob(
-            const_cast<int32_t*>(positions_data.data()),
-            {static_cast<int64_t>(positions_data.size())},
-            torch::TensorOptions().dtype(torch::kInt32)).clone();
+        torch::Tensor input_ids =
+            torch::from_blob(const_cast<int32_t *>(input_ids_data.data()),
+                             {static_cast<int64_t>(input_ids_data.size())}, torch::TensorOptions().dtype(torch::kInt32))
+                .clone();
+        torch::Tensor positions =
+            torch::from_blob(const_cast<int32_t *>(positions_data.data()),
+                             {static_cast<int64_t>(positions_data.size())}, torch::TensorOptions().dtype(torch::kInt32))
+                .clone();
         tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
         tiny_llm::PreparedInputs prepared;
         prepared.input_ids = input_ids;
@@ -120,12 +120,10 @@ int main(int argc, char** argv)
         const int32_t vocab_size = static_cast<int32_t>(logits.size(1));
         write_exact(out, &batch_size, sizeof(batch_size));
         write_exact(out, &vocab_size, sizeof(vocab_size));
-        write_exact(
-            out,
-            logits.data_ptr<float>(),
-            static_cast<std::streamsize>(logits.numel() * static_cast<int64_t>(sizeof(float))));
+        write_exact(out, logits.data_ptr<float>(),
+                    static_cast<std::streamsize>(logits.numel() * static_cast<int64_t>(sizeof(float))));
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         std::cerr << "llama_logits_dump failed: " << ex.what() << "\n";
         return 1;

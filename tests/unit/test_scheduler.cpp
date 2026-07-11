@@ -1,13 +1,15 @@
-#include "tiny_llm/runtime/scheduler.h"
-#include "tiny_llm/runtime/model_runner_output.h"
-#include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/core/allocator.h"
+#include "tiny_llm/runtime/kv_cache.h"
+#include "tiny_llm/runtime/model_runner_output.h"
+#include "tiny_llm/runtime/scheduler.h"
 
 #include <gtest/gtest.h>
 #include <vector>
 
-namespace {
-struct SchedulerFixture {
+namespace
+{
+struct SchedulerFixture
+{
     static constexpr int32_t kNumLayers = 1;
     static constexpr int32_t kBlockSizeTokens = 2;
     static constexpr size_t kBlockBytes = 64;
@@ -17,12 +19,9 @@ struct SchedulerFixture {
     tiny_llm::KVCache kv;
     tiny_llm::Scheduler scheduler;
 
-    explicit SchedulerFixture(int32_t max_prefill_tokens = 8,
-                              size_t num_blocks = 16,
-                              size_t max_running_requests = 0,
+    explicit SchedulerFixture(int32_t max_prefill_tokens = 8, size_t num_blocks = 16, size_t max_running_requests = 0,
                               bool enable_preemption = true)
-        : pool(num_blocks * kBlockBytes),
-          blocks(num_blocks, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu()),
+        : pool(num_blocks * kBlockBytes), blocks(num_blocks, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu()),
           kv(make_kv_config(), &blocks),
           scheduler(&kv, make_scheduler_config(max_prefill_tokens, max_running_requests, enable_preemption))
     {
@@ -36,8 +35,7 @@ struct SchedulerFixture {
         return cfg;
     }
 
-    static tiny_llm::SchedulerConfig make_scheduler_config(int32_t max_prefill_tokens,
-                                                           size_t max_running_requests,
+    static tiny_llm::SchedulerConfig make_scheduler_config(int32_t max_prefill_tokens, size_t max_running_requests,
                                                            bool enable_preemption)
     {
         tiny_llm::SchedulerConfig cfg;
@@ -47,9 +45,7 @@ struct SchedulerFixture {
         return cfg;
     }
 
-    void add_request(uint64_t id,
-                     std::vector<int32_t> prompt,
-                     int32_t max_tokens = 4,
+    void add_request(uint64_t id, std::vector<int32_t> prompt, int32_t max_tokens = 4,
                      std::vector<int32_t> stop_token_ids = {})
     {
         tiny_llm::Request req;
@@ -64,7 +60,7 @@ struct SchedulerFixture {
 tiny_llm::ModelRunnerOutput sampled(std::initializer_list<std::pair<uint64_t, int32_t>> values)
 {
     tiny_llm::ModelRunnerOutput output;
-    for (const auto& item : values)
+    for (const auto &item : values)
     {
         const int32_t index = static_cast<int32_t>(output.sampled_token_ids.size());
         output.sampled_token_ids.push_back(item.second);
@@ -72,7 +68,7 @@ tiny_llm::ModelRunnerOutput sampled(std::initializer_list<std::pair<uint64_t, in
     }
     return output;
 }
-}
+} // namespace
 
 TEST(SchedulerTest, SchedulesWaitingRequestsInFcfsOrder)
 {
@@ -143,7 +139,7 @@ TEST(SchedulerTest, SpreadsPrefillBudgetAcrossWaitingRequests)
     tiny_llm::SchedulerOutput output = fixture.scheduler.schedule();
     ASSERT_EQ(output.scheduled_reqs.size(), 4u);
     EXPECT_EQ(output.total_num_scheduled_tokens, 8);
-    for (const tiny_llm::RequestData& req : output.scheduled_reqs)
+    for (const tiny_llm::RequestData &req : output.scheduled_reqs)
     {
         ASSERT_EQ(req.new_token_ids.size(), 2u);
     }
@@ -164,7 +160,7 @@ TEST(SchedulerTest, SchedulesFullPrefillBatchWhenBudgetCoversAllRequests)
     tiny_llm::SchedulerOutput output = fixture.scheduler.schedule();
     ASSERT_EQ(output.scheduled_reqs.size(), 4u);
     EXPECT_EQ(output.total_num_scheduled_tokens, 16);
-    for (const tiny_llm::RequestData& req : output.scheduled_reqs)
+    for (const tiny_llm::RequestData &req : output.scheduled_reqs)
     {
         ASSERT_EQ(req.new_token_ids.size(), 4u);
     }
@@ -210,7 +206,6 @@ TEST(SchedulerTest, StopsByStopTokenAndCleansFinishedRequest)
     EXPECT_TRUE(empty.scheduled_reqs.empty());
     EXPECT_EQ(empty.total_num_scheduled_tokens, 0);
 }
-
 
 TEST(SchedulerTest, PreemptedRequestRecomputesPromptAndGeneratedContext)
 {

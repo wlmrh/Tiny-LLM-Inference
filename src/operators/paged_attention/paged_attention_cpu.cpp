@@ -12,12 +12,15 @@
 #include <string>
 #include <vector>
 
-namespace tiny_llm {
-namespace ops {
+namespace tiny_llm
+{
+namespace ops
+{
 
-namespace {
+namespace
+{
 
-void validate_cpu_tensor(const Tensor& tensor, const char* name)
+void validate_cpu_tensor(const Tensor &tensor, const char *name)
 {
     if (tensor.device().is_cuda())
     {
@@ -25,12 +28,8 @@ void validate_cpu_tensor(const Tensor& tensor, const char* name)
     }
 }
 
-int32_t block_id_for(const LlamaAttentionParams& params,
-                     const int32_t* block_ptr,
-                     int64_t num_seqs,
-                     int64_t max_blocks_per_seq,
-                     int32_t seq_index,
-                     int32_t position)
+int32_t block_id_for(const LlamaAttentionParams &params, const int32_t *block_ptr, int64_t num_seqs,
+                     int64_t max_blocks_per_seq, int32_t seq_index, int32_t position)
 {
     if (seq_index < 0 || seq_index >= num_seqs)
     {
@@ -41,10 +40,8 @@ int32_t block_id_for(const LlamaAttentionParams& params,
     {
         throw std::runtime_error("llama_attention: logical block out of range.");
     }
-    const int64_t index =
-        static_cast<int64_t>(params.layer_id) * num_seqs * max_blocks_per_seq
-        + static_cast<int64_t>(seq_index) * max_blocks_per_seq
-        + logical_block;
+    const int64_t index = static_cast<int64_t>(params.layer_id) * num_seqs * max_blocks_per_seq +
+                          static_cast<int64_t>(seq_index) * max_blocks_per_seq + logical_block;
     const int32_t block_id = block_ptr[index];
     if (block_id < 0)
     {
@@ -53,25 +50,24 @@ int32_t block_id_for(const LlamaAttentionParams& params,
     return block_id;
 }
 
-float* k_block_ptr(KVCache& kv_cache, int32_t block_id)
+float *k_block_ptr(KVCache &kv_cache, int32_t block_id)
 {
-    void* block = kv_cache.block_ptr(block_id);
+    void *block = kv_cache.block_ptr(block_id);
     if (block == nullptr)
     {
         throw std::runtime_error("llama_attention: KV block pointer is null.");
     }
-    return static_cast<float*>(block);
+    return static_cast<float *>(block);
 }
 
-float* v_block_ptr(KVCache& kv_cache, int32_t block_id, int32_t block_size_tokens, int32_t kv_size)
+float *v_block_ptr(KVCache &kv_cache, int32_t block_id, int32_t block_size_tokens, int32_t kv_size)
 {
-    return k_block_ptr(kv_cache, block_id)
-        + static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
+    return k_block_ptr(kv_cache, block_id) + static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
 }
 
 } // namespace
 
-void run_direct_attention_cpu(const LlamaAttentionParams& params)
+void run_direct_attention_cpu(const LlamaAttentionParams &params)
 {
     validate_cpu_tensor(*params.positions, "llama_attention");
     validate_cpu_tensor(*params.q, "llama_attention");
@@ -79,11 +75,11 @@ void run_direct_attention_cpu(const LlamaAttentionParams& params)
     validate_cpu_tensor(*params.v, "llama_attention");
     validate_cpu_tensor(*params.out, "llama_attention");
 
-    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(*params.positions));
-    const float* q_ptr = static_cast<const float*>(tensor_data(*params.q));
-    const float* k_ptr = static_cast<const float*>(tensor_data(*params.k));
-    const float* v_ptr = static_cast<const float*>(tensor_data(*params.v));
-    float* out_ptr = static_cast<float*>(tensor_data(*params.out));
+    const int32_t *positions_ptr = static_cast<const int32_t *>(tensor_data(*params.positions));
+    const float *q_ptr = static_cast<const float *>(tensor_data(*params.q));
+    const float *k_ptr = static_cast<const float *>(tensor_data(*params.k));
+    const float *v_ptr = static_cast<const float *>(tensor_data(*params.v));
+    float *out_ptr = static_cast<float *>(tensor_data(*params.out));
 
     const int32_t q_hidden_size = attention_hidden_size(params.num_attention_heads, params.head_dim);
     const int32_t kv_size = kv_hidden_size(params.num_key_value_heads, params.head_dim);
@@ -159,7 +155,7 @@ void run_direct_attention_cpu(const LlamaAttentionParams& params)
     }
 }
 
-void run_paged_attention_cpu(const LlamaAttentionParams& params)
+void run_paged_attention_cpu(const LlamaAttentionParams &params)
 {
     validate_cpu_tensor(*params.positions, "llama_attention");
     validate_cpu_tensor(*params.q, "llama_attention");
@@ -167,20 +163,20 @@ void run_paged_attention_cpu(const LlamaAttentionParams& params)
     validate_cpu_tensor(*params.v, "llama_attention");
     validate_cpu_tensor(*params.out, "llama_attention");
 
-    KVCache& kv_cache = *params.ctx->kv();
-    const PagedAttentionRuntimeMetadata& metadata = *params.metadata;
-    const Tensor& seq_indices = *metadata.seq_indices;
-    const Tensor& context_lens = *metadata.context_lens;
-    const Tensor& block_tables = *metadata.block_tables;
+    KVCache &kv_cache = *params.ctx->kv();
+    const PagedAttentionRuntimeMetadata &metadata = *params.metadata;
+    const Tensor &seq_indices = *metadata.seq_indices;
+    const Tensor &context_lens = *metadata.context_lens;
+    const Tensor &block_tables = *metadata.block_tables;
 
-    const int32_t* positions_ptr = static_cast<const int32_t*>(tensor_data(*params.positions));
-    const float* q_ptr = static_cast<const float*>(tensor_data(*params.q));
-    const float* k_ptr = static_cast<const float*>(tensor_data(*params.k));
-    const float* v_ptr = static_cast<const float*>(tensor_data(*params.v));
-    float* out_ptr = static_cast<float*>(tensor_data(*params.out));
-    const int32_t* seq_index_ptr = seq_indices.data_ptr<int32_t>();
-    const int32_t* context_ptr = context_lens.data_ptr<int32_t>();
-    const int32_t* block_ptr = block_tables.data_ptr<int32_t>();
+    const int32_t *positions_ptr = static_cast<const int32_t *>(tensor_data(*params.positions));
+    const float *q_ptr = static_cast<const float *>(tensor_data(*params.q));
+    const float *k_ptr = static_cast<const float *>(tensor_data(*params.k));
+    const float *v_ptr = static_cast<const float *>(tensor_data(*params.v));
+    float *out_ptr = static_cast<float *>(tensor_data(*params.out));
+    const int32_t *seq_index_ptr = seq_indices.data_ptr<int32_t>();
+    const int32_t *context_ptr = context_lens.data_ptr<int32_t>();
+    const int32_t *block_ptr = block_tables.data_ptr<int32_t>();
 
     const std::vector<int64_t> block_shape = tensor_shape(block_tables);
     const int64_t num_seqs = block_shape[1];
@@ -196,14 +192,13 @@ void run_paged_attention_cpu(const LlamaAttentionParams& params)
     {
         const int32_t seq_index = seq_index_ptr[row];
         const int32_t position = positions_ptr[row];
-        const int32_t block_id =
-            block_id_for(params, block_ptr, num_seqs, max_blocks_per_seq, seq_index, position);
+        const int32_t block_id = block_id_for(params, block_ptr, num_seqs, max_blocks_per_seq, seq_index, position);
         const int32_t token_offset = position % metadata.block_size_tokens;
         const size_t row_offset = static_cast<size_t>(row) * static_cast<size_t>(kv_size);
-        float* key_dst = k_block_ptr(kv_cache, block_id)
-            + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
-        float* value_dst = v_block_ptr(kv_cache, block_id, metadata.block_size_tokens, kv_size)
-            + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
+        float *key_dst =
+            k_block_ptr(kv_cache, block_id) + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
+        float *value_dst = v_block_ptr(kv_cache, block_id, metadata.block_size_tokens, kv_size) +
+                           static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
         std::memcpy(key_dst, k_ptr + row_offset, kv_token_bytes);
         std::memcpy(value_dst, v_ptr + row_offset, kv_token_bytes);
     }
@@ -230,8 +225,8 @@ void run_paged_attention_cpu(const LlamaAttentionParams& params)
                 const int32_t block_id =
                     block_id_for(params, block_ptr, num_seqs, max_blocks_per_seq, seq_index, src_pos);
                 const int32_t token_offset = src_pos % metadata.block_size_tokens;
-                const float* key_base = k_block_ptr(kv_cache, block_id)
-                    + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
+                const float *key_base =
+                    k_block_ptr(kv_cache, block_id) + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
 
                 float score = 0.0f;
                 for (int32_t dim = 0; dim < params.head_dim; ++dim)
@@ -265,9 +260,8 @@ void run_paged_attention_cpu(const LlamaAttentionParams& params)
                     const int32_t block_id =
                         block_id_for(params, block_ptr, num_seqs, max_blocks_per_seq, seq_index, src_pos);
                     const int32_t token_offset = src_pos % metadata.block_size_tokens;
-                    const float* value_base =
-                        v_block_ptr(kv_cache, block_id, metadata.block_size_tokens, kv_size)
-                        + static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
+                    const float *value_base = v_block_ptr(kv_cache, block_id, metadata.block_size_tokens, kv_size) +
+                                              static_cast<size_t>(token_offset) * static_cast<size_t>(kv_size);
                     const size_t v_index = static_cast<size_t>(kv_head * params.head_dim + dim);
                     value += (scores[static_cast<size_t>(src_pos)] / score_sum) * value_base[v_index];
                 }

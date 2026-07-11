@@ -4,26 +4,35 @@
 
 #include "tiny_llm/core/tensor.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class ExecutionContext;
 
-namespace modules {
+namespace modules
+{
 
-class RMSNorm : public torch::nn::Module {
-public:
+class RMSNorm : public torch::nn::Module
+{
+  public:
     RMSNorm(int32_t hidden_size, float eps);
 
-    void bind_weights(const Tensor& weight);
-    void bind_weights(float* weight);
-    Tensor forward(const Tensor& input, ExecutionContext& ctx) const;
-    void forward(const Tensor& input, Tensor& output, ExecutionContext& ctx) const;
+    void bind_weights(const Tensor &weight);
+    void bind_weights(float *weight);
+    Tensor forward(const Tensor &input, ExecutionContext &ctx) const;
+    void forward(const Tensor &input, Tensor &output, ExecutionContext &ctx) const;
 
-    int32_t hidden_size() const { return hidden_size_; }
-    float eps() const { return eps_; }
+    int32_t hidden_size() const
+    {
+        return hidden_size_;
+    }
+    float eps() const
+    {
+        return eps_;
+    }
 
-private:
-    void validate_forward_inputs(const Tensor& input, const Tensor& output) const;
+  private:
+    void validate_forward_inputs(const Tensor &input, const Tensor &output) const;
 
     Tensor weight_;
     int32_t hidden_size_ = 0;

@@ -8,18 +8,19 @@
 #include <stdexcept>
 #include <string>
 
-namespace {
+namespace
+{
 
-std::filesystem::path make_temp_dir(const std::string& name)
+std::filesystem::path make_temp_dir(const std::string &name)
 {
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-    std::filesystem::path dir = std::filesystem::temp_directory_path()
-        / ("tinyllm_" + name + "_" + std::to_string(now));
+    std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / ("tinyllm_" + name + "_" + std::to_string(now));
     std::filesystem::create_directories(dir);
     return dir;
 }
 
-void write_text_file(const std::filesystem::path& path, const std::string& content)
+void write_text_file(const std::filesystem::path &path, const std::string &content)
 {
     std::ofstream out(path);
     if (!out)

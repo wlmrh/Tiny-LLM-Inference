@@ -4,28 +4,31 @@
 #include "tiny_llm/core/tensor.h"
 #include "tiny_llm/runtime/execution_context.h"
 
-#include <limits>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
-namespace tiny_llm {
-namespace ops {
+namespace tiny_llm
+{
+namespace ops
+{
 
-namespace cuda {
-void launch_rmsnorm_f32(
-    const float* x, const float* w, float* y,
-    int B, int D, float eps, cudaStream_t stream);
+namespace cuda
+{
+void launch_rmsnorm_f32(const float *x, const float *w, float *y, int B, int D, float eps, cudaStream_t stream);
 } // namespace cuda
 
-namespace {
+namespace
+{
 
-struct RmsNormShape {
+struct RmsNormShape
+{
     int B;
     int D;
 };
 
-int checked_dim_to_int(int64_t dim, const char* name)
+int checked_dim_to_int(int64_t dim, const char *name)
 {
     if (dim <= 0)
     {
@@ -38,7 +41,7 @@ int checked_dim_to_int(int64_t dim, const char* name)
     return static_cast<int>(dim);
 }
 
-RmsNormShape parse_xy_shape(const Tensor& t)
+RmsNormShape parse_xy_shape(const Tensor &t)
 {
     const std::vector<int64_t> shape = tensor_shape(t);
     if (shape.empty())
@@ -66,7 +69,7 @@ RmsNormShape parse_xy_shape(const Tensor& t)
 }
 
 // 输入向量 x，权重向量 w，结果写到 y，使用的 epsilon eps
-void validate_rmsnorm_inputs(const Tensor& x, const Tensor& w, const Tensor& y, float eps)
+void validate_rmsnorm_inputs(const Tensor &x, const Tensor &w, const Tensor &y, float eps)
 {
     if (eps <= 0.0f)
     {
@@ -86,7 +89,7 @@ void validate_rmsnorm_inputs(const Tensor& x, const Tensor& w, const Tensor& y, 
     {
         throw std::runtime_error("rmsnorm: w must be a rank-1 tensor [D].");
     }
-    
+
     if (x_shape != y_shape)
     {
         throw std::runtime_error("rmsnorm: x and y shapes must match.");
@@ -105,12 +108,12 @@ void validate_rmsnorm_inputs(const Tensor& x, const Tensor& w, const Tensor& y, 
     }
 }
 
-bool any_cuda_tensor(const Tensor& x, const Tensor& w, const Tensor& y)
+bool any_cuda_tensor(const Tensor &x, const Tensor &w, const Tensor &y)
 {
     return x.device().is_cuda() || w.device().is_cuda() || y.device().is_cuda();
 }
 
-void validate_same_device(const Tensor& x, const Tensor& w, const Tensor& y)
+void validate_same_device(const Tensor &x, const Tensor &w, const Tensor &y)
 {
     if (x.device() != w.device() || x.device() != y.device())
     {
@@ -120,7 +123,7 @@ void validate_same_device(const Tensor& x, const Tensor& w, const Tensor& y)
 
 } // namespace
 
-void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx, float eps)
+void rmsnorm(const Tensor &x, const Tensor &w, Tensor &y, ExecutionContext &ctx, float eps)
 {
 #if !TINYLLM_ENABLE_CUDA
     (void)ctx;
@@ -129,19 +132,15 @@ void rmsnorm(const Tensor& x, const Tensor& w, Tensor& y, ExecutionContext& ctx,
     validate_same_device(x, w, y);
     const RmsNormShape shape = parse_xy_shape(x);
 
-    const float* x_ptr = static_cast<const float*>(tensor_data(x));
-    const float* w_ptr = static_cast<const float*>(tensor_data(w));
-    float* y_ptr = static_cast<float*>(tensor_data(y));
+    const float *x_ptr = static_cast<const float *>(tensor_data(x));
+    const float *w_ptr = static_cast<const float *>(tensor_data(w));
+    float *y_ptr = static_cast<float *>(tensor_data(y));
 
 #if TINYLLM_ENABLE_CUDA
     if (x.device().is_cuda())
     {
         const cudaStream_t stream = resolve_execution_context(ctx).stream();
-        cuda::launch_rmsnorm_f32(
-            x_ptr,
-            w_ptr,
-            y_ptr,
-            shape.B, shape.D, eps, stream);
+        cuda::launch_rmsnorm_f32(x_ptr, w_ptr, y_ptr, shape.B, shape.D, eps, stream);
         return;
     }
 #else

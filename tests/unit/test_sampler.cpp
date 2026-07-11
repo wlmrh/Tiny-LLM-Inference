@@ -2,26 +2,22 @@
 
 #include <gtest/gtest.h>
 
-
-namespace {
-std::vector<int32_t> sample_rows(const tiny_llm::Tensor& logits,
-                                 const std::vector<int32_t>& rows,
-                                 int32_t vocab_size,
-                                 const std::vector<std::vector<int32_t>>* token_histories = nullptr,
-                                 const std::vector<tiny_llm::SamplingParams>* sampling_params = nullptr,
-                                 const std::vector<uint64_t>* request_ids = nullptr)
+namespace
+{
+std::vector<int32_t> sample_rows(const tiny_llm::Tensor &logits, const std::vector<int32_t> &rows, int32_t vocab_size,
+                                 const std::vector<std::vector<int32_t>> *token_histories = nullptr,
+                                 const std::vector<tiny_llm::SamplingParams> *sampling_params = nullptr,
+                                 const std::vector<uint64_t> *request_ids = nullptr)
 {
     return tiny_llm::sample_rows(
-        logits,
-        tiny_llm::SamplerBatch{rows, vocab_size, token_histories, sampling_params, request_ids});
+        logits, tiny_llm::SamplerBatch{rows, vocab_size, token_histories, sampling_params, request_ids});
 }
 } // namespace
 
 TEST(SamplerTest, GreedyPenaltyOneMatchesArgmax)
 {
-    tiny_llm::Tensor logits = torch::tensor(
-        {{0.0f, 2.0f, 3.0f}, {5.0f, 4.0f, 1.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits =
+        torch::tensor({{0.0f, 2.0f, 3.0f}, {5.0f, 4.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     std::vector<int32_t> rows = {0, 1};
     std::vector<std::vector<int32_t>> histories = {{2}, {0}};
     std::vector<tiny_llm::SamplingParams> params(2);
@@ -34,9 +30,7 @@ TEST(SamplerTest, GreedyPenaltyOneMatchesArgmax)
 
 TEST(SamplerTest, AppliesPositiveRepetitionPenaltyBeforeArgmax)
 {
-    tiny_llm::Tensor logits = torch::tensor(
-        {{0.0f, 5.0f, 4.6f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits = torch::tensor({{0.0f, 5.0f, 4.6f}}, torch::TensorOptions().dtype(torch::kFloat32));
     std::vector<int32_t> rows = {0};
     std::vector<std::vector<int32_t>> histories = {{1}};
     std::vector<tiny_llm::SamplingParams> params(1);
@@ -48,9 +42,7 @@ TEST(SamplerTest, AppliesPositiveRepetitionPenaltyBeforeArgmax)
 
 TEST(SamplerTest, AppliesNegativeRepetitionPenaltyBeforeArgmax)
 {
-    tiny_llm::Tensor logits = torch::tensor(
-        {{-2.0f, -0.5f, -0.8f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits = torch::tensor({{-2.0f, -0.5f, -0.8f}}, torch::TensorOptions().dtype(torch::kFloat32));
     std::vector<int32_t> rows = {0};
     std::vector<std::vector<int32_t>> histories = {{1}};
     std::vector<tiny_llm::SamplingParams> params(1);
@@ -74,9 +66,7 @@ TEST(SamplerTest, PenalizesPromptHistoryBeforeAnyGeneratedToken)
 
 TEST(SamplerTest, AppliesRepetitionRewardBelowOneBeforeArgmax)
 {
-    tiny_llm::Tensor logits = torch::tensor(
-        {{0.0f, 4.0f, 4.3f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits = torch::tensor({{0.0f, 4.0f, 4.3f}}, torch::TensorOptions().dtype(torch::kFloat32));
     std::vector<int32_t> rows = {0};
     std::vector<std::vector<int32_t>> histories = {{1}};
     std::vector<tiny_llm::SamplingParams> params(1);
@@ -144,15 +134,12 @@ TEST(SamplerTest, SeededSamplingIsReproducible)
     params[0].seed = 98765;
     std::vector<uint64_t> request_ids = {42};
 
-    const std::vector<int32_t> first =
-        sample_rows(logits, rows, 4, &histories, &params, &request_ids);
-    const std::vector<int32_t> second =
-        sample_rows(logits, rows, 4, &histories, &params, &request_ids);
+    const std::vector<int32_t> first = sample_rows(logits, rows, 4, &histories, &params, &request_ids);
+    const std::vector<int32_t> second = sample_rows(logits, rows, 4, &histories, &params, &request_ids);
     EXPECT_EQ(first, second);
     EXPECT_GE(first[0], 0);
     EXPECT_LT(first[0], 4);
 }
-
 
 #if TINYLLM_ENABLE_CUDA
 TEST(SamplerTest, CudaRepetitionPenaltyMatchesCpuForNonDenseRows)
@@ -162,11 +149,9 @@ TEST(SamplerTest, CudaRepetitionPenaltyMatchesCpuForNonDenseRows)
         GTEST_SKIP() << "CUDA is not available.";
     }
 
-    tiny_llm::Tensor logits_cpu = torch::tensor(
-        {{0.0f, 5.0f, 4.6f, -1.0f},
-         {9.0f, 1.0f, 0.0f, 2.0f},
-         {3.0f, 2.0f, 4.0f, 3.8f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits_cpu =
+        torch::tensor({{0.0f, 5.0f, 4.6f, -1.0f}, {9.0f, 1.0f, 0.0f, 2.0f}, {3.0f, 2.0f, 4.0f, 3.8f}},
+                      torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor logits_cuda = logits_cpu.to(torch::kCUDA);
     std::vector<int32_t> rows = {0, 2};
     std::vector<std::vector<int32_t>> histories = {{1, 1}, {2}};
@@ -174,10 +159,8 @@ TEST(SamplerTest, CudaRepetitionPenaltyMatchesCpuForNonDenseRows)
     params[0].repetition_penalty = 2.0f;
     params[1].repetition_penalty = 0.5f;
 
-    const std::vector<int32_t> cpu_sampled =
-        sample_rows(logits_cpu, rows, 4, &histories, &params);
-    const std::vector<int32_t> cuda_sampled =
-        sample_rows(logits_cuda, rows, 4, &histories, &params);
+    const std::vector<int32_t> cpu_sampled = sample_rows(logits_cpu, rows, 4, &histories, &params);
+    const std::vector<int32_t> cuda_sampled = sample_rows(logits_cuda, rows, 4, &histories, &params);
 
     EXPECT_EQ(cuda_sampled, cpu_sampled);
 }
@@ -189,10 +172,8 @@ TEST(SamplerTest, CudaNonGreedySamplingMatchesCpuFallback)
         GTEST_SKIP() << "CUDA is not available.";
     }
 
-    tiny_llm::Tensor logits_cpu = torch::tensor(
-        {{0.0f, 1.0f, 5.0f},
-         {2.0f, 0.0f, 1.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor logits_cpu =
+        torch::tensor({{0.0f, 1.0f, 5.0f}, {2.0f, 0.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor logits_cuda = logits_cpu.to(torch::kCUDA);
     std::vector<int32_t> rows = {0, 1};
     std::vector<tiny_llm::SamplingParams> params(2);
@@ -201,10 +182,8 @@ TEST(SamplerTest, CudaNonGreedySamplingMatchesCpuFallback)
     params[1].temperature = 1.0f;
     params[1].top_k = 1;
 
-    const std::vector<int32_t> cpu_sampled =
-        sample_rows(logits_cpu, rows, 3, nullptr, &params);
-    const std::vector<int32_t> cuda_sampled =
-        sample_rows(logits_cuda, rows, 3, nullptr, &params);
+    const std::vector<int32_t> cpu_sampled = sample_rows(logits_cpu, rows, 3, nullptr, &params);
+    const std::vector<int32_t> cuda_sampled = sample_rows(logits_cuda, rows, 3, nullptr, &params);
 
     EXPECT_EQ(cuda_sampled, cpu_sampled);
 }

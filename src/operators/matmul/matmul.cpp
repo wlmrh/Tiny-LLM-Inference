@@ -12,24 +12,22 @@
 #include <cuda_runtime.h>
 #endif
 
-namespace tiny_llm {
-namespace ops {
+namespace tiny_llm
+{
+namespace ops
+{
 
 #if TINYLLM_ENABLE_CUDA
-namespace cuda {
-void launch_gemm_f32(const float* a,
-                     const float* b,
-                     float* c,
-                     int M,
-                     int N,
-                     int K,
-                     cudaStream_t stream);
+namespace cuda
+{
+void launch_gemm_f32(const float *a, const float *b, float *c, int M, int N, int K, cudaStream_t stream);
 } // namespace cuda
 #endif
 
-namespace {
+namespace
+{
 
-int checked_dim_to_int64(int64_t dim, const char* name)
+int checked_dim_to_int64(int64_t dim, const char *name)
 {
     if (dim <= 0)
     {
@@ -42,7 +40,7 @@ int checked_dim_to_int64(int64_t dim, const char* name)
     return static_cast<int>(dim);
 }
 
-void validate_gemm_inputs(const Tensor& a, const Tensor& b, const Tensor& c)
+void validate_gemm_inputs(const Tensor &a, const Tensor &b, const Tensor &c)
 {
     if (tensor_dtype(a) != DType::kFloat32 || tensor_dtype(b) != DType::kFloat32 || tensor_dtype(c) != DType::kFloat32)
     {
@@ -77,12 +75,7 @@ void validate_gemm_inputs(const Tensor& a, const Tensor& b, const Tensor& c)
     }
 }
 
-void run_gemm_cpu(const float* a_ptr,
-                  const float* b_ptr,
-                  float* c_ptr,
-                  int M,
-                  int N,
-                  int K)
+void run_gemm_cpu(const float *a_ptr, const float *b_ptr, float *c_ptr, int M, int N, int K)
 {
     for (int m = 0; m < M; ++m)
     {
@@ -91,8 +84,8 @@ void run_gemm_cpu(const float* a_ptr,
             float sum = 0.0f;
             for (int k = 0; k < K; ++k)
             {
-                sum += a_ptr[static_cast<size_t>(m) * static_cast<size_t>(K) + static_cast<size_t>(k)]
-                    * b_ptr[static_cast<size_t>(k) * static_cast<size_t>(N) + static_cast<size_t>(n)];
+                sum += a_ptr[static_cast<size_t>(m) * static_cast<size_t>(K) + static_cast<size_t>(k)] *
+                       b_ptr[static_cast<size_t>(k) * static_cast<size_t>(N) + static_cast<size_t>(n)];
             }
             c_ptr[static_cast<size_t>(m) * static_cast<size_t>(N) + static_cast<size_t>(n)] = sum;
         }
@@ -100,7 +93,7 @@ void run_gemm_cpu(const float* a_ptr,
 }
 
 #if TINYLLM_ENABLE_CUDA
-bool is_cuda_device_accessible_pointer(const void* ptr)
+bool is_cuda_device_accessible_pointer(const void *ptr)
 {
     cudaPointerAttributes attrs{};
     const cudaError_t status = cudaPointerGetAttributes(&attrs, ptr);
@@ -118,17 +111,16 @@ bool is_cuda_device_accessible_pointer(const void* ptr)
 #endif
 }
 
-bool can_run_cuda_gemm(const float* a_ptr, const float* b_ptr, const float* c_ptr)
+bool can_run_cuda_gemm(const float *a_ptr, const float *b_ptr, const float *c_ptr)
 {
-    return is_cuda_device_accessible_pointer(a_ptr)
-        && is_cuda_device_accessible_pointer(b_ptr)
-        && is_cuda_device_accessible_pointer(c_ptr);
+    return is_cuda_device_accessible_pointer(a_ptr) && is_cuda_device_accessible_pointer(b_ptr) &&
+           is_cuda_device_accessible_pointer(c_ptr);
 }
 #endif
 
 } // namespace
 
-void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx)
+void gemm(const Tensor &a, const Tensor &b, Tensor &c, ExecutionContext &ctx)
 {
 #if !TINYLLM_ENABLE_CUDA
     (void)ctx;
@@ -141,9 +133,9 @@ void gemm(const Tensor& a, const Tensor& b, Tensor& c, ExecutionContext& ctx)
     const int K = checked_dim_to_int64(a_shape[1], "K");
     const int N = checked_dim_to_int64(b_shape[1], "N");
 
-    const float* a_ptr = static_cast<const float*>(tensor_data(a));
-    const float* b_ptr = static_cast<const float*>(tensor_data(b));
-    float* c_ptr = static_cast<float*>(tensor_data(c));
+    const float *a_ptr = static_cast<const float *>(tensor_data(a));
+    const float *b_ptr = static_cast<const float *>(tensor_data(b));
+    float *c_ptr = static_cast<float *>(tensor_data(c));
 
 #if TINYLLM_ENABLE_CUDA
     if (can_run_cuda_gemm(a_ptr, b_ptr, c_ptr))

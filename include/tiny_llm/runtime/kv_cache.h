@@ -1,33 +1,36 @@
 #pragma once
+#include "tiny_llm/runtime/parallel_config.h"
+#include "utils/cuda_compat.h"
 #include <c10/core/Device.h>
 #include <cstdint>
 #include <memory>
-#include <vector>
 #include <unordered_map>
-#include "tiny_llm/runtime/parallel_config.h"
-#include "utils/cuda_compat.h"
+#include <vector>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class BlockAllocator;
 
 /**
  * @brief Metadata manager for Paged KV Cache.
- * * Inspired by vLLM, this service decouples logical token positions from physical GPU memory 
+ * * Inspired by vLLM, this service decouples logical token positions from physical GPU memory
  * using a page table mapping mechanism.
  * * @note CONTRACT:
  * - This class manages METADATA (mappings) only; it does not perform raw memory copies.
  * - OWNERSHIP: Physical blocks are owned by the BlockAllocator and persist across steps.
  * - CLEANUP: end_sequence() must be explicitly called to prevent physical block leaks.
  */
-class KVCache {
-public:
+class KVCache
+{
+  public:
     /**
      * @brief Static configuration for the KV Cache service.
      */
-    struct Config {
-        int32_t num_layers = 0;          ///< Total number of transformer layers in the model.
-        int32_t block_size_tokens = 16;  ///< Number of tokens stored in a single physical block.
+    struct Config
+    {
+        int32_t num_layers = 0;         ///< Total number of transformer layers in the model.
+        int32_t block_size_tokens = 16; ///< Number of tokens stored in a single physical block.
     };
 
     /**
@@ -35,19 +38,25 @@ public:
      * @param cfg The cache configuration settings.
      * @param blocks Pointer to the block allocator for physical memory management.
      */
-    KVCache(Config cfg, BlockAllocator* blocks);
+    KVCache(Config cfg, BlockAllocator *blocks);
 
     ~KVCache();
 
     /**
      * @brief Returns configured transformer layer count.
      */
-    int32_t num_layers() const { return cfg_.num_layers; }
+    int32_t num_layers() const
+    {
+        return cfg_.num_layers;
+    }
 
     /**
      * @brief Returns token capacity of each KV block.
      */
-    int32_t block_size_tokens() const { return cfg_.block_size_tokens; }
+    int32_t block_size_tokens() const
+    {
+        return cfg_.block_size_tokens;
+    }
 
     /**
      * @brief Returns currently free physical blocks in the shared pool.
@@ -55,14 +64,20 @@ public:
     size_t free_block_count() const;
     size_t total_block_count() const;
     size_t block_size_bytes() const;
-    void* block_pool_base() const;
-    void* block_ptr(int32_t block_id) const;
+    void *block_pool_base() const;
+    void *block_ptr(int32_t block_id) const;
 
     /**
      * @brief Runtime device backing the physical KV block pool.
      */
-    const ParallelConfig& parallel_config() const { return parallel_config_; }
-    c10::Device device() const { return parallel_config_.torch_device(); }
+    const ParallelConfig &parallel_config() const
+    {
+        return parallel_config_;
+    }
+    c10::Device device() const
+    {
+        return parallel_config_.torch_device();
+    }
 
     /**
      * @brief Initializes metadata structures for a new request sequence.
@@ -79,7 +94,7 @@ public:
 
     /**
      * @brief Dynamic capacity check: ensures physical blocks exist for the given token position.
-     * * If the current logical position exceeds assigned blocks, new blocks are allocated 
+     * * If the current logical position exceeds assigned blocks, new blocks are allocated
      * from the BlockAllocator and the page table is updated.
      * * @param seq_id Unique identifier for the sequence.
      * @param layer_id The specific transformer layer index.
@@ -91,21 +106,22 @@ public:
      * @brief Retrieves the mapping table (page table) for a specific sequence and layer.
      * @param seq_id Unique identifier for the sequence.
      * @param layer_id The specific transformer layer index.
-     * @return A constant reference to the page table for the `layer_id`th layer of `seq_id` sequence 
+     * @return A constant reference to the page table for the `layer_id`th layer of `seq_id` sequence
      */
-    const std::vector<int32_t>& page_table(int32_t seq_id, int32_t layer_id) const;
+    const std::vector<int32_t> &page_table(int32_t seq_id, int32_t layer_id) const;
 
-private:
+  private:
     /**
      * @brief Internal state for a single sequence, encapsulating all per-layer page tables.
      */
-    struct SeqState {
+    struct SeqState
+    {
         // page_tables[layer_id][logical_block_idx] = physical_block_id
         std::vector<std::vector<int32_t>> page_tables;
     };
 
-    Config cfg_;                        ///< Cache configuration.
-    BlockAllocator* blocks_ = nullptr;  ///< Non-owning pointer to the physical block pool.
+    Config cfg_;                       ///< Cache configuration.
+    BlockAllocator *blocks_ = nullptr; ///< Non-owning pointer to the physical block pool.
     ParallelConfig parallel_config_{};
     std::unordered_map<int32_t, SeqState> seqs_; ///< Map of active sequence IDs to their states.
 };

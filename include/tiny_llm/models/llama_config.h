@@ -3,7 +3,8 @@
 #include <cstdint>
 #include <string>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 /**
  * @brief Configuration for HuggingFace-style Llama-family checkpoints.
@@ -11,7 +12,8 @@ namespace tiny_llm {
  * Field names intentionally follow `config.json` so one config struct can
  * describe Llama-2, Llama-3 and smaller compatible variants such as SmolLM.
  */
-struct LlamaConfig {
+struct LlamaConfig
+{
     int32_t vocab_size = 32000;
     int32_t hidden_size = 512;
     int32_t intermediate_size = 2048;

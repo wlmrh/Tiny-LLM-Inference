@@ -13,26 +13,29 @@
 #include "tiny_llm/runtime/request.h"
 #include "tiny_llm/runtime/scheduler_config.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 struct EngineArgs;
 class KVCacheManager;
 class KVCache;
 
-struct RequestData {
-    uint64_t req_id = 0; ///< Runtime request ID.
-    std::vector<int32_t> new_token_ids; ///< Tokens scheduled for this engine step.
-    int32_t num_computed_tokens = 0; ///< Prefix length of context_token_ids already present in KV.
-    int32_t prompt_token_count = 0; ///< Original prompt length.
+struct RequestData
+{
+    uint64_t req_id = 0;                            ///< Runtime request ID.
+    std::vector<int32_t> new_token_ids;             ///< Tokens scheduled for this engine step.
+    int32_t num_computed_tokens = 0;                ///< Prefix length of context_token_ids already present in KV.
+    int32_t prompt_token_count = 0;                 ///< Original prompt length.
     std::vector<std::vector<int32_t>> block_tables; ///< [layer][logical_block] -> physical block id.
-    SamplingParams sampling_params; ///< Normalized request sampling parameters.
-    std::vector<int32_t> context_token_ids; ///< Full prompt plus generated-token history before this step.
+    SamplingParams sampling_params;                 ///< Normalized request sampling parameters.
+    std::vector<int32_t> context_token_ids;         ///< Full prompt plus generated-token history before this step.
 };
 
 /**
  * @brief Scheduler output package for one runtime step.
  */
-struct SchedulerOutput {
+struct SchedulerOutput
+{
     std::vector<RequestData> scheduled_reqs;
     std::unordered_map<uint64_t, int32_t> num_scheduled_tokens; ///< 每个 request 调度的 token 数量
     int32_t total_num_scheduled_tokens = 0; ///< 本轮调度中，所有请求要处理的 Token 总和
@@ -41,27 +44,27 @@ struct SchedulerOutput {
 /**
  * @brief Scheduler mechanism for FCFS request admission and token budgeting.
  */
-class Scheduler {
-public:
-    explicit Scheduler(const EngineArgs& args);
-    Scheduler(KVCache* kv, SchedulerConfig config = SchedulerConfig{});
+class Scheduler
+{
+  public:
+    explicit Scheduler(const EngineArgs &args);
+    Scheduler(KVCache *kv, SchedulerConfig config = SchedulerConfig{});
     ~Scheduler();
 
     SchedulerOutput schedule();
 
     // 根据 scheduler 的调度结果及其执行结果 model_runner_output 修改 scheduler 中 Request 的状态
-    std::vector<EngineCoreOutput> update_from_output(
-        const SchedulerOutput& scheduler_output,
-        const ModelRunnerOutput& model_runner_output);
+    std::vector<EngineCoreOutput> update_from_output(const SchedulerOutput &scheduler_output,
+                                                     const ModelRunnerOutput &model_runner_output);
 
     // 将 Request 中的属性补齐并添加到 waiting 队列的最后
     void add_request(Request request);
 
     // 返回是否有未完成的 Request
     bool has_unfinished_requests() const;
-    KVCache* kv_cache() const;
+    KVCache *kv_cache() const;
 
-private:
+  private:
     explicit Scheduler(SchedulerConfig config);
 
     void preempt_request(uint64_t request_id);

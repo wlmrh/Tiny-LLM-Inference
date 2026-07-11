@@ -32,8 +32,7 @@ TEST(RuntimeDeviceConfigTest, RuntimeObjectsCarryCpuDeviceConfig)
     args.workspace = &workspace;
     args.parallel_config = tiny_llm::ParallelConfig::cpu();
     tiny_llm::initialize_global_execution_context(args, &kv);
-    tiny_llm::ExecutionContext& ctx =
-        tiny_llm::require_global_execution_context("RuntimeDeviceConfigTest");
+    tiny_llm::ExecutionContext &ctx = tiny_llm::require_global_execution_context("RuntimeDeviceConfigTest");
     EXPECT_TRUE(ctx.parallel_config().is_cpu());
     EXPECT_TRUE(ctx.device().is_cpu());
     tiny_llm::reset_global_execution_context();

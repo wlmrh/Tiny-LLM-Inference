@@ -6,11 +6,8 @@
 TEST(LlamaOpsTest, EmbeddingLookupSupportsBothLayouts)
 {
     tiny_llm::Tensor ids = torch::tensor({2, 0}, torch::TensorOptions().dtype(torch::kInt32));
-    tiny_llm::Tensor embedding = torch::tensor(
-        {{1.0f, 2.0f},
-         {3.0f, 4.0f},
-         {5.0f, 6.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor embedding =
+        torch::tensor({{1.0f, 2.0f}, {3.0f, 4.0f}, {5.0f, 6.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor embedded = torch::empty({2, 2}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::ops::embedding_lookup(ids, embedding, embedded, 3, 2, true);
     EXPECT_NEAR(embedded.data_ptr<float>()[0], 5.0f, 1e-5f);
@@ -27,10 +24,8 @@ TEST(LlamaOpsTest, EmbeddingLookupSupportsBothLayouts)
 
 TEST(LlamaOpsTest, SplitsQkvAndAppliesRope)
 {
-    tiny_llm::Tensor qkv = torch::tensor(
-        {{1.0f, 2.0f, 3.0f, 4.0f},
-         {5.0f, 6.0f, 7.0f, 8.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor qkv = torch::tensor({{1.0f, 2.0f, 3.0f, 4.0f}, {5.0f, 6.0f, 7.0f, 8.0f}},
+                                         torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor q = torch::empty({2, 2}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor k = torch::empty({2, 1}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor v = torch::empty({2, 1}, torch::TensorOptions().dtype(torch::kFloat32));
@@ -79,26 +74,21 @@ TEST(LlamaOpsTest, CudaRopeCacheMatchesInvFreqPath)
         GTEST_SKIP() << "CUDA is not available.";
     }
 
-    tiny_llm::Tensor positions = torch::tensor(
-        {0, 1, 17, 4097, 5000},
-        torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
-    tiny_llm::Tensor q_base = torch::arange(
-        120,
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).reshape({5, 24}) / 17.0f;
-    tiny_llm::Tensor k_base = torch::arange(
-        80,
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).reshape({5, 16}) / 19.0f;
+    tiny_llm::Tensor positions =
+        torch::tensor({0, 1, 17, 4097, 5000}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
+    tiny_llm::Tensor q_base =
+        torch::arange(120, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).reshape({5, 24}) / 17.0f;
+    tiny_llm::Tensor k_base =
+        torch::arange(80, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).reshape({5, 16}) / 19.0f;
     tiny_llm::Tensor q_ref = q_base.clone();
     tiny_llm::Tensor k_ref = k_base.clone();
     tiny_llm::Tensor q_cached = q_base.clone();
     tiny_llm::Tensor k_cached = k_base.clone();
 
-    tiny_llm::Tensor inv_freq = torch::tensor(
-        {1.0f, 0.1f, 0.01f, 0.001f},
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-    tiny_llm::Tensor cache_positions = torch::arange(
-        5001,
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).unsqueeze(1);
+    tiny_llm::Tensor inv_freq =
+        torch::tensor({1.0f, 0.1f, 0.01f, 0.001f}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor cache_positions =
+        torch::arange(5001, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA)).unsqueeze(1);
     tiny_llm::Tensor theta = cache_positions * inv_freq.unsqueeze(0);
     tiny_llm::Tensor cos_cache = torch::cos(theta).contiguous();
     tiny_llm::Tensor sin_cache = torch::sin(theta).contiguous();
@@ -139,8 +129,10 @@ TEST(LlamaOpsTest, CudaSiluMultiplyMatchesCpu)
     {
         GTEST_SKIP() << "CUDA is not available.";
     }
-    tiny_llm::Tensor gate_cpu = torch::tensor({{-2.0f, -0.25f, 0.0f, 1.0f, 3.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
-    tiny_llm::Tensor up_cpu = torch::tensor({{1.5f, -2.0f, 3.0f, 0.5f, -1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor gate_cpu =
+        torch::tensor({{-2.0f, -0.25f, 0.0f, 1.0f, 3.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor up_cpu =
+        torch::tensor({{1.5f, -2.0f, 3.0f, 0.5f, -1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor expected = torch::empty_like(gate_cpu);
     tiny_llm::ops::silu_multiply(gate_cpu, up_cpu, expected);
 

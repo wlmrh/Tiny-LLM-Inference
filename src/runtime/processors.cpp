@@ -7,9 +7,10 @@
 #include <limits>
 #include <stdexcept>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-InputPreprocessor::InputPreprocessor(const EngineArgs& args)
+InputPreprocessor::InputPreprocessor(const EngineArgs &args)
     : tokenizer_(args.tokenizer), default_max_tokens_(args.max_generated_tokens)
 {
     if (tokenizer_ == nullptr)
@@ -24,8 +25,8 @@ InputPreprocessor::InputPreprocessor(const EngineArgs& args)
     validate_tokenizer_contract();
 }
 
-EngineCoreRequest InputPreprocessor::process_inputs(const std::string& prompt,
-                                                    const UserSamplingParams& user_params) const
+EngineCoreRequest InputPreprocessor::process_inputs(const std::string &prompt,
+                                                    const UserSamplingParams &user_params) const
 {
     EngineCoreRequest request;
     request.internal_id = assign_internal_id();
@@ -53,35 +54,35 @@ uint64_t InputPreprocessor::assign_internal_id() const
 
 void InputPreprocessor::validate_tokenizer_contract() const
 {
-    const Tokenizer* tokenizer = tokenizer_;
+    const Tokenizer *tokenizer = tokenizer_;
 
     const int32_t tokenizer_vocab = tokenizer->vocab_size();
     if (tokenizer_vocab <= 0)
     {
-        throw std::runtime_error("InputPreprocessor::validate_tokenizer_contract: tokenizer vocab size must be positive.");
+        throw std::runtime_error(
+            "InputPreprocessor::validate_tokenizer_contract: tokenizer vocab size must be positive.");
     }
 
     const int32_t bos_id = tokenizer->bos_id();
     const int32_t eos_id = tokenizer->eos_id();
     const int32_t unk_id = tokenizer->unk_id();
-    if (!tokenizer->is_valid_token_id(bos_id)
-        || !tokenizer->is_valid_token_id(eos_id)
-        || (unk_id >= 0 && !tokenizer->is_valid_token_id(unk_id)))
+    if (!tokenizer->is_valid_token_id(bos_id) || !tokenizer->is_valid_token_id(eos_id) ||
+        (unk_id >= 0 && !tokenizer->is_valid_token_id(unk_id)))
     {
-        throw std::runtime_error("InputPreprocessor::validate_tokenizer_contract: tokenizer special token id is out of range.");
+        throw std::runtime_error(
+            "InputPreprocessor::validate_tokenizer_contract: tokenizer special token id is out of range.");
     }
 }
 
-std::vector<int32_t> InputPreprocessor::tokenize(const std::string& text) const
+std::vector<int32_t> InputPreprocessor::tokenize(const std::string &text) const
 {
     return tokenizer_->encode(text);
 }
 
-SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingParams& user_params) const
+SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingParams &user_params) const
 {
     SamplingParams params;
-    static_cast<SamplingParamsCommon&>(params) =
-        static_cast<const SamplingParamsCommon&>(user_params);
+    static_cast<SamplingParamsCommon &>(params) = static_cast<const SamplingParamsCommon &>(user_params);
     if (user_params.max_tokens < 0)
     {
         throw std::runtime_error("InputPreprocessor::normalize_sampling_params: max_tokens must be >= 0.");
@@ -89,9 +90,8 @@ SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingPa
     params.max_tokens = user_params.max_tokens > 0 ? user_params.max_tokens : default_max_tokens_;
 
     const int32_t eos_token = tokenizer_->eos_id();
-    if (!params.ignore_eos
-        && std::find(params.stop_token_ids.begin(), params.stop_token_ids.end(), eos_token)
-        == params.stop_token_ids.end())
+    if (!params.ignore_eos &&
+        std::find(params.stop_token_ids.begin(), params.stop_token_ids.end(), eos_token) == params.stop_token_ids.end())
     {
         params.stop_token_ids.push_back(eos_token);
     }
@@ -99,9 +99,9 @@ SamplingParams InputPreprocessor::normalize_sampling_params(const UserSamplingPa
     return params;
 }
 
-void InputPreprocessor::validate_prompt_tokens(const std::vector<int32_t>& token_ids) const
+void InputPreprocessor::validate_prompt_tokens(const std::vector<int32_t> &token_ids) const
 {
-    const Tokenizer* tokenizer = tokenizer_;
+    const Tokenizer *tokenizer = tokenizer_;
 
     if (token_ids.empty())
     {
@@ -117,9 +117,9 @@ void InputPreprocessor::validate_prompt_tokens(const std::vector<int32_t>& token
     }
 }
 
-void InputPreprocessor::validate_sampling_params(const SamplingParams& sampling_params) const
+void InputPreprocessor::validate_sampling_params(const SamplingParams &sampling_params) const
 {
-    const Tokenizer* tokenizer = tokenizer_;
+    const Tokenizer *tokenizer = tokenizer_;
 
     if (sampling_params.temperature < 0.0f)
     {
@@ -146,13 +146,13 @@ void InputPreprocessor::validate_sampling_params(const SamplingParams& sampling_
     {
         if (!tokenizer->is_valid_token_id(token_id))
         {
-            throw std::runtime_error("InputPreprocessor::validate_sampling_params: stop token id out of tokenizer range.");
+            throw std::runtime_error(
+                "InputPreprocessor::validate_sampling_params: stop token id out of tokenizer range.");
         }
     }
 }
 
-OutPreprocessor::OutPreprocessor(const EngineArgs& args)
-    : tokenizer_(args.tokenizer)
+OutPreprocessor::OutPreprocessor(const EngineArgs &args) : tokenizer_(args.tokenizer)
 {
     if (tokenizer_ == nullptr)
     {
@@ -160,9 +160,9 @@ OutPreprocessor::OutPreprocessor(const EngineArgs& args)
     }
 }
 
-void OutPreprocessor::add_request(const EngineCoreRequest& request)
+void OutPreprocessor::add_request(const EngineCoreRequest &request)
 {
-    const Tokenizer* tokenizer = tokenizer_;
+    const Tokenizer *tokenizer = tokenizer_;
     if (tokenizer == nullptr)
     {
         throw std::runtime_error("OutPreprocessor::add_request: tokenizer is not available.");
@@ -191,13 +191,13 @@ void OutPreprocessor::add_request(const EngineCoreRequest& request)
     states_[request.internal_id] = std::move(state);
 }
 
-std::vector<UserOutput> OutPreprocessor::process_outputs(const std::vector<EngineCoreOutput>& core_outputs)
+std::vector<UserOutput> OutPreprocessor::process_outputs(const std::vector<EngineCoreOutput> &core_outputs)
 {
     std::vector<UserOutput> user_outputs;
     user_outputs.reserve(core_outputs.size());
     std::vector<uint64_t> finished_ids;
 
-    for (const EngineCoreOutput& core : core_outputs)
+    for (const EngineCoreOutput &core : core_outputs)
     {
         UserOutput out;
         out.internal_id = core.internal_id;
@@ -212,7 +212,7 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::vector<Engin
             continue;
         }
 
-        RequestState& state = *(it->second);
+        RequestState &state = *(it->second);
 
         if (state.is_finished)
         {
@@ -248,7 +248,7 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::vector<Engin
 
 bool OutPreprocessor::has_unfinished_requests() const
 {
-    for (const auto& item : states_)
+    for (const auto &item : states_)
     {
         if (!item.second->is_finished)
         {
@@ -258,9 +258,9 @@ bool OutPreprocessor::has_unfinished_requests() const
     return false;
 }
 
-std::string OutPreprocessor::incremental_decode(RequestState& state, int32_t new_token_id)
+std::string OutPreprocessor::incremental_decode(RequestState &state, int32_t new_token_id)
 {
-    const Tokenizer* tokenizer = tokenizer_;
+    const Tokenizer *tokenizer = tokenizer_;
     if (tokenizer == nullptr)
     {
         throw std::runtime_error("OutPreprocessor::incremental_decode: tokenizer is not available.");
@@ -290,9 +290,9 @@ std::string OutPreprocessor::incremental_decode(RequestState& state, int32_t new
     return delta;
 }
 
-bool OutPreprocessor::check_stop_criteria(RequestState& state, int32_t latest_token)
+bool OutPreprocessor::check_stop_criteria(RequestState &state, int32_t latest_token)
 {
-    const Tokenizer* tokenizer = tokenizer_;
+    const Tokenizer *tokenizer = tokenizer_;
     if (tokenizer == nullptr)
     {
         throw std::runtime_error("OutPreprocessor::check_stop_criteria: tokenizer is not available.");
@@ -305,10 +305,8 @@ bool OutPreprocessor::check_stop_criteria(RequestState& state, int32_t latest_to
         return true;
     }
 
-    if (std::find(state.sampling_params.stop_token_ids.begin(),
-                  state.sampling_params.stop_token_ids.end(),
-                  latest_token)
-        != state.sampling_params.stop_token_ids.end())
+    if (std::find(state.sampling_params.stop_token_ids.begin(), state.sampling_params.stop_token_ids.end(),
+                  latest_token) != state.sampling_params.stop_token_ids.end())
     {
         state.is_finished = true;
         state.finish_reason = "stop_token";

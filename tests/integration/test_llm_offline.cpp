@@ -6,17 +6,18 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 std::string model_dir_from_env()
 {
-    const char* model_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR");
+    const char *model_dir = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR");
     if (model_dir == nullptr || std::string(model_dir).empty())
     {
         return {};
     }
     return model_dir;
 }
-}
+} // namespace
 
 TEST(LLMOfflineIntegrationTest, GenerateReturnsFinishedOutputsForBatch)
 {
@@ -39,7 +40,7 @@ TEST(LLMOfflineIntegrationTest, GenerateReturnsFinishedOutputsForBatch)
     const std::vector<tiny_llm::CompletionOutput> outputs =
         llm.generate(std::vector<std::string>{"hello", "tiny llm inference"}, sampling_params);
     ASSERT_EQ(outputs.size(), 2u);
-    for (const tiny_llm::CompletionOutput& output : outputs)
+    for (const tiny_llm::CompletionOutput &output : outputs)
     {
         EXPECT_TRUE(output.finished);
         EXPECT_FALSE(output.token_ids.empty());

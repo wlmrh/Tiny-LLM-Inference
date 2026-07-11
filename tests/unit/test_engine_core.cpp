@@ -1,10 +1,10 @@
 #include "tiny_llm/core/allocator.h"
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/runtime/engine.h"
-#include "tiny_llm/runtime/engine_core.h"
 #include "tiny_llm/runtime/engine_args.h"
-#include "tiny_llm/runtime/processors.h"
+#include "tiny_llm/runtime/engine_core.h"
 #include "tiny_llm/runtime/kv_cache.h"
+#include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
 #include <gtest/gtest.h>
@@ -12,22 +12,27 @@
 #include <unordered_map>
 #include <vector>
 
-namespace {
-class IncrementTokenModel final : public tiny_llm::Model {
-public:
-    int32_t num_layers() const override { return 1; }
-    int32_t vocab_size() const override { return 64; }
+namespace
+{
+class IncrementTokenModel final : public tiny_llm::Model
+{
+  public:
+    int32_t num_layers() const override
+    {
+        return 1;
+    }
+    int32_t vocab_size() const override
+    {
+        return 64;
+    }
 
-    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs& inputs,
-                             tiny_llm::RuntimeContext& ctx) override
+    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs &inputs, tiny_llm::RuntimeContext &ctx) override
     {
         tiny_llm::Tensor input_cpu = inputs.input_ids.cpu().contiguous();
-        tiny_llm::Tensor logits = torch::full(
-            {inputs.input_ids.size(0), vocab_size()},
-            -1000.0f,
-            torch::TensorOptions().dtype(torch::kFloat32).device(c10::kCPU));
-        const int32_t* input = input_cpu.data_ptr<int32_t>();
-        float* out = logits.data_ptr<float>();
+        tiny_llm::Tensor logits = torch::full({inputs.input_ids.size(0), vocab_size()}, -1000.0f,
+                                              torch::TensorOptions().dtype(torch::kFloat32).device(c10::kCPU));
+        const int32_t *input = input_cpu.data_ptr<int32_t>();
+        float *out = logits.data_ptr<float>();
         for (int64_t row = 0; row < input_cpu.numel(); ++row)
         {
             out[row * vocab_size() + ((input[row] + 1) % vocab_size())] = 1000.0f;
@@ -36,10 +41,14 @@ public:
     }
 };
 
-class FakeTokenizer final : public tiny_llm::Tokenizer {
-public:
-    std::vector<int32_t> encode(const std::string&) const override { return {4}; }
-    std::string decode(const std::vector<int32_t>& ids) const override
+class FakeTokenizer final : public tiny_llm::Tokenizer
+{
+  public:
+    std::vector<int32_t> encode(const std::string &) const override
+    {
+        return {4};
+    }
+    std::string decode(const std::vector<int32_t> &ids) const override
     {
         std::string result;
         for (int32_t id : ids)
@@ -48,14 +57,30 @@ public:
         }
         return result;
     }
-    int32_t vocab_size() const override { return 64; }
-    int32_t bos_id() const override { return 1; }
-    int32_t eos_id() const override { return 2; }
-    int32_t unk_id() const override { return 3; }
-    bool is_valid_token_id(int32_t id) const override { return id >= 0 && id < vocab_size(); }
+    int32_t vocab_size() const override
+    {
+        return 64;
+    }
+    int32_t bos_id() const override
+    {
+        return 1;
+    }
+    int32_t eos_id() const override
+    {
+        return 2;
+    }
+    int32_t unk_id() const override
+    {
+        return 3;
+    }
+    bool is_valid_token_id(int32_t id) const override
+    {
+        return id >= 0 && id < vocab_size();
+    }
 };
 
-struct EngineCoreFixture {
+struct EngineCoreFixture
+{
     static constexpr size_t kBlockBytes = 128;
     std::vector<unsigned char> pool;
     tiny_llm::BlockAllocator blocks;
@@ -66,18 +91,14 @@ struct EngineCoreFixture {
     tiny_llm::EngineCore core;
 
     explicit EngineCoreFixture(int32_t max_prefill_tokens = 8, size_t num_blocks = 32)
-        : pool(num_blocks * kBlockBytes),
-          blocks(num_blocks, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu()),
-          kv(make_kv_config(), &blocks),
-          ctx(nullptr, nullptr, &kv),
+        : pool(num_blocks * kBlockBytes), blocks(num_blocks, kBlockBytes, pool.data(), tiny_llm::ParallelConfig::cpu()),
+          kv(make_kv_config(), &blocks), ctx(nullptr, nullptr, &kv),
           core(make_engine_args(&model, &ctx, &kv, &tokenizer, max_prefill_tokens))
     {
     }
 
-    static tiny_llm::EngineArgs make_engine_args(IncrementTokenModel* model,
-                                                 tiny_llm::ExecutionContext* ctx,
-                                                 tiny_llm::KVCache* kv,
-                                                 const FakeTokenizer* tokenizer,
+    static tiny_llm::EngineArgs make_engine_args(IncrementTokenModel *model, tiny_llm::ExecutionContext *ctx,
+                                                 tiny_llm::KVCache *kv, const FakeTokenizer *tokenizer,
                                                  int32_t max_prefill_tokens)
     {
         tiny_llm::EngineArgs args;
@@ -105,11 +126,9 @@ struct EngineCoreFixture {
         return cfg;
     }
 
-    static tiny_llm::EngineArgs make_engine_args(tiny_llm::Model* model,
-                                                tiny_llm::ExecutionContext* ctx,
-                                                tiny_llm::KVCache* kv,
-                                                const tiny_llm::Tokenizer* tokenizer,
-                                                int32_t max_prefill_tokens)
+    static tiny_llm::EngineArgs make_engine_args(tiny_llm::Model *model, tiny_llm::ExecutionContext *ctx,
+                                                 tiny_llm::KVCache *kv, const tiny_llm::Tokenizer *tokenizer,
+                                                 int32_t max_prefill_tokens)
     {
         tiny_llm::EngineArgs args;
         args.model = model;
@@ -130,7 +149,7 @@ struct EngineCoreFixture {
         core.add_request(request);
     }
 };
-}
+} // namespace
 
 TEST(InputPreprocessorTest, DefaultUserMaxTokensUsesEngineDefaultAndCopiesSharedFields)
 {
@@ -149,9 +168,8 @@ TEST(InputPreprocessorTest, DefaultUserMaxTokensUsesEngineDefaultAndCopiesShared
     user_params.ignore_eos = true;
     user_params.stop_token_ids = {6, 7};
 
-    const tiny_llm::EngineCoreRequest request =
-        preprocessor.process_inputs("prompt", user_params);
-    const tiny_llm::SamplingParams& params = request.sampling_params;
+    const tiny_llm::EngineCoreRequest request = preprocessor.process_inputs("prompt", user_params);
+    const tiny_llm::SamplingParams &params = request.sampling_params;
 
     EXPECT_EQ(request.internal_id, 1u);
     EXPECT_FLOAT_EQ(params.temperature, user_params.temperature);
@@ -175,8 +193,7 @@ TEST(InputPreprocessorTest, ExplicitUserMaxTokensOverridesEngineDefault)
     tiny_llm::UserSamplingParams user_params;
     user_params.max_tokens = 5;
 
-    const tiny_llm::EngineCoreRequest request =
-        preprocessor.process_inputs("prompt", user_params);
+    const tiny_llm::EngineCoreRequest request = preprocessor.process_inputs("prompt", user_params);
 
     EXPECT_EQ(request.internal_id, 1u);
     EXPECT_EQ(request.sampling_params.max_tokens, 5);
@@ -193,9 +210,7 @@ TEST(InputPreprocessorTest, RejectsNegativeUserMaxTokens)
     tiny_llm::UserSamplingParams user_params;
     user_params.max_tokens = -1;
 
-    EXPECT_THROW(
-        preprocessor.process_inputs("prompt", user_params),
-        std::runtime_error);
+    EXPECT_THROW(preprocessor.process_inputs("prompt", user_params), std::runtime_error);
 }
 
 TEST(EngineCoreTest, EmitsPrefillSampleAsFirstGeneratedTokenThenDecodes)
@@ -265,7 +280,7 @@ TEST(EngineCoreTest, LLMEnginePropagatesStableSequentialInternalRequestIds)
     std::vector<uint64_t> first_internal_ids;
     while (engine.has_unfinished_requests())
     {
-        for (const tiny_llm::UserOutput& output : engine.step())
+        for (const tiny_llm::UserOutput &output : engine.step())
         {
             first_internal_ids.push_back(output.internal_id);
         }
@@ -278,7 +293,7 @@ TEST(EngineCoreTest, LLMEnginePropagatesStableSequentialInternalRequestIds)
     std::vector<uint64_t> second_internal_ids;
     while (engine.has_unfinished_requests())
     {
-        for (const tiny_llm::UserOutput& output : engine.step())
+        for (const tiny_llm::UserOutput &output : engine.step())
         {
             second_internal_ids.push_back(output.internal_id);
         }

@@ -5,15 +5,18 @@
 
 #include "tiny_llm/runtime/processors.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-enum class RequestStatus {
+enum class RequestStatus
+{
     RUNNING = 0,
     WAITING = 1,
     FINISHED = 2,
 };
 
-struct Request {
+struct Request
+{
     uint64_t request_id = 0;
     SamplingParams sampling_params;
     RequestStatus status = RequestStatus::WAITING;

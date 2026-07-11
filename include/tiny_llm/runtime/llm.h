@@ -12,7 +12,8 @@
 #include "tiny_llm/runtime/runtime_stats.h"
 #include "tiny_llm/runtime/scheduler.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class HFLlamaTokenizer;
 class LLMEngine;
@@ -25,7 +26,8 @@ class StackAllocator;
  * intended for deployment-style usage where callers should not manually wire the
  * runtime pieces used by integration tests.
  */
-struct LLMOptions {
+struct LLMOptions
+{
     LLMOptions() = default;
     explicit LLMOptions(std::string model_path);
     LLMOptions(std::string model_path, ParallelConfig parallel_config);
@@ -46,7 +48,8 @@ struct LLMOptions {
 
 using LLMSamplingParams = UserSamplingParams;
 
-struct CompletionOutput {
+struct CompletionOutput
+{
     std::string prompt;
     std::string text;
     std::vector<int32_t> token_ids;
@@ -54,39 +57,43 @@ struct CompletionOutput {
     std::string finish_reason;
 };
 
-struct CompletionStreamOutput : public CompletionOutput {
+struct CompletionStreamOutput : public CompletionOutput
+{
     size_t prompt_index = 0;
     std::string delta_text;
     int32_t token_id = -1;
 };
 
-using CompletionStreamCallback = std::function<void(const CompletionStreamOutput&)>;
+using CompletionStreamCallback = std::function<void(const CompletionStreamOutput &)>;
 
 /**
  * @brief vLLM-style offline generation facade for C++ callers.
  */
-class LLM {
-public:
+class LLM
+{
+  public:
     explicit LLM(std::string model);
     LLM(std::string model, ParallelConfig parallel_config);
     explicit LLM(LLMOptions options);
     ~LLM();
 
-    LLM(LLM&&) noexcept;
-    LLM& operator=(LLM&&) noexcept;
-    LLM(const LLM&) = delete;
-    LLM& operator=(const LLM&) = delete;
+    LLM(LLM &&) noexcept;
+    LLM &operator=(LLM &&) noexcept;
+    LLM(const LLM &) = delete;
+    LLM &operator=(const LLM &) = delete;
 
-    std::vector<CompletionOutput> generate(const std::vector<std::string>& prompts,
-                                           const LLMSamplingParams& sampling_params = LLMSamplingParams{},
+    std::vector<CompletionOutput> generate(const std::vector<std::string> &prompts,
+                                           const LLMSamplingParams &sampling_params = LLMSamplingParams{},
                                            CompletionStreamCallback callback = CompletionStreamCallback{});
-    CompletionOutput generate(const std::string& prompt,
-                              const LLMSamplingParams& sampling_params = LLMSamplingParams{},
+    CompletionOutput generate(const std::string &prompt, const LLMSamplingParams &sampling_params = LLMSamplingParams{},
                               CompletionStreamCallback callback = CompletionStreamCallback{});
 
-    const RuntimeProfilingStats& last_generation_profile() const { return last_generation_profile_; }
+    const RuntimeProfilingStats &last_generation_profile() const
+    {
+        return last_generation_profile_;
+    }
 
-private:
+  private:
     void initialize();
     void release_kv_pool() noexcept;
 
@@ -94,7 +101,7 @@ private:
     std::unique_ptr<HFLlamaTokenizer> tokenizer_;
     std::unique_ptr<StackAllocator> workspace_;
     std::unique_ptr<LLMEngine> engine_;
-    void* kv_pool_ = nullptr;
+    void *kv_pool_ = nullptr;
     RuntimeProfilingStats last_generation_profile_;
 };
 

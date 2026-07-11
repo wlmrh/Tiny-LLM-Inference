@@ -4,11 +4,11 @@
 
 #include <stdexcept>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 ParallelConfig::ParallelConfig(DeviceType device_type, int32_t device_id)
-    : device_type_(device_type),
-      device_id_(device_id)
+    : device_type_(device_type), device_id_(device_id)
 {
 }
 
@@ -36,10 +36,9 @@ c10::Device ParallelConfig::torch_device() const
     throw std::runtime_error("ParallelConfig::torch_device: unsupported device type.");
 }
 
-bool ParallelConfig::operator==(const ParallelConfig& other) const
+bool ParallelConfig::operator==(const ParallelConfig &other) const
 {
-    return device_type_ == other.device_type_
-        && device_id_ == other.device_id_;
+    return device_type_ == other.device_type_ && device_id_ == other.device_id_;
 }
 
 void ParallelConfig::validate() const

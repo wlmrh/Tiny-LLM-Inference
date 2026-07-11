@@ -6,10 +6,12 @@
 #include <cuda_runtime_api.h>
 #endif
 
-namespace tiny_llm {
-namespace {
+namespace tiny_llm
+{
+namespace
+{
 
-void synchronize_device_for_runtime_profile(const c10::Device& device)
+void synchronize_device_for_runtime_profile(const c10::Device &device)
 {
 #if TINYLLM_ENABLE_CUDA
     if (device.is_cuda())
@@ -25,10 +27,8 @@ void synchronize_device_for_runtime_profile(const c10::Device& device)
 
 } // namespace
 
-ScopedRuntimeProfile::ScopedRuntimeProfile(RuntimeContext& ctx, double RuntimeProfilingStats::*field)
-    : stats_(ctx.profiling_stats()),
-      field_(field),
-      device_(ctx.device()),
+ScopedRuntimeProfile::ScopedRuntimeProfile(RuntimeContext &ctx, double RuntimeProfilingStats::*field)
+    : stats_(ctx.profiling_stats()), field_(field), device_(ctx.device()),
       enabled_(ctx.profile_detail_enabled() && field_ != nullptr)
 {
     if (enabled_)
