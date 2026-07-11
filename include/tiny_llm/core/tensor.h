@@ -19,6 +19,7 @@ namespace tiny_llm
 enum class DType
 {
     kFloat16,
+    kBFloat16,
     kFloat32,
     kInt32
 };
@@ -31,6 +32,8 @@ inline c10::ScalarType to_torch_scalar_type(DType dtype)
     {
     case DType::kFloat16:
         return c10::ScalarType::Half;
+    case DType::kBFloat16:
+        return c10::ScalarType::BFloat16;
     case DType::kFloat32:
         return c10::ScalarType::Float;
     case DType::kInt32:
@@ -46,6 +49,8 @@ inline DType from_torch_scalar_type(c10::ScalarType scalar_type)
     {
     case c10::ScalarType::Half:
         return DType::kFloat16;
+    case c10::ScalarType::BFloat16:
+        return DType::kBFloat16;
     case c10::ScalarType::Float:
         return DType::kFloat32;
     case c10::ScalarType::Int:

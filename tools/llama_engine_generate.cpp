@@ -12,6 +12,7 @@
 #include "tiny_llm/runtime/engine.h"
 #include "tiny_llm/runtime/generation_config.h"
 #include "tiny_llm/runtime/parallel_config.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
 #if TINYLLM_ENABLE_CUDA
@@ -83,7 +84,8 @@ tiny_llm::ParallelConfig parse_device(const std::string &text)
     throw std::runtime_error("device must be cpu, cuda, or cuda:<device_id>.");
 }
 
-size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig &config, int32_t block_size_tokens)
+size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig &config, int32_t block_size_tokens,
+                            tiny_llm::RuntimeDType kv_cache_dtype)
 {
     if (block_size_tokens <= 0 || config.head_dim <= 0 || config.num_key_value_heads <= 0)
     {
@@ -91,7 +93,8 @@ size_t llama_kv_block_bytes(const tiny_llm::LlamaConfig &config, int32_t block_s
     }
     const size_t kv_hidden_size =
         static_cast<size_t>(config.num_key_value_heads) * static_cast<size_t>(config.head_dim);
-    return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size * sizeof(float);
+    return 2 * static_cast<size_t>(block_size_tokens) * kv_hidden_size *
+           tiny_llm::runtime_dtype_size(kv_cache_dtype);
 }
 
 size_t estimate_kv_num_blocks(tiny_llm::HFLlamaTokenizer &tokenizer, const tiny_llm::LlamaConfig &config,
@@ -199,9 +202,13 @@ int main(int argc, char **argv)
     int arg_index = 1;
     size_t kv_num_blocks = 0;
     tiny_llm::ParallelConfig parallel_config = tiny_llm::ParallelConfig::cpu();
+    tiny_llm::RuntimeDType compute_dtype = tiny_llm::RuntimeDType::kFloat32;
+    tiny_llm::RuntimeDType kv_cache_dtype = tiny_llm::RuntimeDType::kFloat32;
     const auto print_usage = [&]()
     {
-        std::cerr << "usage: " << argv[0] << " [--device cpu|cuda[:id]] [--kv-num-blocks N]"
+        std::cerr << "usage: " << argv[0]
+                  << " [--device cpu|cuda[:id]] [--dtype fp32|bf16] [--kv-cache-dtype fp32|bf16]"
+                  << " [--kv-num-blocks N]"
                   << " <model_dir> <max_new_tokens> <prompt> [prompt...]\n";
     };
     while (argc > arg_index && std::string(argv[arg_index]).rfind("--", 0) == 0)
@@ -230,6 +237,24 @@ int main(int argc, char **argv)
                 throw std::runtime_error("kv_num_blocks must be positive.");
             }
             kv_num_blocks = static_cast<size_t>(parsed);
+            arg_index += 2;
+        }
+        else if (arg == "--dtype" || arg == "--kv-cache-dtype")
+        {
+            if (argc <= arg_index + 1)
+            {
+                print_usage();
+                return 2;
+            }
+            const tiny_llm::RuntimeDType parsed = tiny_llm::parse_runtime_dtype(argv[arg_index + 1]);
+            if (arg == "--dtype")
+            {
+                compute_dtype = parsed;
+            }
+            else
+            {
+                kv_cache_dtype = parsed;
+            }
             arg_index += 2;
         }
         else
@@ -281,7 +306,7 @@ int main(int argc, char **argv)
             kv_num_blocks = estimate_kv_num_blocks(tokenizer, hf_config, kBlockSizeTokens, max_new_tokens,
                                                    arg_index + 2, argc, argv);
         }
-        const size_t kBlockBytes = llama_kv_block_bytes(hf_config, kBlockSizeTokens);
+        const size_t kBlockBytes = llama_kv_block_bytes(hf_config, kBlockSizeTokens, kv_cache_dtype);
         void *kv_pool = nullptr;
         cudaStream_t stream = nullptr;
         if (parallel_config.is_cuda())
@@ -304,6 +329,8 @@ int main(int argc, char **argv)
         tiny_llm::EngineArgs engine_args;
         engine_args.tokenizer = &tokenizer;
         engine_args.parallel_config = parallel_config;
+        engine_args.compute_dtype = compute_dtype;
+        engine_args.kv_cache_dtype = kv_cache_dtype;
         engine_args.model_type = tiny_llm::EngineModelType::kHFLlamaSafeTensor;
         engine_args.hf_model_dir = model_dir.string();
         engine_args.hf_weight_file = "model.safetensors";

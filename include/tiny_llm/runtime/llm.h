@@ -10,6 +10,7 @@
 #include "tiny_llm/runtime/parallel_config.h"
 #include "tiny_llm/runtime/processors.h"
 #include "tiny_llm/runtime/runtime_stats.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 #include "tiny_llm/runtime/scheduler.h"
 
 namespace tiny_llm
@@ -34,6 +35,8 @@ struct LLMOptions
 
     std::string model;
     ParallelConfig parallel_config = ParallelConfig::cpu();
+    RuntimeDType compute_dtype = RuntimeDType::kFloat32;
+    RuntimeDType kv_cache_dtype = RuntimeDType::kFloat32;
     std::string weight_file = "model.safetensors";
 
     int32_t max_num_seqs = 16;

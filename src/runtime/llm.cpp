@@ -57,7 +57,7 @@ size_t checked_mul(size_t lhs, size_t rhs, const std::string &field)
     return lhs * rhs;
 }
 
-size_t llama_kv_block_bytes(const LlamaConfig &config, int32_t block_size_tokens)
+size_t llama_kv_block_bytes(const LlamaConfig &config, int32_t block_size_tokens, RuntimeDType kv_cache_dtype)
 {
     if (block_size_tokens <= 0)
     {
@@ -77,7 +77,8 @@ size_t llama_kv_block_bytes(const LlamaConfig &config, int32_t block_size_tokens
         checked_mul(static_cast<size_t>(config.num_key_value_heads), static_cast<size_t>(head_dim), "kv_hidden_size");
     const size_t tokens = static_cast<size_t>(block_size_tokens);
     return checked_mul(checked_mul(2, tokens, "kv block tokens"),
-                       checked_mul(kv_hidden_size, sizeof(float), "kv block width"), "kv block bytes");
+                       checked_mul(kv_hidden_size, runtime_dtype_size(kv_cache_dtype), "kv block width"),
+                       "kv block bytes");
 }
 
 bool has_any_safetensors_file(const std::filesystem::path &model_dir)
@@ -246,11 +247,20 @@ void LLM::initialize()
     }
 
     options_.parallel_config.validate();
+    if (options_.compute_dtype == RuntimeDType::kBFloat16 || options_.kv_cache_dtype == RuntimeDType::kBFloat16)
+    {
+        if (options_.parallel_config.is_cpu())
+        {
+            throw std::runtime_error("LLM: bfloat16 compute and KV cache require a CUDA device.");
+        }
+        throw std::runtime_error("LLM: bfloat16 execution is not enabled until all CUDA kernels support it.");
+    }
     const std::filesystem::path model_dir(options_.model);
     validate_model_dir(model_dir, options_.weight_file);
 
     const LlamaConfig config = HFLlamaConfigLoader::load_from_dir(options_.model);
-    const size_t kv_block_bytes = llama_kv_block_bytes(config, options_.block_size_tokens);
+    const size_t kv_block_bytes =
+        llama_kv_block_bytes(config, options_.block_size_tokens, options_.kv_cache_dtype);
     const size_t kv_pool_bytes = checked_mul(options_.kv_num_blocks, kv_block_bytes, "KV pool bytes");
 
     try
@@ -273,6 +283,8 @@ void LLM::initialize()
         EngineArgs args;
         args.tokenizer = tokenizer_.get();
         args.parallel_config = options_.parallel_config;
+        args.compute_dtype = options_.compute_dtype;
+        args.kv_cache_dtype = options_.kv_cache_dtype;
         args.model_type = EngineModelType::kHFLlamaSafeTensor;
         args.hf_model_dir = options_.model;
         args.hf_weight_file = options_.weight_file;

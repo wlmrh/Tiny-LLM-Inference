@@ -6,6 +6,7 @@
 
 #include "tiny_llm/runtime/parallel_config.h"
 #include "tiny_llm/runtime/scheduler_config.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 #include "utils/cuda_compat.h"
 
 namespace tiny_llm
@@ -34,6 +35,8 @@ struct EngineArgs
     KVCache *kv = nullptr;
     const Tokenizer *tokenizer = nullptr;
     ParallelConfig parallel_config = ParallelConfig::cpu();
+    RuntimeDType compute_dtype = RuntimeDType::kFloat32;
+    RuntimeDType kv_cache_dtype = RuntimeDType::kFloat32;
 
     // Model construction inputs (used when model == nullptr).
     EngineModelType model_type = EngineModelType::kPrebuilt;

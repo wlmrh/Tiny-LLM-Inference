@@ -2,6 +2,7 @@
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/parallel_config.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 
 #include <cstdlib>
 #include <gtest/gtest.h>
@@ -36,4 +37,15 @@ TEST(RuntimeDeviceConfigTest, ExecutionContextUsesExplicitDeviceConfig)
     tiny_llm::StackAllocator workspace(1024, tiny_llm::ParallelConfig::cpu());
     tiny_llm::ExecutionContext ctx(nullptr, &workspace, nullptr, tiny_llm::ParallelConfig::cpu());
     EXPECT_TRUE(ctx.device().is_cpu());
+}
+
+TEST(RuntimeDeviceConfigTest, RuntimeDTypeNamesSizesAndParsingAreStable)
+{
+    EXPECT_STREQ(tiny_llm::runtime_dtype_name(tiny_llm::RuntimeDType::kFloat32), "float32");
+    EXPECT_STREQ(tiny_llm::runtime_dtype_name(tiny_llm::RuntimeDType::kBFloat16), "bfloat16");
+    EXPECT_EQ(tiny_llm::runtime_dtype_size(tiny_llm::RuntimeDType::kFloat32), sizeof(float));
+    EXPECT_EQ(tiny_llm::runtime_dtype_size(tiny_llm::RuntimeDType::kBFloat16), sizeof(uint16_t));
+    EXPECT_EQ(tiny_llm::parse_runtime_dtype("fp32"), tiny_llm::RuntimeDType::kFloat32);
+    EXPECT_EQ(tiny_llm::parse_runtime_dtype("bf16"), tiny_llm::RuntimeDType::kBFloat16);
+    EXPECT_THROW(tiny_llm::parse_runtime_dtype("float16"), std::runtime_error);
 }
