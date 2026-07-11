@@ -2,7 +2,6 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
-#include "tiny_llm/runtime/execution_context.h"
 
 #include <limits>
 #include <stdexcept>
@@ -140,7 +139,7 @@ void gemm(const Tensor &a, const Tensor &b, Tensor &c, ExecutionContext &ctx)
 #if TINYLLM_ENABLE_CUDA
     if (can_run_cuda_gemm(a_ptr, b_ptr, c_ptr))
     {
-        const cudaStream_t stream = resolve_execution_context(ctx).stream();
+        const cudaStream_t stream = ctx.stream();
         cuda::launch_gemm_f32(a_ptr, b_ptr, c_ptr, M, N, K, stream);
         return;
     }

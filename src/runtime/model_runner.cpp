@@ -1,5 +1,6 @@
 #include "tiny_llm/runtime/model_runner.h"
 
+#include "tiny_llm/core/allocator.h"
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
 #include "tiny_llm/models/hf_llama_config_loader.h"
@@ -8,7 +9,6 @@
 #include "tiny_llm/models/llama_weight_map.h"
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/runtime/engine_args.h"
-#include "tiny_llm/runtime/execution_context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/runtime_context.h"
 #include "tiny_llm/runtime/sampler.h"
@@ -395,10 +395,7 @@ ModelRunner::ModelRunner(const EngineArgs &args, KVCache *kv) : kv_(kv)
     init_from_args(args);
 }
 
-ModelRunner::~ModelRunner()
-{
-    reset_global_execution_context();
-}
+ModelRunner::~ModelRunner() = default;
 
 void ModelRunner::init_from_args(const EngineArgs &args)
 {
@@ -438,7 +435,24 @@ void ModelRunner::init_from_args(const EngineArgs &args)
         model_ = owned_model_.get();
     }
 
-    initialize_global_execution_context(args, kv_);
+    if (args.ctx != nullptr)
+    {
+        execution_context_ = args.ctx;
+    }
+    else
+    {
+        if (args.workspace != nullptr && args.workspace->parallel_config() != args.parallel_config)
+        {
+            throw std::runtime_error("ModelRunner: workspace device does not match parallel_config.");
+        }
+        owned_execution_context_ =
+            std::make_unique<ExecutionContext>(args.execution_stream, args.workspace, kv_, args.parallel_config);
+        execution_context_ = owned_execution_context_.get();
+    }
+    if (execution_context_->parallel_config() != args.parallel_config)
+    {
+        throw std::runtime_error("ModelRunner: execution context device does not match parallel_config.");
+    }
 }
 
 int32_t ModelRunner::resolve_model_max_batch_size(const EngineArgs &args) const
@@ -461,7 +475,10 @@ void ModelRunner::validate_handles() const
     {
         throw std::runtime_error("ModelRunner: model must be non-null.");
     }
-    (void)require_global_execution_context("ModelRunner");
+    if (execution_context_ == nullptr)
+    {
+        throw std::runtime_error("ModelRunner: execution context must be non-null.");
+    }
 }
 
 void ModelRunner::validate_token_ids(const std::vector<int32_t> &token_ids, const char *context) const
@@ -677,7 +694,8 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput &scheduler_output)
     {
         throw std::runtime_error("ModelRunner: model must be non-null.");
     }
-    ExecutionContext &exec_ctx = require_global_execution_context("ModelRunner::run");
+    validate_handles();
+    ExecutionContext &exec_ctx = *execution_context_;
     const c10::Device runtime_device = exec_ctx.device();
 
     synchronize_for_profile(runtime_device);

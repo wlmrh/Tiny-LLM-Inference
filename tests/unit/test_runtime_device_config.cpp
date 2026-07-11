@@ -1,7 +1,5 @@
 #include "tiny_llm/core/allocator.h"
 #include "tiny_llm/core/context.h"
-#include "tiny_llm/runtime/engine_args.h"
-#include "tiny_llm/runtime/execution_context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/parallel_config.h"
 
@@ -28,22 +26,14 @@ TEST(RuntimeDeviceConfigTest, RuntimeObjectsCarryCpuDeviceConfig)
     EXPECT_TRUE(kv.parallel_config().is_cpu());
     EXPECT_TRUE(kv.device().is_cpu());
 
-    tiny_llm::EngineArgs args;
-    args.workspace = &workspace;
-    args.parallel_config = tiny_llm::ParallelConfig::cpu();
-    tiny_llm::initialize_global_execution_context(args, &kv);
-    tiny_llm::ExecutionContext &ctx = tiny_llm::require_global_execution_context("RuntimeDeviceConfigTest");
+    tiny_llm::ExecutionContext ctx(nullptr, &workspace, &kv, tiny_llm::ParallelConfig::cpu());
     EXPECT_TRUE(ctx.parallel_config().is_cpu());
     EXPECT_TRUE(ctx.device().is_cpu());
-    tiny_llm::reset_global_execution_context();
 }
 
-TEST(RuntimeDeviceConfigTest, RejectsMismatchedWorkspaceDevice)
+TEST(RuntimeDeviceConfigTest, ExecutionContextUsesExplicitDeviceConfig)
 {
     tiny_llm::StackAllocator workspace(1024, tiny_llm::ParallelConfig::cpu());
-    tiny_llm::EngineArgs args;
-    args.workspace = &workspace;
-    args.parallel_config = tiny_llm::ParallelConfig::cuda(0);
-    EXPECT_THROW(tiny_llm::initialize_global_execution_context(args, nullptr), std::runtime_error);
-    tiny_llm::reset_global_execution_context();
+    tiny_llm::ExecutionContext ctx(nullptr, &workspace, nullptr, tiny_llm::ParallelConfig::cpu());
+    EXPECT_TRUE(ctx.device().is_cpu());
 }

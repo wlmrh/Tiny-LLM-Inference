@@ -2,7 +2,6 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
-#include "tiny_llm/runtime/execution_context.h"
 
 #include <cmath>
 #include <limits>
@@ -108,10 +107,12 @@ void validate_rmsnorm_inputs(const Tensor &x, const Tensor &w, const Tensor &y, 
     }
 }
 
+#if !TINYLLM_ENABLE_CUDA
 bool any_cuda_tensor(const Tensor &x, const Tensor &w, const Tensor &y)
 {
     return x.device().is_cuda() || w.device().is_cuda() || y.device().is_cuda();
 }
+#endif
 
 void validate_same_device(const Tensor &x, const Tensor &w, const Tensor &y)
 {
@@ -139,7 +140,7 @@ void rmsnorm(const Tensor &x, const Tensor &w, Tensor &y, ExecutionContext &ctx,
 #if TINYLLM_ENABLE_CUDA
     if (x.device().is_cuda())
     {
-        const cudaStream_t stream = resolve_execution_context(ctx).stream();
+        const cudaStream_t stream = ctx.stream();
         cuda::launch_rmsnorm_f32(x_ptr, w_ptr, y_ptr, shape.B, shape.D, eps, stream);
         return;
     }

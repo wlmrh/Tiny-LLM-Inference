@@ -4,7 +4,6 @@
 
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
-#include "tiny_llm/runtime/execution_context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 
 #include <cstdlib>
@@ -431,8 +430,7 @@ void attention_paged(const Tensor &q, Tensor &out, ExecutionContext &ctx)
     if (q.device().is_cuda() && out.device().is_cuda())
     {
         namespace cuda = tiny_llm::ops::cuda;
-        cuda::launch_attention_paged_f32(q_ptr, out_ptr, static_cast<int64_t>(tensor_numel(q)),
-                                         resolve_execution_context(ctx).stream());
+        cuda::launch_attention_paged_f32(q_ptr, out_ptr, static_cast<int64_t>(tensor_numel(q)), ctx.stream());
         return;
     }
 #endif

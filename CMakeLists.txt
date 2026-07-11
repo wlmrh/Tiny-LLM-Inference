@@ -303,7 +303,6 @@ add_library(tiny_llm STATIC
     src/runtime/tokenizer.cpp
     src/runtime/parallel_config.cpp
     src/runtime/scheduler.cpp
-    src/runtime/execution_context.cpp
     src/runtime/sampler.cpp
     src/runtime/profiling.cpp
     src/runtime/runtime_stats.cpp
