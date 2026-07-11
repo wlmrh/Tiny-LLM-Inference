@@ -70,22 +70,37 @@ void add_bias_to_output_slice(Tensor &output, int32_t output_offset, int32_t out
     output.narrow(1, output_offset, out_features).add_(bias);
 }
 
-void run_matmul(const Tensor &input, const Tensor &weight, WeightLayout layout, Tensor &output, ExecutionContext &ctx)
+void run_matmul(const Tensor &input, const Tensor &weight, WeightLayout layout, Tensor &output, ExecutionContext &ctx,
+                Tensor *bf16_weight_cache = nullptr)
 {
     if (input.device() != weight.device() || input.device() != output.device())
     {
         throw std::runtime_error("modules::Linear::forward: input, weight, and output devices must match.");
     }
-    const Tensor rhs = layout == WeightLayout::kOutIn ? weight.transpose(0, 1) : weight;
     if (ctx.compute_dtype() == RuntimeDType::kBFloat16)
     {
         if (!input.device().is_cuda())
         {
             throw std::runtime_error("modules::Linear::forward: bfloat16 compute requires CUDA tensors.");
         }
-        output.copy_(torch::matmul(input.to(torch::kBFloat16), rhs.to(torch::kBFloat16)).to(torch::kFloat32));
+        Tensor bf16_weight;
+        if (bf16_weight_cache != nullptr)
+        {
+            if (!bf16_weight_cache->defined())
+            {
+                *bf16_weight_cache = weight.to(torch::kBFloat16);
+            }
+            bf16_weight = *bf16_weight_cache;
+        }
+        else
+        {
+            bf16_weight = weight.to(torch::kBFloat16);
+        }
+        const Tensor rhs = layout == WeightLayout::kOutIn ? bf16_weight.transpose(0, 1) : bf16_weight;
+        output.copy_(torch::matmul(input.to(torch::kBFloat16), rhs).to(torch::kFloat32));
         return;
     }
+    const Tensor rhs = layout == WeightLayout::kOutIn ? weight.transpose(0, 1) : weight;
     at::mm_out(output, input, rhs);
 }
 
@@ -142,6 +157,8 @@ void Linear::bind_weight(const Tensor &weight, WeightLayout layout)
     stacked_weights_.clear();
     stacked_weight_cache_ = Tensor{};
     stacked_bias_cache_ = Tensor{};
+    single_weight_bf16_cache_ = Tensor{};
+    stacked_weight_bf16_cache_ = Tensor{};
     use_stacked_weights_ = false;
 }
 
@@ -170,6 +187,8 @@ void Linear::bind_weight(float *weight, int32_t out_features, int32_t in_feature
     stacked_weights_.clear();
     stacked_weight_cache_ = Tensor{};
     stacked_bias_cache_ = Tensor{};
+    single_weight_bf16_cache_ = Tensor{};
+    stacked_weight_bf16_cache_ = Tensor{};
     use_stacked_weights_ = false;
 }
 
@@ -177,6 +196,8 @@ void Linear::bind_stacked_weights(const StackedWeightDesc *descs, int32_t count)
 {
     validate_descs(descs, count);
     stacked_weights_.clear();
+    single_weight_bf16_cache_ = Tensor{};
+    stacked_weight_bf16_cache_ = Tensor{};
     stacked_weights_.reserve(static_cast<size_t>(count));
     for (int32_t i = 0; i < count; ++i)
     {
@@ -226,12 +247,12 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
         if (single_weight_.layout == WeightLayout::kInOut)
         {
             Tensor weight = make_weight_tensor(single_weight_);
-            run_matmul(input, weight, single_weight_.layout, output, ctx);
+            run_matmul(input, weight, single_weight_.layout, output, ctx, &single_weight_bf16_cache_);
             return;
         }
 
         Tensor weight = make_weight_tensor(single_weight_);
-        run_matmul(input, weight, single_weight_.layout, output, ctx);
+        run_matmul(input, weight, single_weight_.layout, output, ctx, &single_weight_bf16_cache_);
         return;
     }
 
@@ -239,11 +260,13 @@ void Linear::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx)
     {
         if (stacked_weight_cache_layout_ == WeightLayout::kInOut)
         {
-            run_matmul(input, stacked_weight_cache_, stacked_weight_cache_layout_, output, ctx);
+            run_matmul(input, stacked_weight_cache_, stacked_weight_cache_layout_, output, ctx,
+                       &stacked_weight_bf16_cache_);
         }
         else
         {
-            run_matmul(input, stacked_weight_cache_, stacked_weight_cache_layout_, output, ctx);
+            run_matmul(input, stacked_weight_cache_, stacked_weight_cache_layout_, output, ctx,
+                       &stacked_weight_bf16_cache_);
         }
         if (stacked_bias_cache_.defined())
         {
@@ -312,6 +335,7 @@ void Linear::validate_forward_inputs(const Tensor &input, const Tensor &output) 
 void Linear::build_stacked_weight_cache()
 {
     stacked_weight_cache_ = Tensor{};
+    stacked_weight_bf16_cache_ = Tensor{};
     stacked_bias_cache_ = Tensor{};
     if (stacked_weights_.empty() || !stacked_weight_cache_enabled())
     {

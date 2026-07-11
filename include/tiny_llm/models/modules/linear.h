@@ -57,8 +57,10 @@ class Linear : public torch::nn::Module
     void build_stacked_weight_cache();
 
     StackedWeightDesc single_weight_{};
+    mutable Tensor single_weight_bf16_cache_;
     std::vector<StackedWeightDesc> stacked_weights_;
     Tensor stacked_weight_cache_;
+    mutable Tensor stacked_weight_bf16_cache_;
     Tensor stacked_bias_cache_;
     WeightLayout stacked_weight_cache_layout_ = WeightLayout::kInOut;
     bool use_stacked_weights_ = false;
