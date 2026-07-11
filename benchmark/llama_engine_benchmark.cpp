@@ -654,8 +654,7 @@ void validate_model_dir(const std::filesystem::path &model_dir)
 
 void print_usage(const char *argv0)
 {
-    std::cerr << "usage: " << argv0
-              << " [--device cpu|cuda[:id]] [--dtype fp32|bf16] [--kv-cache-dtype fp32|bf16]"
+    std::cerr << "usage: " << argv0 << " [--device cpu|cuda[:id]] [--dtype fp32|bf16] [--kv-cache-dtype fp32|bf16]"
               << " [--warmup N] [--repeat N]"
               << " [--max-new-tokens N] [--kv-num-blocks N]"
               << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
