@@ -4,23 +4,19 @@
 
 #include <stdexcept>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-LLMEngine::LLMEngine(const EngineArgs& args)
-    : core_(std::make_unique<EngineCore>(args)),
-    input_preprocessor_(args),
-    output_preprocessor_(args)
+LLMEngine::LLMEngine(const EngineArgs &args)
+    : core_(std::make_unique<EngineCore>(args)), input_preprocessor_(args), output_preprocessor_(args)
 {
 }
 
 LLMEngine::~LLMEngine() = default;
 
-uint64_t LLMEngine::add_request(const std::string& prompt,
-                                const UserSamplingParams& user_params)
+uint64_t LLMEngine::add_request(const std::string &prompt, const UserSamplingParams &user_params)
 {
-    EngineCoreRequest request = input_preprocessor_.process_inputs(
-        prompt,
-        user_params);
+    EngineCoreRequest request = input_preprocessor_.process_inputs(prompt, user_params);
 
     core_->add_request(request);
     output_preprocessor_.add_request(request);

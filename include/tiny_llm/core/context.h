@@ -2,9 +2,11 @@
 #include <c10/core/Device.h>
 
 #include "tiny_llm/runtime/parallel_config.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 #include "utils/cuda_compat.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class StackAllocator;
 class KVCache;
@@ -17,19 +19,24 @@ class KVCache;
  * - Workspace tensors are valid only within the current step.
  * - After begin_step(), previous workspace allocations are invalid.
  */
-class ExecutionContext {
-public:
+class ExecutionContext
+{
+  public:
     /**
      * @struct StepGuard
      * @brief RAII helper that starts a new step on construction.
      */
-    struct StepGuard {
-        ExecutionContext& ctx;
+    struct StepGuard
+    {
+        ExecutionContext &ctx;
 
         /**
          * @brief Construct guard and call begin_step().
          */
-        explicit StepGuard(ExecutionContext& c) : ctx(c) { ctx.begin_step(); }
+        explicit StepGuard(ExecutionContext &c) : ctx(c)
+        {
+            ctx.begin_step();
+        }
         ~StepGuard() = default;
     };
 
@@ -39,36 +46,57 @@ public:
      * @param ws Optional per-step workspace allocator (non-owning).
      * @param kv Optional KV cache handle (non-owning).
      */
-    ExecutionContext(cudaStream_t stream,
-                     StackAllocator* ws,
-                     KVCache* kv,
-                     ParallelConfig parallel_config = ParallelConfig::cpu())
-        : stream_(stream), ws_(ws), kv_(kv), parallel_config_(parallel_config) {}
+    ExecutionContext(cudaStream_t stream, StackAllocator *ws, KVCache *kv,
+                     ParallelConfig parallel_config = ParallelConfig::cpu(),
+                     RuntimeDType compute_dtype = RuntimeDType::kFloat32)
+        : stream_(stream), ws_(ws), kv_(kv), parallel_config_(parallel_config), compute_dtype_(compute_dtype)
+    {
+    }
 
     /**
      * @brief Get bound CUDA stream.
      */
-    cudaStream_t stream() const { return stream_; }
+    cudaStream_t stream() const
+    {
+        return stream_;
+    }
 
     /**
      * @brief Get workspace allocator handle.
      */
-    StackAllocator* workspace() const { return ws_; }
+    StackAllocator *workspace() const
+    {
+        return ws_;
+    }
 
     /**
      * @brief Get KV cache handle.
      */
-    KVCache* kv() const { return kv_; }
+    KVCache *kv() const
+    {
+        return kv_;
+    }
 
     /**
      * @brief Get runtime device and future parallelism configuration.
      */
-    const ParallelConfig& parallel_config() const { return parallel_config_; }
+    const ParallelConfig &parallel_config() const
+    {
+        return parallel_config_;
+    }
 
     /**
      * @brief Get the torch device selected for runtime tensors.
      */
-    c10::Device device() const { return parallel_config_.torch_device(); }
+    c10::Device device() const
+    {
+        return parallel_config_.torch_device();
+    }
+
+    RuntimeDType compute_dtype() const
+    {
+        return compute_dtype_;
+    }
 
     /**
      * @brief Start a new step and recycle temporary workspace allocations.
@@ -78,17 +106,21 @@ public:
     /**
      * @brief Create RAII step guard that immediately calls begin_step().
      */
-    StepGuard step_guard() { return StepGuard(*this); }
+    StepGuard step_guard()
+    {
+        return StepGuard(*this);
+    }
 
-private:
+  private:
     /// Stream used for asynchronous CUDA execution.
     cudaStream_t stream_{0};
     /// Non-owning workspace allocator pointer.
-    StackAllocator* ws_{nullptr};
+    StackAllocator *ws_{nullptr};
     /// Non-owning KV cache pointer.
-    KVCache* kv_{nullptr};
+    KVCache *kv_{nullptr};
     /// Runtime device and v1 single-device parallel configuration.
     ParallelConfig parallel_config_{};
+    RuntimeDType compute_dtype_ = RuntimeDType::kFloat32;
 };
 
 } // namespace tiny_llm

@@ -1,16 +1,17 @@
-#include "tiny_llm/runtime/kv_cache_manager.h"
-#include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/core/allocator.h"
+#include "tiny_llm/runtime/kv_cache.h"
+#include "tiny_llm/runtime/kv_cache_manager.h"
 
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include <vector>
 
-namespace {
+namespace
+{
 constexpr int32_t kNumLayers = 2;
 constexpr int32_t kBlockSizeTokens = 2;
 constexpr size_t kBlockBytes = 64;
-}
+} // namespace
 
 TEST(KVCacheManagerTest, AllocatesAndRefreshesPerLayerBlockTables)
 {

@@ -79,9 +79,8 @@ Responsibilities:
 
 - `llama_attention_forward(const LlamaAttentionParams& params)`: primary model path.
 - `llama_attention(...)`: convenience wrapper that builds `LlamaAttentionParams`.
-- `attention_paged(q, out, ctx)`: legacy entry point.
-- `set_paged_attention_runtime_metadata(...)`, `clear_paged_attention_runtime_metadata()`, `current_paged_attention_runtime_metadata()`: legacy thread-local metadata API.
-- `PagedAttentionRuntimeMetadataGuard`: RAII guard for legacy metadata.
+
+Paged KV metadata is passed explicitly through `LlamaAttentionParams`; the operator does not depend on thread-local state.
 
 ## Attention Behavior
 

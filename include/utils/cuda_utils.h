@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace tiny_llm {
-namespace utils {
+namespace tiny_llm
+{
+namespace utils
+{
 
-inline void check_cuda(cudaError_t error_code, const char* file, int line)
+inline void check_cuda(cudaError_t error_code, const char *file, int line)
 {
     if (error_code != cudaSuccess)
     {

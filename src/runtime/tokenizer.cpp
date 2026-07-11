@@ -6,32 +6,36 @@
 #if __has_include(<tokenizers_cpp.h>)
 #include <tokenizers_cpp.h>
 #else
-namespace tokenizers {
-class Tokenizer {
-public:
+namespace tokenizers
+{
+class Tokenizer
+{
+  public:
     virtual ~Tokenizer() = default;
-    virtual std::vector<int32_t> Encode(const std::string& text) = 0;
-    virtual std::string Decode(const std::vector<int32_t>& ids) = 0;
+    virtual std::vector<int32_t> Encode(const std::string &text) = 0;
+    virtual std::string Decode(const std::vector<int32_t> &ids) = 0;
     virtual size_t GetVocabSize() = 0;
     virtual std::string IdToToken(int32_t token_id) = 0;
-    virtual int32_t TokenToId(const std::string& token) = 0;
-    static std::unique_ptr<Tokenizer> FromBlobJSON(const std::string& json_blob);
-    static std::unique_ptr<Tokenizer> FromBlobSentencePiece(const std::string& model_blob);
+    virtual int32_t TokenToId(const std::string &token) = 0;
+    static std::unique_ptr<Tokenizer> FromBlobJSON(const std::string &json_blob);
+    static std::unique_ptr<Tokenizer> FromBlobSentencePiece(const std::string &model_blob);
 };
 } // namespace tokenizers
 #endif
 #else
-namespace tokenizers {
-class Tokenizer {
-public:
+namespace tokenizers
+{
+class Tokenizer
+{
+  public:
     virtual ~Tokenizer() = default;
-    virtual std::vector<int32_t> Encode(const std::string& text) = 0;
-    virtual std::string Decode(const std::vector<int32_t>& ids) = 0;
+    virtual std::vector<int32_t> Encode(const std::string &text) = 0;
+    virtual std::string Decode(const std::vector<int32_t> &ids) = 0;
     virtual size_t GetVocabSize() = 0;
     virtual std::string IdToToken(int32_t token_id) = 0;
-    virtual int32_t TokenToId(const std::string& token) = 0;
-    static std::unique_ptr<Tokenizer> FromBlobJSON(const std::string& json_blob);
-    static std::unique_ptr<Tokenizer> FromBlobSentencePiece(const std::string& model_blob);
+    virtual int32_t TokenToId(const std::string &token) = 0;
+    static std::unique_ptr<Tokenizer> FromBlobJSON(const std::string &json_blob);
+    static std::unique_ptr<Tokenizer> FromBlobSentencePiece(const std::string &model_blob);
 };
 } // namespace tokenizers
 #endif
@@ -43,11 +47,13 @@ public:
 #include <sstream>
 #include <stdexcept>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-namespace {
+namespace
+{
 
-std::string read_text_file(const std::string& path, const std::string& error_prefix)
+std::string read_text_file(const std::string &path, const std::string &error_prefix)
 {
     std::ifstream fin(path);
     if (!fin)
@@ -60,8 +66,8 @@ std::string read_text_file(const std::string& path, const std::string& error_pre
     return ss.str();
 }
 
-std::optional<hf_json::Value> parse_optional_json_file(const std::filesystem::path& path,
-                                                       const std::string& error_prefix)
+std::optional<hf_json::Value> parse_optional_json_file(const std::filesystem::path &path,
+                                                       const std::string &error_prefix)
 {
     if (!std::filesystem::exists(path))
     {
@@ -70,11 +76,10 @@ std::optional<hf_json::Value> parse_optional_json_file(const std::filesystem::pa
     return hf_json::parse(read_text_file(path.string(), error_prefix), error_prefix);
 }
 
-std::optional<std::string> read_optional_token_content_field(const hf_json::Value& root,
-                                                             const std::string& key,
-                                                             const std::string& error_prefix)
+std::optional<std::string> read_optional_token_content_field(const hf_json::Value &root, const std::string &key,
+                                                             const std::string &error_prefix)
 {
-    const hf_json::Value* value = hf_json::find_object_field(root, key, error_prefix);
+    const hf_json::Value *value = hf_json::find_object_field(root, key, error_prefix);
     if (value == nullptr)
     {
         return std::nullopt;
@@ -88,7 +93,7 @@ std::optional<std::string> read_optional_token_content_field(const hf_json::Valu
         return value->as_string(error_prefix + ": " + key);
     }
 
-    const hf_json::Value* content = hf_json::find_object_field(*value, "content", error_prefix + ": " + key);
+    const hf_json::Value *content = hf_json::find_object_field(*value, "content", error_prefix + ": " + key);
     if (content == nullptr)
     {
         return std::nullopt;
@@ -96,14 +101,15 @@ std::optional<std::string> read_optional_token_content_field(const hf_json::Valu
     return content->as_string(error_prefix + ": " + key + ".content");
 }
 
-struct HFSpecialTokenStrings {
+struct HFSpecialTokenStrings
+{
     std::optional<std::string> bos;
     std::optional<std::string> eos;
     std::optional<std::string> unk;
 };
 
-HFSpecialTokenStrings load_hf_special_token_strings(const std::filesystem::path& model_dir,
-                                                    const std::string& error_prefix)
+HFSpecialTokenStrings load_hf_special_token_strings(const std::filesystem::path &model_dir,
+                                                    const std::string &error_prefix)
 {
     HFSpecialTokenStrings out;
 
@@ -137,12 +143,9 @@ HFSpecialTokenStrings load_hf_special_token_strings(const std::filesystem::path&
     return out;
 }
 
-int32_t resolve_special_token_id(const char* token_name,
-                                 const std::optional<std::string>& token_string,
-                                 int32_t config_id,
-                                 tokenizers::Tokenizer* tokenizer,
-                                 bool required,
-                                 const std::string& error_prefix)
+int32_t resolve_special_token_id(const char *token_name, const std::optional<std::string> &token_string,
+                                 int32_t config_id, tokenizers::Tokenizer *tokenizer, bool required,
+                                 const std::string &error_prefix)
 {
     if (tokenizer == nullptr)
     {
@@ -173,17 +176,10 @@ int32_t resolve_special_token_id(const char* token_name,
 
 } // namespace
 
-struct HFLlamaTokenizer::Impl {
-    Impl(std::unique_ptr<tokenizers::Tokenizer> tokenizer_handle,
-         int32_t vocab,
-         int32_t bos,
-         int32_t eos,
-         int32_t unk)
-        : tokenizer(std::move(tokenizer_handle)),
-          vocab_size(vocab),
-          bos_id(bos),
-          eos_id(eos),
-          unk_id(unk)
+struct HFLlamaTokenizer::Impl
+{
+    Impl(std::unique_ptr<tokenizers::Tokenizer> tokenizer_handle, int32_t vocab, int32_t bos, int32_t eos, int32_t unk)
+        : tokenizer(std::move(tokenizer_handle)), vocab_size(vocab), bos_id(bos), eos_id(eos), unk_id(unk)
     {
         if (!tokenizer)
         {
@@ -193,9 +189,8 @@ struct HFLlamaTokenizer::Impl {
         {
             throw std::runtime_error("HFLlamaTokenizer: vocab size must be positive.");
         }
-        if (bos_id < 0 || bos_id >= vocab_size
-            || eos_id < 0 || eos_id >= vocab_size
-            || (unk_id >= 0 && unk_id >= vocab_size))
+        if (bos_id < 0 || bos_id >= vocab_size || eos_id < 0 || eos_id >= vocab_size ||
+            (unk_id >= 0 && unk_id >= vocab_size))
         {
             throw std::runtime_error("HFLlamaTokenizer: special token id is out of vocab range.");
         }
@@ -208,9 +203,9 @@ struct HFLlamaTokenizer::Impl {
     int32_t unk_id = -1;
 };
 
-HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string& hf_model_dir)
+HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string &hf_model_dir)
 {
-    constexpr const char* kErr = "HFLlamaTokenizer::from_model_dir";
+    constexpr const char *kErr = "HFLlamaTokenizer::from_model_dir";
     if (hf_model_dir.empty())
     {
         throw std::runtime_error(std::string(kErr) + ": hf_model_dir must be non-empty.");
@@ -222,19 +217,17 @@ HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string& hf_model_di
     std::unique_ptr<tokenizers::Tokenizer> tokenizer_handle;
     if (std::filesystem::exists(tokenizer_json_path))
     {
-        tokenizer_handle = tokenizers::Tokenizer::FromBlobJSON(
-            read_text_file(tokenizer_json_path.string(), kErr));
+        tokenizer_handle = tokenizers::Tokenizer::FromBlobJSON(read_text_file(tokenizer_json_path.string(), kErr));
     }
     else if (std::filesystem::exists(tokenizer_spm_path))
     {
-        tokenizer_handle = tokenizers::Tokenizer::FromBlobSentencePiece(
-            read_text_file(tokenizer_spm_path.string(), kErr));
+        tokenizer_handle =
+            tokenizers::Tokenizer::FromBlobSentencePiece(read_text_file(tokenizer_spm_path.string(), kErr));
     }
     else
     {
-        throw std::runtime_error(std::string(kErr)
-                                 + ": neither tokenizer.json nor tokenizer.model exists in "
-                                 + hf_model_dir);
+        throw std::runtime_error(std::string(kErr) + ": neither tokenizer.json nor tokenizer.model exists in " +
+                                 hf_model_dir);
     }
 
     if (tokenizer_handle == nullptr)
@@ -246,18 +239,18 @@ HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string& hf_model_di
     const HFSpecialTokenStrings token_strings = load_hf_special_token_strings(model_dir, kErr);
     const int32_t tokenizer_vocab = static_cast<int32_t>(tokenizer_handle->GetVocabSize());
     const int32_t vocab = std::max(tokenizer_vocab, cfg.vocab_size);
-    const int32_t bos_id =
-        resolve_special_token_id("bos_token_id", token_strings.bos, cfg.bos_token_id, tokenizer_handle.get(), true, kErr);
-    const int32_t eos_id =
-        resolve_special_token_id("eos_token_id", token_strings.eos, cfg.eos_token_id, tokenizer_handle.get(), true, kErr);
-    const int32_t unk_id =
-        resolve_special_token_id("unk_token_id", token_strings.unk, cfg.unk_token_id, tokenizer_handle.get(), false, kErr);
+    const int32_t bos_id = resolve_special_token_id("bos_token_id", token_strings.bos, cfg.bos_token_id,
+                                                    tokenizer_handle.get(), true, kErr);
+    const int32_t eos_id = resolve_special_token_id("eos_token_id", token_strings.eos, cfg.eos_token_id,
+                                                    tokenizer_handle.get(), true, kErr);
+    const int32_t unk_id = resolve_special_token_id("unk_token_id", token_strings.unk, cfg.unk_token_id,
+                                                    tokenizer_handle.get(), false, kErr);
 
     auto impl = std::make_unique<Impl>(std::move(tokenizer_handle), vocab, bos_id, eos_id, unk_id);
     return HFLlamaTokenizer(std::move(impl));
 }
 
-std::vector<int32_t> HFLlamaTokenizer::encode(const std::string& text) const
+std::vector<int32_t> HFLlamaTokenizer::encode(const std::string &text) const
 {
     std::vector<int32_t> ids = impl_->tokenizer->Encode(text);
     if (ids.empty() && bos_id_ >= 0)
@@ -267,7 +260,7 @@ std::vector<int32_t> HFLlamaTokenizer::encode(const std::string& text) const
     return ids;
 }
 
-std::string HFLlamaTokenizer::decode(const std::vector<int32_t>& ids) const
+std::string HFLlamaTokenizer::decode(const std::vector<int32_t> &ids) const
 {
     return impl_->tokenizer->Decode(ids);
 }
@@ -297,8 +290,7 @@ bool HFLlamaTokenizer::is_valid_token_id(int32_t id) const
     return id >= 0 && id < vocab_size();
 }
 
-HFLlamaTokenizer::HFLlamaTokenizer(std::unique_ptr<Impl> impl)
-    : impl_(std::move(impl))
+HFLlamaTokenizer::HFLlamaTokenizer(std::unique_ptr<Impl> impl) : impl_(std::move(impl))
 {
     if (!impl_)
     {
@@ -310,7 +302,7 @@ HFLlamaTokenizer::HFLlamaTokenizer(std::unique_ptr<Impl> impl)
 }
 
 HFLlamaTokenizer::~HFLlamaTokenizer() = default;
-HFLlamaTokenizer::HFLlamaTokenizer(HFLlamaTokenizer&&) noexcept = default;
-HFLlamaTokenizer& HFLlamaTokenizer::operator=(HFLlamaTokenizer&&) noexcept = default;
+HFLlamaTokenizer::HFLlamaTokenizer(HFLlamaTokenizer &&) noexcept = default;
+HFLlamaTokenizer &HFLlamaTokenizer::operator=(HFLlamaTokenizer &&) noexcept = default;
 
 } // namespace tiny_llm

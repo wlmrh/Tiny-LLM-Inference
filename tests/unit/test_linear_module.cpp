@@ -1,35 +1,31 @@
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/models/modules/linear.h"
 
-#include <gtest/gtest.h>
 #include <cstdlib>
+#include <gtest/gtest.h>
 
 TEST(LinearModuleTest, ComputesOutInProjection)
 {
     tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
 
-    tiny_llm::Tensor input = torch::tensor(
-        {{1.0f, 2.0f, 3.0f},
-         {4.0f, 5.0f, 6.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
-    tiny_llm::Tensor weight_out_in = torch::tensor(
-        {{1.0f, 0.0f, 1.0f},
-         {0.0f, 1.0f, 1.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor input =
+        torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor weight_out_in =
+        torch::tensor({{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
 
     tiny_llm::modules::Linear linear(3, 2);
     linear.bind_weight(weight_out_in, tiny_llm::modules::WeightLayout::kOutIn);
 
     tiny_llm::Tensor output = torch::empty({2, 2}, torch::TensorOptions().dtype(torch::kFloat32));
     linear.forward(input, output, ctx);
-    const float* output_ptr = output.data_ptr<float>();
+    const float *output_ptr = output.data_ptr<float>();
     EXPECT_NEAR(output_ptr[0], 4.0f, 1e-5f);
     EXPECT_NEAR(output_ptr[1], 5.0f, 1e-5f);
     EXPECT_NEAR(output_ptr[2], 10.0f, 1e-5f);
     EXPECT_NEAR(output_ptr[3], 11.0f, 1e-5f);
 
     tiny_llm::Tensor returned_output = linear.forward(input, ctx);
-    const float* returned_ptr = returned_output.data_ptr<float>();
+    const float *returned_ptr = returned_output.data_ptr<float>();
     EXPECT_NEAR(returned_ptr[0], 4.0f, 1e-5f);
     EXPECT_NEAR(returned_ptr[3], 11.0f, 1e-5f);
 }
@@ -37,15 +33,11 @@ TEST(LinearModuleTest, ComputesOutInProjection)
 TEST(LinearModuleTest, ComputesStackedWeightsWithBias)
 {
     tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
-    tiny_llm::Tensor input = torch::tensor(
-        {{1.0f, 2.0f, 3.0f},
-         {4.0f, 5.0f, 6.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor input =
+        torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor w0 = torch::tensor({{1.0f, 1.0f, 0.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
-    tiny_llm::Tensor w1 = torch::tensor(
-        {{0.0f, 1.0f, 0.0f},
-         {0.0f, 0.0f, 1.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor w1 =
+        torch::tensor({{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor b1 = torch::tensor({10.0f, 20.0f}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::modules::StackedWeightDesc descs[2] = {
         {nullptr, 1, 3, 0, tiny_llm::modules::WeightLayout::kOutIn, w0},
@@ -57,7 +49,7 @@ TEST(LinearModuleTest, ComputesStackedWeightsWithBias)
     tiny_llm::Tensor stacked_output = torch::empty({2, 3}, torch::TensorOptions().dtype(torch::kFloat32));
     stacked_linear.forward(input, stacked_output, ctx);
 
-    const float* ptr = stacked_output.data_ptr<float>();
+    const float *ptr = stacked_output.data_ptr<float>();
     EXPECT_NEAR(ptr[0], 3.0f, 1e-5f);
     EXPECT_NEAR(ptr[1], 12.0f, 1e-5f);
     EXPECT_NEAR(ptr[2], 23.0f, 1e-5f);
@@ -66,8 +58,30 @@ TEST(LinearModuleTest, ComputesStackedWeightsWithBias)
     EXPECT_NEAR(ptr[5], 26.0f, 1e-5f);
 }
 
-
 #if TINYLLM_ENABLE_CUDA
+TEST(LinearModuleTest, CudaBFloat16ComputeReturnsFloat32Boundary)
+{
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr, tiny_llm::ParallelConfig::cuda(0),
+                                   tiny_llm::RuntimeDType::kBFloat16);
+    tiny_llm::Tensor input = torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}},
+                                           torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor weight = torch::tensor({{1.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
+                                            torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::modules::Linear linear(3, 2);
+    linear.bind_weight(weight, tiny_llm::modules::WeightLayout::kOutIn);
+
+    tiny_llm::Tensor output = linear.forward(input, ctx);
+    EXPECT_EQ(output.scalar_type(), torch::kFloat32);
+    tiny_llm::Tensor output_cpu = output.cpu();
+    EXPECT_NEAR(output_cpu[0][0].item<float>(), 4.0f, 1e-2f);
+    EXPECT_NEAR(output_cpu[1][1].item<float>(), 11.0f, 1e-2f);
+}
+
 TEST(LinearModuleTest, CudaStackedWeightsUseCombinedMatmulPath)
 {
     if (!torch::cuda::is_available())
@@ -76,15 +90,11 @@ TEST(LinearModuleTest, CudaStackedWeightsUseCombinedMatmulPath)
     }
 
     tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
-    tiny_llm::Tensor input_cpu = torch::tensor(
-        {{1.0f, 2.0f, 3.0f},
-         {4.0f, 5.0f, 6.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor input_cpu =
+        torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor w0_cpu = torch::tensor({{1.0f, 1.0f, 0.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
-    tiny_llm::Tensor w1_cpu = torch::tensor(
-        {{0.0f, 1.0f, 0.0f},
-         {0.0f, 0.0f, 1.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32));
+    tiny_llm::Tensor w1_cpu =
+        torch::tensor({{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}}, torch::TensorOptions().dtype(torch::kFloat32));
     tiny_llm::Tensor b1_cpu = torch::tensor({10.0f, 20.0f}, torch::TensorOptions().dtype(torch::kFloat32));
 
     tiny_llm::Tensor input = input_cpu.to(torch::kCUDA);
@@ -102,7 +112,7 @@ TEST(LinearModuleTest, CudaStackedWeightsUseCombinedMatmulPath)
     stacked_linear.forward(input, output, ctx);
     tiny_llm::Tensor output_cpu = output.to(torch::kCPU).contiguous();
 
-    const float* ptr = output_cpu.data_ptr<float>();
+    const float *ptr = output_cpu.data_ptr<float>();
     EXPECT_NEAR(ptr[0], 3.0f, 1e-5f);
     EXPECT_NEAR(ptr[1], 12.0f, 1e-5f);
     EXPECT_NEAR(ptr[2], 23.0f, 1e-5f);
@@ -119,20 +129,14 @@ TEST(LinearModuleTest, CudaStackedWeightsCanDisableCombinedCache)
 
     setenv("TINYLLM_QKV_STACKED_CACHE", "0", 1);
     tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
-    tiny_llm::Tensor input = torch::tensor(
-        {{1.0f, 2.0f, 3.0f},
-         {4.0f, 5.0f, 6.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-    tiny_llm::Tensor w0 = torch::tensor(
-        {{1.0f, 1.0f, 0.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-    tiny_llm::Tensor w1 = torch::tensor(
-        {{0.0f, 1.0f, 0.0f},
-         {0.0f, 0.0f, 1.0f}},
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-    tiny_llm::Tensor b1 = torch::tensor(
-        {10.0f, 20.0f},
-        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor input = torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}},
+                                           torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor w0 =
+        torch::tensor({{1.0f, 1.0f, 0.0f}}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor w1 = torch::tensor({{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+                                        torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    tiny_llm::Tensor b1 =
+        torch::tensor({10.0f, 20.0f}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     tiny_llm::modules::StackedWeightDesc descs[2] = {
         {nullptr, 1, 3, 0, tiny_llm::modules::WeightLayout::kOutIn, w0},
         {nullptr, 2, 3, 1, tiny_llm::modules::WeightLayout::kOutIn, w1, b1},
@@ -145,7 +149,7 @@ TEST(LinearModuleTest, CudaStackedWeightsCanDisableCombinedCache)
     unsetenv("TINYLLM_QKV_STACKED_CACHE");
     tiny_llm::Tensor output_cpu = output.to(torch::kCPU).contiguous();
 
-    const float* ptr = output_cpu.data_ptr<float>();
+    const float *ptr = output_cpu.data_ptr<float>();
     EXPECT_NEAR(ptr[0], 3.0f, 1e-5f);
     EXPECT_NEAR(ptr[1], 12.0f, 1e-5f);
     EXPECT_NEAR(ptr[2], 23.0f, 1e-5f);

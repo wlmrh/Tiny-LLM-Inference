@@ -1,8 +1,22 @@
-cmake_minimum_required(VERSION 3.18)
-project(TinyLLMInference LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.20)
+project(TinyLLMInference VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(_tinyllm_developer_default OFF)
+if (PROJECT_IS_TOP_LEVEL)
+    set(_tinyllm_developer_default ON)
+endif()
+
+option(BUILD_TESTING "Build TinyLLM tests" ${_tinyllm_developer_default})
+option(TINYLLM_BUILD_EXAMPLES "Build TinyLLM examples" ${_tinyllm_developer_default})
+option(TINYLLM_BUILD_TOOLS "Build TinyLLM debugging tools" ${_tinyllm_developer_default})
+option(TINYLLM_BUILD_BENCHMARKS "Build TinyLLM benchmarks" ${_tinyllm_developer_default})
+option(TINYLLM_WARNINGS_AS_ERRORS "Treat TinyLLM compiler warnings as errors" OFF)
+
+include(CTest)
 
 # 是否启用 CUDA 编译
 option(TINYLLM_ENABLE_CUDA "Enable CUDA backend" OFF)
@@ -274,7 +288,7 @@ endif()
 FetchContent_Declare(
     tokenizers_cpp
     GIT_REPOSITORY https://github.com/mlc-ai/tokenizers-cpp.git
-    GIT_TAG main
+    GIT_TAG acbdc5a27ae01ba74cda756f94da698d40f11dfe
 )
 FetchContent_MakeAvailable(tokenizers_cpp)
 
@@ -289,7 +303,6 @@ add_library(tiny_llm STATIC
     src/runtime/tokenizer.cpp
     src/runtime/parallel_config.cpp
     src/runtime/scheduler.cpp
-    src/runtime/execution_context.cpp
     src/runtime/sampler.cpp
     src/runtime/profiling.cpp
     src/runtime/runtime_stats.cpp
@@ -322,6 +335,19 @@ add_library(tiny_llm STATIC
 )
 
 target_include_directories(tiny_llm PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+add_library(TinyLLM::tiny_llm ALIAS tiny_llm)
+
+if (MSVC)
+    target_compile_options(tiny_llm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
+    if (TINYLLM_WARNINGS_AS_ERRORS)
+        target_compile_options(tiny_llm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/WX>)
+    endif()
+else()
+    target_compile_options(tiny_llm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>)
+    if (TINYLLM_WARNINGS_AS_ERRORS)
+        target_compile_options(tiny_llm PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Werror>)
+    endif()
+endif()
 
 # 绑定后端实现与链接库
 if (TINYLLM_ENABLE_CUDA)
@@ -352,10 +378,19 @@ add_library(tiny_llm_operators ALIAS tiny_llm)
 # ==============================================================================
 # 4. 编译最终的可执行文件
 # ==============================================================================
-add_executable(offline_llm examples/offline_llm.cpp)
-target_link_libraries(offline_llm PRIVATE tiny_llm)
+if (TINYLLM_BUILD_EXAMPLES)
+    add_executable(offline_llm examples/offline_llm.cpp)
+    target_link_libraries(offline_llm PRIVATE TinyLLM::tiny_llm)
+endif()
 
-add_subdirectory(benchmark)
+if (TINYLLM_BUILD_BENCHMARKS)
+    add_subdirectory(benchmark)
+endif()
 
-include(CTest)
-add_subdirectory(tests)
+if (TINYLLM_BUILD_TOOLS OR BUILD_TESTING)
+    add_subdirectory(tools)
+endif()
+
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

@@ -6,13 +6,12 @@
 #include <stdexcept>
 #include <utility>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-EngineCore::EngineCore(const EngineArgs& args)
+EngineCore::EngineCore(const EngineArgs &args)
     : scheduler_(std::make_unique<Scheduler>(args)),
-      runner_(std::make_unique<ModelRunner>(
-          args,
-          scheduler_->kv_cache()))
+      runner_(std::make_unique<ModelRunner>(args, scheduler_->kv_cache()))
 {
     if (args.max_generated_tokens <= 0)
     {
@@ -27,7 +26,7 @@ EngineCore::EngineCore(const EngineArgs& args)
 
 EngineCore::~EngineCore() = default;
 
-void EngineCore::add_request(const EngineCoreRequest& request)
+void EngineCore::add_request(const EngineCoreRequest &request)
 {
     if (!scheduler_ || !runner_)
     {

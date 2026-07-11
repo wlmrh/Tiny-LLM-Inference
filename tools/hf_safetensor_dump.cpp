@@ -12,9 +12,10 @@
 #include "tiny_llm/models/hf_safetensors_loader.h"
 #include "tiny_llm/models/llama_weight_map.h"
 
-namespace {
+namespace
+{
 
-std::string shape_to_csv(const std::vector<int64_t>& shape)
+std::string shape_to_csv(const std::vector<int64_t> &shape)
 {
     if (shape.empty())
     {
@@ -33,7 +34,7 @@ std::string shape_to_csv(const std::vector<int64_t>& shape)
     return out;
 }
 
-std::string first_values_to_csv(const float* data, int64_t numel, int32_t count)
+std::string first_values_to_csv(const float *data, int64_t numel, int32_t count)
 {
     if (data == nullptr || numel <= 0 || count <= 0)
     {
@@ -54,7 +55,7 @@ std::string first_values_to_csv(const float* data, int64_t numel, int32_t count)
     return out.str();
 }
 
-void print_tensor_digest(const tiny_llm::HFSafeTensorLoader& loader, const std::string& key)
+void print_tensor_digest(const tiny_llm::HFSafeTensorLoader &loader, const std::string &key)
 {
     if (!loader.has_tensor(key))
     {
@@ -69,7 +70,7 @@ void print_tensor_digest(const tiny_llm::HFSafeTensorLoader& loader, const std::
 
     const std::vector<int64_t> shape = tiny_llm::tensor_shape(tensor);
     const int64_t numel = static_cast<int64_t>(tiny_llm::tensor_numel(tensor));
-    const float* data = tensor.data_ptr<float>();
+    const float *data = tensor.data_ptr<float>();
 
     double sum = 0.0;
     double l2 = 0.0;
@@ -80,17 +81,13 @@ void print_tensor_digest(const tiny_llm::HFSafeTensorLoader& loader, const std::
         l2 += value * value;
     }
 
-    std::cout << key << "\t"
-              << shape_to_csv(shape) << "\t"
-              << numel << "\t"
-              << std::setprecision(16) << sum << "\t"
-              << std::setprecision(16) << l2 << "\t"
-              << first_values_to_csv(data, numel, 8) << "\n";
+    std::cout << key << "\t" << shape_to_csv(shape) << "\t" << numel << "\t" << std::setprecision(16) << sum << "\t"
+              << std::setprecision(16) << l2 << "\t" << first_values_to_csv(data, numel, 8) << "\n";
 }
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     const std::string model_dir = (argc > 1) ? argv[1] : "/Users/tangqi/models/smollm2-135M";
     const std::string weight_file = (argc > 2) ? argv[2] : "model.safetensors";
@@ -122,12 +119,12 @@ int main(int argc, char** argv)
             keys.push_back("model.layers.1.self_attn.q_proj.weight");
         }
 
-        for (const std::string& key : keys)
+        for (const std::string &key : keys)
         {
             print_tensor_digest(loader, key);
         }
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         std::cerr << ex.what() << std::endl;
         return 1;

@@ -8,9 +8,11 @@
 
 #include "tiny_llm/core/tensor.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-struct HFSafeTensorInfo {
+struct HFSafeTensorInfo
+{
     std::vector<int64_t> shape;
     DType dtype = DType::kFloat32;
     std::string storage_dtype = "F32";
@@ -18,20 +20,24 @@ struct HFSafeTensorInfo {
     size_t byte_size = 0;
 };
 
-class HFSafeTensorLoader {
-public:
-    static HFSafeTensorLoader from_file(const std::string& path);
+class HFSafeTensorLoader
+{
+  public:
+    static HFSafeTensorLoader from_file(const std::string &path);
 
-    bool has_tensor(const std::string& key) const;
-    Tensor tensor(const std::string& key) const;
-    std::vector<int64_t> shape(const std::string& key) const;
-    DType dtype(const std::string& key) const;
+    bool has_tensor(const std::string &key) const;
+    Tensor tensor(const std::string &key) const;
+    std::vector<int64_t> shape(const std::string &key) const;
+    DType dtype(const std::string &key) const;
     std::vector<std::string> keys() const;
 
-    const std::string& file_path() const { return file_path_; }
+    const std::string &file_path() const
+    {
+        return file_path_;
+    }
 
-private:
-    const HFSafeTensorInfo& require_tensor_info(const std::string& key) const;
+  private:
+    const HFSafeTensorInfo &require_tensor_info(const std::string &key) const;
 
     std::string file_path_;
     std::vector<uint8_t> raw_file_;

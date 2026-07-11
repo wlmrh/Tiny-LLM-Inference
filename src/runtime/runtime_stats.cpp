@@ -2,9 +2,10 @@
 
 #include <algorithm>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-void RuntimeProfilingStats::add(const RuntimeProfilingStats& other)
+void RuntimeProfilingStats::add(const RuntimeProfilingStats &other)
 {
     prepare_inputs_ms += other.prepare_inputs_ms;
     prefill_ms += other.prefill_ms;

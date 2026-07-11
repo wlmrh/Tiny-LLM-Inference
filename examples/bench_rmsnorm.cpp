@@ -15,9 +15,10 @@
 #include "tiny_llm/operators/rmsnorm.h"
 #include "utils/cuda_utils.h"
 #include <nvtx3/nvToolsExt.h>
-namespace {
+namespace
+{
 // input string that represents the value of varient name
-int parse_int_arg(const char* s, const char* name)
+int parse_int_arg(const char *s, const char *name)
 {
     const int v = std::atoi(s);
     if (v <= 0)
@@ -27,7 +28,7 @@ int parse_int_arg(const char* s, const char* name)
     return v;
 }
 
-float parse_float_arg(const char* s, const char* name)
+float parse_float_arg(const char *s, const char *name)
 {
     const float v = std::strtof(s, nullptr);
     if (v <= 0.0f)
@@ -39,7 +40,7 @@ float parse_float_arg(const char* s, const char* name)
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     int B = 32;
     int D = 4096;
@@ -69,8 +70,7 @@ int main(int argc, char** argv)
         }
         else
         {
-            std::cerr << "Usage: " << argv[0]
-                      << " [--B <int>] [--D <int>] [--iters <200-1000>] [--eps <float>]\n";
+            std::cerr << "Usage: " << argv[0] << " [--B <int>] [--D <int>] [--iters <200-1000>] [--eps <float>]\n";
             return 1;
         }
     }
@@ -99,9 +99,9 @@ int main(int argc, char** argv)
             h_w[i] = dist(rng);
         }
 
-        float* d_x = nullptr;
-        float* d_w = nullptr;
-        float* d_y = nullptr;
+        float *d_x = nullptr;
+        float *d_w = nullptr;
+        float *d_y = nullptr;
         CHECK_CUDA(cudaMalloc(&d_x, x_numel * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&d_w, w_numel * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&d_y, x_numel * sizeof(float)));
@@ -154,8 +154,8 @@ int main(int argc, char** argv)
         const double gbps = bytes_per_iter / (avg_us * 1e-6) / 1e9;
 
         std::cout << "bench_rmsnorm\n";
-        std::cout << "  B=" << B << ", D=" << D << ", warmup=" << kWarmupIters
-                  << ", iters=" << iters << ", eps=" << eps << "\n";
+        std::cout << "  B=" << B << ", D=" << D << ", warmup=" << kWarmupIters << ", iters=" << iters << ", eps=" << eps
+                  << "\n";
         std::cout << std::fixed << std::setprecision(3);
         std::cout << "  avg: " << avg_us << " us\n";
         std::cout << std::setprecision(2);
@@ -165,7 +165,7 @@ int main(int argc, char** argv)
         CHECK_CUDA(cudaFree(d_w));
         CHECK_CUDA(cudaFree(d_x));
     }
-    catch (const std::exception& e)
+    catch (const std::exception &e)
     {
         std::cerr << "bench_rmsnorm failed: " << e.what() << "\n";
         return 1;

@@ -2,10 +2,13 @@
 
 #include "tiny_llm/core/allocator.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-void ExecutionContext::begin_step() {
-    if (ws_) {
+void ExecutionContext::begin_step()
+{
+    if (ws_)
+    {
         ws_->reset();
     }
 }

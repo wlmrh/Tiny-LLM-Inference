@@ -34,22 +34,22 @@ Resolved: `ModelRunner` no longer exposes input preparation or raw vocabulary lo
 
 ## Remaining Architecture Constraints
 
-### Global Execution Context Limits Multi-Engine Safety
+### Explicit Execution Context Ownership
 
-`ModelRunner` initializes and resets an internal process-wide execution context. This keeps operator compatibility but makes multiple simultaneous engine instances risky.
+`ModelRunner` owns an `ExecutionContext` per instance or binds an explicitly supplied context. Operators consume the context passed by their caller, so multiple engine instances no longer share process-wide execution state.
 
-Suggested direction:
+Current contract:
 
-- Move all model/operator paths to explicit `ExecutionContext`/`RuntimeContext` passing.
-- Keep the internal global execution context only as a compatibility fallback until removed.
+- Keep execution and attention metadata explicit through `ExecutionContext` and `RuntimeContext`.
+- Add concurrency stress coverage before advertising multi-threaded serving support.
 
-### Legacy Thread-Local Paged Attention Metadata
+### Explicit Paged Attention Metadata
 
-`ops::set_paged_attention_runtime_metadata`, `clear_paged_attention_runtime_metadata`, `current_paged_attention_runtime_metadata`, and `PagedAttentionRuntimeMetadataGuard` still exist. The current model path passes metadata explicitly through `RuntimeContext`, and the legacy API is now marked as compatibility surface in the header.
+Paged attention metadata is passed through `RuntimeContext` and `LlamaAttentionParams`. The legacy thread-local setters and guard have been removed.
 
-Suggested cleanup:
+Current contract:
 
-- Remove the thread-local API after tests and helper tools use explicit metadata.
+- New operators must not introduce process-wide or thread-local request metadata.
 
 ### Model Buffers Are Max-Batch Preallocated
 

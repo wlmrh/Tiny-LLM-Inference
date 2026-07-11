@@ -20,9 +20,10 @@
 #include "tiny_llm/models/hf_safetensors_loader.h"
 #include "tiny_llm/models/llama_weight_map.h"
 
-namespace {
+namespace
+{
 
-int32_t parse_int32(const char* text)
+int32_t parse_int32(const char *text)
 {
     size_t consumed = 0;
     const long value = std::stol(text, &consumed);
@@ -33,25 +34,23 @@ int32_t parse_int32(const char* text)
     return static_cast<int32_t>(value);
 }
 
-std::string layer_name(int32_t layer_id, const std::string& suffix)
+std::string layer_name(int32_t layer_id, const std::string &suffix)
 {
     std::ostringstream out;
     out << "layer_" << std::setw(2) << std::setfill('0') << layer_id << "_" << suffix;
     return out.str();
 }
 
-void write_exact(std::ofstream& out, const void* data, std::streamsize bytes)
+void write_exact(std::ofstream &out, const void *data, std::streamsize bytes)
 {
-    out.write(static_cast<const char*>(data), bytes);
+    out.write(static_cast<const char *>(data), bytes);
     if (!out)
     {
         throw std::runtime_error("failed to write tensor dump.");
     }
 }
 
-void dump_tensor(const std::filesystem::path& output_dir,
-                 const std::string& name,
-                 const tiny_llm::Tensor& tensor)
+void dump_tensor(const std::filesystem::path &output_dir, const std::string &name, const tiny_llm::Tensor &tensor)
 {
     if (tiny_llm::tensor_dtype(tensor) != tiny_llm::DType::kFloat32)
     {
@@ -77,15 +76,13 @@ void dump_tensor(const std::filesystem::path& output_dir,
         const int64_t dim = contiguous.size(i);
         write_exact(out, &dim, sizeof(dim));
     }
-    write_exact(
-        out,
-        contiguous.data_ptr<float>(),
-        static_cast<std::streamsize>(contiguous.numel() * static_cast<int64_t>(sizeof(float))));
+    write_exact(out, contiguous.data_ptr<float>(),
+                static_cast<std::streamsize>(contiguous.numel() * static_cast<int64_t>(sizeof(float))));
 }
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     if (argc < 5)
     {
@@ -109,26 +106,22 @@ int main(int argc, char** argv)
 
         const std::filesystem::path weight_path = std::filesystem::path(model_dir) / "model.safetensors";
         const tiny_llm::LlamaConfig config = tiny_llm::HFLlamaConfigLoader::load_from_dir(model_dir);
-        const tiny_llm::HFSafeTensorLoader loader =
-            tiny_llm::HFSafeTensorLoader::from_file(weight_path.string());
+        const tiny_llm::HFSafeTensorLoader loader = tiny_llm::HFSafeTensorLoader::from_file(weight_path.string());
         const tiny_llm::WeightMap weight_map = tiny_llm::WeightMap::from_safetensors(loader);
 
         tiny_llm::LlamaForCausalLM causal_model(config, weight_map);
         const int32_t num_tokens = static_cast<int32_t>(input_ids_data.size());
         causal_model.allocate_buffers(num_tokens);
-        tiny_llm::LlamaModel& model = *causal_model.model_;
+        tiny_llm::LlamaModel &model = *causal_model.model_;
 
-        torch::Tensor input_ids = torch::from_blob(
-            input_ids_data.data(),
-            {static_cast<int64_t>(num_tokens)},
-            torch::TensorOptions().dtype(torch::kInt32)).clone();
-        torch::Tensor positions = torch::from_blob(
-            positions_data.data(),
-            {static_cast<int64_t>(num_tokens)},
-            torch::TensorOptions().dtype(torch::kInt32)).clone();
-        torch::Tensor logits = torch::zeros(
-            {num_tokens, config.vocab_size},
-            torch::TensorOptions().dtype(torch::kFloat32));
+        torch::Tensor input_ids = torch::from_blob(input_ids_data.data(), {static_cast<int64_t>(num_tokens)},
+                                                   torch::TensorOptions().dtype(torch::kInt32))
+                                      .clone();
+        torch::Tensor positions = torch::from_blob(positions_data.data(), {static_cast<int64_t>(num_tokens)},
+                                                   torch::TensorOptions().dtype(torch::kInt32))
+                                      .clone();
+        torch::Tensor logits =
+            torch::zeros({num_tokens, config.vocab_size}, torch::TensorOptions().dtype(torch::kFloat32));
 
         tiny_llm::ExecutionContext ctx(nullptr, nullptr, nullptr);
         tiny_llm::RuntimeContext runtime_ctx(ctx, tiny_llm::ops::PagedAttentionRuntimeMetadata{});
@@ -139,39 +132,26 @@ int main(int argc, char** argv)
 
         for (int32_t layer_id = 0; layer_id < config.num_hidden_layers; ++layer_id)
         {
-            const std::shared_ptr<tiny_llm::LlamaDecoderLayer>& layer =
-                model.layers_[static_cast<size_t>(layer_id)];
+            const std::shared_ptr<tiny_llm::LlamaDecoderLayer> &layer = model.layers_[static_cast<size_t>(layer_id)];
 
             layer->copy_tensor(buffers.hidden_states, buffers.layer.residual);
             layer->input_layernorm_->forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "input_norm"), buffers.layer.norm_output);
 
-            layer->self_attn_->qkv_proj_->forward(
-                buffers.layer.norm_output,
-                buffers.layer.attention.qkv,
-                ctx);
-            layer->self_attn_->split_qkv(
-                buffers.layer.attention.qkv,
-                buffers.layer.attention.q,
-                buffers.layer.attention.k,
-                buffers.layer.attention.v);
+            layer->self_attn_->qkv_proj_->forward(buffers.layer.norm_output, buffers.layer.attention.qkv, ctx);
+            layer->self_attn_->split_qkv(buffers.layer.attention.qkv, buffers.layer.attention.q,
+                                         buffers.layer.attention.k, buffers.layer.attention.v);
             dump_tensor(output_dir, layer_name(layer_id, "qkv"), buffers.layer.attention.qkv);
             layer->self_attn_->apply_rope(positions, buffers.layer.attention.q, buffers.layer.attention.k);
             dump_tensor(output_dir, layer_name(layer_id, "q_rope"), buffers.layer.attention.q);
             dump_tensor(output_dir, layer_name(layer_id, "k_rope"), buffers.layer.attention.k);
             dump_tensor(output_dir, layer_name(layer_id, "v"), buffers.layer.attention.v);
-            layer->self_attn_->compute_attention(
-                positions,
-                buffers.layer.attention.q,
-                buffers.layer.attention.k,
-                buffers.layer.attention.v,
-                buffers.layer.attention.attn_output,
-                runtime_ctx);
+            layer->self_attn_->compute_attention(positions, buffers.layer.attention.q, buffers.layer.attention.k,
+                                                 buffers.layer.attention.v, buffers.layer.attention.attn_output,
+                                                 runtime_ctx);
             dump_tensor(output_dir, layer_name(layer_id, "attn_output"), buffers.layer.attention.attn_output);
-            layer->self_attn_->o_proj_->forward(
-                buffers.layer.attention.attn_output,
-                buffers.layer.attention.proj_output,
-                ctx);
+            layer->self_attn_->o_proj_->forward(buffers.layer.attention.attn_output,
+                                                buffers.layer.attention.proj_output, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "attn_proj"), buffers.layer.attention.proj_output);
             layer->add_inplace(buffers.layer.residual, buffers.layer.attention.proj_output, buffers.hidden_states);
             dump_tensor(output_dir, layer_name(layer_id, "post_attn_residual"), buffers.hidden_states);
@@ -180,16 +160,9 @@ int main(int argc, char** argv)
             layer->post_attention_layernorm_->forward(buffers.hidden_states, buffers.layer.norm_output, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "post_attn_norm"), buffers.layer.norm_output);
             layer->mlp_->gate_up_proj_->forward(buffers.layer.norm_output, buffers.layer.mlp.gate_up, ctx);
-            buffers.layer.mlp.gate.copy_(
-                buffers.layer.mlp.gate_up.narrow(
-                    1,
-                    0,
-                    model.config().intermediate_size));
-            buffers.layer.mlp.up.copy_(
-                buffers.layer.mlp.gate_up.narrow(
-                    1,
-                    model.config().intermediate_size,
-                    model.config().intermediate_size));
+            buffers.layer.mlp.gate.copy_(buffers.layer.mlp.gate_up.narrow(1, 0, model.config().intermediate_size));
+            buffers.layer.mlp.up.copy_(buffers.layer.mlp.gate_up.narrow(1, model.config().intermediate_size,
+                                                                        model.config().intermediate_size));
             layer->mlp_->apply_activation(buffers.layer.mlp.gate, buffers.layer.mlp.up, buffers.layer.mlp.activated);
             layer->mlp_->down_proj_->forward(buffers.layer.mlp.activated, buffers.layer.mlp.down, ctx);
             dump_tensor(output_dir, layer_name(layer_id, "mlp_gate"), buffers.layer.mlp.gate);
@@ -205,7 +178,7 @@ int main(int argc, char** argv)
         causal_model.lm_head_->forward(buffers.norm_output, logits, ctx);
         dump_tensor(output_dir, "logits", logits);
     }
-    catch (const std::exception& ex)
+    catch (const std::exception &ex)
     {
         std::cerr << "llama_tensor_dump failed: " << ex.what() << "\n";
         return 1;

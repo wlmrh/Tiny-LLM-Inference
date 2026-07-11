@@ -9,7 +9,8 @@
 #include "tiny_llm/runtime/prepared_inputs.h"
 #include "tiny_llm/runtime/processors.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class HFSafeTensorLoader;
 class ExecutionContext;
@@ -21,33 +22,38 @@ struct SchedulerOutput;
 /**
  * @brief Converts SchedulerOutput to model tensors, runs the model, and samples logits.
  */
-class ModelRunner {
-public:
-    ModelRunner(const EngineArgs& args, KVCache* kv);
+class ModelRunner
+{
+  public:
+    ModelRunner(const EngineArgs &args, KVCache *kv);
     ~ModelRunner();
 
-    void validate_token_ids(const std::vector<int32_t>& token_ids, const char* context) const;
-    ModelRunnerOutput run(const SchedulerOutput& scheduler_output);
+    void validate_token_ids(const std::vector<int32_t> &token_ids, const char *context) const;
+    ModelRunnerOutput run(const SchedulerOutput &scheduler_output);
 
-private:
-    struct PreparedBatch {
+  private:
+    struct PreparedBatch
+    {
         PreparedInputs inputs;
         RuntimeProfilingStats scheduling_stats;
         std::vector<uint64_t> req_ids;
         std::vector<SamplingParams> sampling_params; // the offset of the last token in each request
-        std::vector<std::vector<int32_t>> token_histories; // Full prompt plus generated-token history before this step for each request
+        std::vector<std::vector<int32_t>>
+            token_histories; // Full prompt plus generated-token history before this step for each request
     };
 
-    void init_from_args(const EngineArgs& args);
+    void init_from_args(const EngineArgs &args);
     void validate_handles() const;
-    int32_t resolve_model_max_batch_size(const EngineArgs& args) const;
-    PreparedBatch prepare_batch(const SchedulerOutput& scheduler_output, ExecutionContext& ctx);
-    Tensor run_model(const PreparedInputs& inputs, ExecutionContext& exec_ctx, RuntimeProfilingStats* profiling) const;
+    int32_t resolve_model_max_batch_size(const EngineArgs &args) const;
+    PreparedBatch prepare_batch(const SchedulerOutput &scheduler_output, ExecutionContext &ctx);
+    Tensor run_model(const PreparedInputs &inputs, ExecutionContext &exec_ctx, RuntimeProfilingStats *profiling) const;
 
     std::unique_ptr<Model> owned_model_;
+    std::unique_ptr<ExecutionContext> owned_execution_context_;
     std::vector<std::unique_ptr<HFSafeTensorLoader>> owned_hf_loaders_;
-    Model* model_ = nullptr;
-    KVCache* kv_ = nullptr;
+    Model *model_ = nullptr;
+    ExecutionContext *execution_context_ = nullptr;
+    KVCache *kv_ = nullptr;
     int32_t kv_block_size_tokens_ = 16;
 
     int64_t debug_step_index_ = 0;

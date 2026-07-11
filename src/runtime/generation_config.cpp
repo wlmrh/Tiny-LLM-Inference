@@ -8,11 +8,13 @@
 #include <stdexcept>
 #include <string>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-namespace {
+namespace
+{
 
-std::string read_text_file(const std::string& path, const std::string& error_prefix)
+std::string read_text_file(const std::string &path, const std::string &error_prefix)
 {
     std::ifstream fin(path);
     if (!fin)
@@ -25,12 +27,10 @@ std::string read_text_file(const std::string& path, const std::string& error_pre
     return ss.str();
 }
 
-float read_optional_float(const hf_json::Value& root,
-                          const std::string& key,
-                          float default_value,
-                          const std::string& error_prefix)
+float read_optional_float(const hf_json::Value &root, const std::string &key, float default_value,
+                          const std::string &error_prefix)
 {
-    const hf_json::Value* value = hf_json::find_object_field(root, key, error_prefix);
+    const hf_json::Value *value = hf_json::find_object_field(root, key, error_prefix);
     if (value == nullptr || value->type == hf_json::ValueType::kNull)
     {
         return default_value;
@@ -39,7 +39,7 @@ float read_optional_float(const hf_json::Value& root,
     return static_cast<float>(value->as_number(error_prefix + ": " + key));
 }
 
-GenerationConfig load_generation_config_file(const std::string& path)
+GenerationConfig load_generation_config_file(const std::string &path)
 {
     const std::string error_prefix = "load_generation_config_file";
     const std::string content = read_text_file(path, error_prefix);
@@ -52,7 +52,7 @@ GenerationConfig load_generation_config_file(const std::string& path)
 
 } // namespace
 
-GenerationConfig load_generation_config_from_dir(const std::string& model_dir)
+GenerationConfig load_generation_config_from_dir(const std::string &model_dir)
 {
     const std::filesystem::path config_path = std::filesystem::path(model_dir) / "generation_config.json";
     if (!std::filesystem::exists(config_path))

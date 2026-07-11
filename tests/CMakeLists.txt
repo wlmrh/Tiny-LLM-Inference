@@ -1,6 +1,5 @@
 set(TINYLLM_TEST_UNIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/unit")
 set(TINYLLM_TEST_INTEGRATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/integration")
-set(TINYLLM_TOOLS_DIR "${CMAKE_SOURCE_DIR}/tools")
 set(TINYLLM_SCRIPTS_DIR "${CMAKE_SOURCE_DIR}/scripts")
 
 include(FetchContent)
@@ -82,22 +81,6 @@ target_compile_definitions(test_llm_runtime PRIVATE TINYLLM_SOURCE_DIR="${CMAKE_
 
 tinyllm_add_gtest(test_llm_offline
     "${TINYLLM_TEST_INTEGRATION_DIR}/test_llm_offline.cpp")
-
-add_executable(llama_logits_dump "${TINYLLM_TOOLS_DIR}/llama_logits_dump.cpp")
-target_link_libraries(llama_logits_dump PRIVATE tiny_llm)
-set_target_properties(llama_logits_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
-
-add_executable(llama_tensor_dump "${TINYLLM_TOOLS_DIR}/llama_tensor_dump.cpp")
-target_link_libraries(llama_tensor_dump PRIVATE tiny_llm)
-set_target_properties(llama_tensor_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
-
-add_executable(llama_engine_generate "${TINYLLM_TOOLS_DIR}/llama_engine_generate.cpp")
-target_link_libraries(llama_engine_generate PRIVATE tiny_llm)
-set_target_properties(llama_engine_generate PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
-
-add_executable(hf_safetensor_dump "${TINYLLM_TOOLS_DIR}/hf_safetensor_dump.cpp")
-target_link_libraries(hf_safetensor_dump PRIVATE tiny_llm)
-set_target_properties(hf_safetensor_dump PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if (Python3_Interpreter_FOUND)

@@ -1,5 +1,6 @@
 #include "tiny_llm/runtime/model_runner.h"
 
+#include "tiny_llm/core/allocator.h"
 #include "tiny_llm/core/context.h"
 #include "tiny_llm/core/tensor.h"
 #include "tiny_llm/models/hf_llama_config_loader.h"
@@ -8,7 +9,6 @@
 #include "tiny_llm/models/llama_weight_map.h"
 #include "tiny_llm/models/model.h"
 #include "tiny_llm/runtime/engine_args.h"
-#include "tiny_llm/runtime/execution_context.h"
 #include "tiny_llm/runtime/kv_cache.h"
 #include "tiny_llm/runtime/runtime_context.h"
 #include "tiny_llm/runtime/sampler.h"
@@ -31,9 +31,11 @@
 #include <cuda_runtime_api.h>
 #endif
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
-namespace {
+namespace
+{
 
 using ProfileClock = std::chrono::steady_clock;
 
@@ -42,23 +44,23 @@ double elapsed_profile_ms(ProfileClock::time_point start, ProfileClock::time_poi
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-void synchronize_for_profile(const c10::Device& device)
+void synchronize_for_profile(const ExecutionContext &ctx)
 {
 #if TINYLLM_ENABLE_CUDA
-    if (device.is_cuda())
+    if (ctx.device().is_cuda())
     {
-        const int device_index = device.index() >= 0 ? static_cast<int>(device.index()) : 0;
+        const int device_index = ctx.device().index() >= 0 ? static_cast<int>(ctx.device().index()) : 0;
         cudaSetDevice(device_index);
-        cudaDeviceSynchronize();
+        cudaStreamSynchronize(ctx.stream());
     }
 #else
-    (void)device;
+    (void)ctx;
 #endif
 }
 
 bool runtime_detail_profile_enabled()
 {
-    const char* value = std::getenv("TINYLLM_PROFILE_DETAIL");
+    const char *value = std::getenv("TINYLLM_PROFILE_DETAIL");
     if (value == nullptr)
     {
         return false;
@@ -69,7 +71,7 @@ bool runtime_detail_profile_enabled()
 
 int32_t debug_logits_top_k()
 {
-    const char* value = std::getenv("TINYLLM_DEBUG_LOGITS_TOP_K");
+    const char *value = std::getenv("TINYLLM_DEBUG_LOGITS_TOP_K");
     if (value == nullptr)
     {
         return 0;
@@ -79,13 +81,13 @@ int32_t debug_logits_top_k()
         const int parsed = std::stoi(value);
         return parsed > 0 ? parsed : 0;
     }
-    catch (const std::exception&)
+    catch (const std::exception &)
     {
         return 0;
     }
 }
 
-int64_t checked_numel(const std::vector<int64_t>& shape, const char* caller)
+int64_t checked_numel(const std::vector<int64_t> &shape, const char *caller)
 {
     int64_t numel = 1;
     for (int64_t dim : shape)
@@ -107,10 +109,8 @@ int64_t checked_numel(const std::vector<int64_t>& shape, const char* caller)
     return numel;
 }
 
-Tensor make_int32_tensor_from_host(const std::vector<int32_t>& values,
-                                   const std::vector<int64_t>& shape,
-                                   const c10::Device& device,
-                                   const char* caller)
+Tensor make_int32_tensor_from_host(const std::vector<int32_t> &values, const std::vector<int64_t> &shape,
+                                   const c10::Device &device, const char *caller)
 {
     const int64_t expected_numel = checked_numel(shape, caller);
     if (expected_numel != static_cast<int64_t>(values.size()))
@@ -118,9 +118,8 @@ Tensor make_int32_tensor_from_host(const std::vector<int32_t>& values,
         throw std::runtime_error(std::string(caller) + ": host value count does not match tensor shape.");
     }
 
-    Tensor cpu_tensor = torch::empty(
-        shape,
-        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kInt32)).device(c10::kCPU));
+    Tensor cpu_tensor =
+        torch::empty(shape, torch::TensorOptions().dtype(to_torch_scalar_type(DType::kInt32)).device(c10::kCPU));
     if (!values.empty())
     {
         std::memcpy(cpu_tensor.data_ptr<int32_t>(), values.data(), values.size() * sizeof(int32_t));
@@ -132,16 +131,16 @@ Tensor make_int32_tensor_from_host(const std::vector<int32_t>& values,
     return cpu_tensor.to(device, /*non_blocking=*/false, /*copy=*/true).contiguous();
 }
 
-struct PreparedRequestInfo {
-    const RequestData* req_data = nullptr;
+struct PreparedRequestInfo
+{
+    const RequestData *req_data = nullptr;
     int32_t scheduled_tokens = 0;
     int32_t context_len = 0;
     int32_t required_blocks = 0;
 };
 
-void populate_prefill_segments(const std::vector<PreparedRequestInfo>& request_infos,
-                               int64_t total_tokens,
-                               PreparedInputs& prepared)
+void populate_prefill_segments(const std::vector<PreparedRequestInfo> &request_infos, int64_t total_tokens,
+                               PreparedInputs &prepared)
 {
     prepared.prefill_segments.clear();
     prepared.prefill_segments_valid = false;
@@ -153,12 +152,11 @@ void populate_prefill_segments(const std::vector<PreparedRequestInfo>& request_i
     int64_t row_start = 0;
     int32_t seq_index = 0;
     prepared.prefill_segments.reserve(request_infos.size());
-    for (const PreparedRequestInfo& info : request_infos)
+    for (const PreparedRequestInfo &info : request_infos)
     {
-        const RequestData& req_data = *info.req_data;
+        const RequestData &req_data = *info.req_data;
         const bool full_prompt_prefill =
-            req_data.num_computed_tokens == 0
-            && info.scheduled_tokens == req_data.prompt_token_count;
+            req_data.num_computed_tokens == 0 && info.scheduled_tokens == req_data.prompt_token_count;
         if (!full_prompt_prefill)
         {
             prepared.prefill_segments.clear();
@@ -188,10 +186,9 @@ int32_t required_block_count(int32_t context_len, int32_t block_size_tokens)
     return (context_len - 1) / block_size_tokens + 1;
 }
 
-int32_t checked_context_len(int32_t num_computed_tokens, int32_t scheduled_tokens, const char* caller)
+int32_t checked_context_len(int32_t num_computed_tokens, int32_t scheduled_tokens, const char *caller)
 {
-    const int64_t context_len =
-        static_cast<int64_t>(num_computed_tokens) + static_cast<int64_t>(scheduled_tokens);
+    const int64_t context_len = static_cast<int64_t>(num_computed_tokens) + static_cast<int64_t>(scheduled_tokens);
     if (context_len > static_cast<int64_t>(std::numeric_limits<int32_t>::max()))
     {
         throw std::runtime_error(std::string(caller) + ": context length exceeds int32 range.");
@@ -199,16 +196,14 @@ int32_t checked_context_len(int32_t num_computed_tokens, int32_t scheduled_token
     return static_cast<int32_t>(context_len);
 }
 
-void validate_required_blocks(const RequestData& req_data,
-                              int32_t num_layers,
-                              int32_t required_blocks,
-                              const char* caller)
+void validate_required_blocks(const RequestData &req_data, int32_t num_layers, int32_t required_blocks,
+                              const char *caller)
 {
     if (static_cast<int32_t>(req_data.block_tables.size()) != num_layers)
     {
         throw std::runtime_error(std::string(caller) + ": block_tables layer count must match model.");
     }
-    for (const std::vector<int32_t>& layer_blocks : req_data.block_tables)
+    for (const std::vector<int32_t> &layer_blocks : req_data.block_tables)
     {
         if (static_cast<int32_t>(layer_blocks.size()) < required_blocks)
         {
@@ -224,7 +219,7 @@ void validate_required_blocks(const RequestData& req_data,
     }
 }
 
-Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
+Tensor tensor_to_cpu_contiguous(const Tensor &tensor)
 {
     if (tensor.device().is_cpu())
     {
@@ -233,7 +228,7 @@ Tensor tensor_to_cpu_contiguous(const Tensor& tensor)
     return tensor.to(c10::kCPU, /*non_blocking=*/false, /*copy=*/true).contiguous();
 }
 
-std::vector<int32_t> top_k_token_ids(const float* logits, int32_t vocab_size, int32_t k)
+std::vector<int32_t> top_k_token_ids(const float *logits, int32_t vocab_size, int32_t k)
 {
     std::vector<int32_t> top_tokens;
     top_tokens.reserve(static_cast<size_t>(std::min(k, vocab_size)));
@@ -258,12 +253,12 @@ std::vector<int32_t> top_k_token_ids(const float* logits, int32_t vocab_size, in
     return top_tokens;
 }
 
-bool token_in_history(int32_t token_id, const std::vector<int32_t>& history)
+bool token_in_history(int32_t token_id, const std::vector<int32_t> &history)
 {
     return std::find(history.begin(), history.end(), token_id) != history.end();
 }
 
-std::vector<std::filesystem::path> resolve_hf_safetensor_paths(const EngineArgs& args)
+std::vector<std::filesystem::path> resolve_hf_safetensor_paths(const EngineArgs &args)
 {
     const std::filesystem::path model_dir(args.hf_model_dir);
     std::vector<std::filesystem::path> paths;
@@ -291,16 +286,17 @@ std::vector<std::filesystem::path> resolve_hf_safetensor_paths(const EngineArgs&
 
     if (!std::filesystem::exists(model_dir) || !std::filesystem::is_directory(model_dir))
     {
-        throw std::runtime_error("ModelRunner: hf_model_dir does not exist or is not a directory: " + args.hf_model_dir);
+        throw std::runtime_error("ModelRunner: hf_model_dir does not exist or is not a directory: " +
+                                 args.hf_model_dir);
     }
 
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(model_dir))
+    for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(model_dir))
     {
         if (!entry.is_regular_file())
         {
             continue;
         }
-        const std::filesystem::path& path = entry.path();
+        const std::filesystem::path &path = entry.path();
         if (path.extension() == ".safetensors")
         {
             paths.push_back(path);
@@ -314,10 +310,9 @@ std::vector<std::filesystem::path> resolve_hf_safetensor_paths(const EngineArgs&
     return paths;
 }
 
-WeightMap load_weight_map_from_safetensors(
-    const std::vector<std::filesystem::path>& paths,
-    const ParallelConfig& parallel_config,
-    std::vector<std::unique_ptr<HFSafeTensorLoader>>& owned_loaders)
+WeightMap load_weight_map_from_safetensors(const std::vector<std::filesystem::path> &paths,
+                                           const ParallelConfig &parallel_config,
+                                           std::vector<std::unique_ptr<HFSafeTensorLoader>> &owned_loaders)
 {
     WeightMap weight_map;
     parallel_config.validate();
@@ -325,10 +320,10 @@ WeightMap load_weight_map_from_safetensors(
     owned_loaders.clear();
     owned_loaders.reserve(paths.size());
 
-    for (const std::filesystem::path& path : paths)
+    for (const std::filesystem::path &path : paths)
     {
         auto loader = std::make_unique<HFSafeTensorLoader>(HFSafeTensorLoader::from_file(path.string()));
-        for (const std::string& key : loader->keys())
+        for (const std::string &key : loader->keys())
         {
             Tensor tensor = loader->tensor(key);
             if (tensor.device() != target_device)
@@ -347,25 +342,16 @@ WeightMap load_weight_map_from_safetensors(
     return weight_map;
 }
 
-void validate_prepared_tensor_pack(const PreparedInputs& inputs,
-                                   int32_t num_layers,
-                                   const char* caller)
+void validate_prepared_tensor_pack(const PreparedInputs &inputs, int32_t num_layers, const char *caller)
 {
-    if (!inputs.input_ids.defined()
-        || !inputs.positions.defined()
-        || !inputs.slot_mapping.defined()
-        || !inputs.seq_indices.defined()
-        || !inputs.context_lens.defined()
-        || !inputs.block_tables.defined())
+    if (!inputs.input_ids.defined() || !inputs.positions.defined() || !inputs.slot_mapping.defined() ||
+        !inputs.seq_indices.defined() || !inputs.context_lens.defined() || !inputs.block_tables.defined())
     {
         throw std::runtime_error(std::string(caller) + ": all prepared tensors must be defined.");
     }
-    if (tensor_dtype(inputs.input_ids) != DType::kInt32
-        || tensor_dtype(inputs.positions) != DType::kInt32
-        || tensor_dtype(inputs.slot_mapping) != DType::kInt32
-        || tensor_dtype(inputs.seq_indices) != DType::kInt32
-        || tensor_dtype(inputs.context_lens) != DType::kInt32
-        || tensor_dtype(inputs.block_tables) != DType::kInt32)
+    if (tensor_dtype(inputs.input_ids) != DType::kInt32 || tensor_dtype(inputs.positions) != DType::kInt32 ||
+        tensor_dtype(inputs.slot_mapping) != DType::kInt32 || tensor_dtype(inputs.seq_indices) != DType::kInt32 ||
+        tensor_dtype(inputs.context_lens) != DType::kInt32 || tensor_dtype(inputs.block_tables) != DType::kInt32)
     {
         throw std::runtime_error(std::string(caller) + ": prepared tensors must be int32.");
     }
@@ -390,14 +376,13 @@ void validate_prepared_tensor_pack(const PreparedInputs& inputs,
     }
     if (block_shape.size() != 3 || block_shape[0] != num_layers || block_shape[1] != context_shape[0])
     {
-        throw std::runtime_error(std::string(caller) + ": block_tables must be [num_layers, num_seqs, max_blocks_per_seq].");
+        throw std::runtime_error(std::string(caller) +
+                                 ": block_tables must be [num_layers, num_seqs, max_blocks_per_seq].");
     }
     const c10::Device device = inputs.input_ids.device();
-    if (inputs.positions.device() != device
-        || inputs.slot_mapping.device() != device
-        || inputs.seq_indices.device() != device
-        || inputs.context_lens.device() != device
-        || inputs.block_tables.device() != device)
+    if (inputs.positions.device() != device || inputs.slot_mapping.device() != device ||
+        inputs.seq_indices.device() != device || inputs.context_lens.device() != device ||
+        inputs.block_tables.device() != device)
     {
         throw std::runtime_error(std::string(caller) + ": prepared tensors must be on the same device.");
     }
@@ -405,21 +390,25 @@ void validate_prepared_tensor_pack(const PreparedInputs& inputs,
 
 } // namespace
 
-ModelRunner::ModelRunner(const EngineArgs& args, KVCache* kv)
-    : kv_(kv)
+ModelRunner::ModelRunner(const EngineArgs &args, KVCache *kv) : kv_(kv)
 {
     init_from_args(args);
 }
 
-ModelRunner::~ModelRunner()
-{
-    reset_global_execution_context();
-}
+ModelRunner::~ModelRunner() = default;
 
-void ModelRunner::init_from_args(const EngineArgs& args)
+void ModelRunner::init_from_args(const EngineArgs &args)
 {
     owned_hf_loaders_.clear();
     args.parallel_config.validate();
+    if (args.compute_dtype == RuntimeDType::kBFloat16 && !args.parallel_config.is_cuda())
+    {
+        throw std::runtime_error("ModelRunner: bfloat16 compute requires a CUDA device.");
+    }
+    if (args.kv_cache_dtype == RuntimeDType::kBFloat16 && !args.parallel_config.is_cuda())
+    {
+        throw std::runtime_error("ModelRunner: bfloat16 KV cache requires a CUDA device.");
+    }
 
     if (args.kv_block_size_tokens <= 0)
     {
@@ -432,33 +421,53 @@ void ModelRunner::init_from_args(const EngineArgs& args)
     {
         switch (args.model_type)
         {
-            case EngineModelType::kHFLlamaSafeTensor:
+        case EngineModelType::kHFLlamaSafeTensor:
+        {
+            if (args.hf_model_dir.empty())
             {
-                if (args.hf_model_dir.empty())
-                {
-                    throw std::runtime_error("ModelRunner: hf_model_dir must be provided.");
-                }
-                const LlamaConfig hf_config = HFLlamaConfigLoader::load_from_dir(args.hf_model_dir);
-                WeightMap weight_map = load_weight_map_from_safetensors(
-                    resolve_hf_safetensor_paths(args),
-                    args.parallel_config,
-                    owned_hf_loaders_);
-                auto llama_model = std::make_unique<LlamaForCausalLM>(hf_config, std::move(weight_map));
-                llama_model->allocate_buffers(resolve_model_max_batch_size(args), args.parallel_config);
-                owned_model_ = std::move(llama_model);
-                break;
+                throw std::runtime_error("ModelRunner: hf_model_dir must be provided.");
             }
-            case EngineModelType::kPrebuilt:
-            default:
-                throw std::runtime_error("ModelRunner: model pointer is null and no constructible model_type is configured.");
+            const LlamaConfig hf_config = HFLlamaConfigLoader::load_from_dir(args.hf_model_dir);
+            WeightMap weight_map = load_weight_map_from_safetensors(resolve_hf_safetensor_paths(args),
+                                                                    args.parallel_config, owned_hf_loaders_);
+            auto llama_model = std::make_unique<LlamaForCausalLM>(hf_config, std::move(weight_map));
+            llama_model->allocate_buffers(resolve_model_max_batch_size(args), args.parallel_config);
+            owned_model_ = std::move(llama_model);
+            break;
+        }
+        case EngineModelType::kPrebuilt:
+        default:
+            throw std::runtime_error(
+                "ModelRunner: model pointer is null and no constructible model_type is configured.");
         }
         model_ = owned_model_.get();
     }
 
-    initialize_global_execution_context(args, kv_);
+    if (args.ctx != nullptr)
+    {
+        execution_context_ = args.ctx;
+    }
+    else
+    {
+        if (args.workspace != nullptr && args.workspace->parallel_config() != args.parallel_config)
+        {
+            throw std::runtime_error("ModelRunner: workspace device does not match parallel_config.");
+        }
+        owned_execution_context_ = std::make_unique<ExecutionContext>(args.execution_stream, args.workspace, kv_,
+                                                                      args.parallel_config, args.compute_dtype);
+        execution_context_ = owned_execution_context_.get();
+    }
+    if (execution_context_->parallel_config() != args.parallel_config)
+    {
+        throw std::runtime_error("ModelRunner: execution context device does not match parallel_config.");
+    }
+    if (execution_context_->compute_dtype() != args.compute_dtype)
+    {
+        throw std::runtime_error("ModelRunner: execution context compute dtype does not match EngineArgs.");
+    }
 }
 
-int32_t ModelRunner::resolve_model_max_batch_size(const EngineArgs& args) const
+int32_t ModelRunner::resolve_model_max_batch_size(const EngineArgs &args) const
 {
     int32_t max_batch_size = args.max_batch_size;
     if (args.scheduler_config.max_prefill_tokens_per_step > max_batch_size)
@@ -478,10 +487,13 @@ void ModelRunner::validate_handles() const
     {
         throw std::runtime_error("ModelRunner: model must be non-null.");
     }
-    (void)require_global_execution_context("ModelRunner");
+    if (execution_context_ == nullptr)
+    {
+        throw std::runtime_error("ModelRunner: execution context must be non-null.");
+    }
 }
 
-void ModelRunner::validate_token_ids(const std::vector<int32_t>& token_ids, const char* context) const
+void ModelRunner::validate_token_ids(const std::vector<int32_t> &token_ids, const char *context) const
 {
     validate_handles();
     const int32_t vocab_size = model_->vocab_size();
@@ -489,19 +501,19 @@ void ModelRunner::validate_token_ids(const std::vector<int32_t>& token_ids, cons
     {
         if (token_id < 0 || token_id >= vocab_size)
         {
-            const char* prefix = context != nullptr ? context : "ModelRunner::validate_token_ids";
+            const char *prefix = context != nullptr ? context : "ModelRunner::validate_token_ids";
             throw std::runtime_error(std::string(prefix) + ": token is out of model vocab range.");
         }
     }
 }
 
-ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& output, ExecutionContext& ctx)
+ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput &output, ExecutionContext &ctx)
 {
-    constexpr const char* kCaller = "ModelRunner::prepare_batch";
+    constexpr const char *kCaller = "ModelRunner::prepare_batch";
     const c10::Device runtime_device = ctx.device();
 
     PreparedBatch batch;
-    PreparedInputs& prepared = batch.inputs;
+    PreparedInputs &prepared = batch.inputs;
 
     const int64_t request_count = static_cast<int64_t>(output.scheduled_reqs.size());
     batch.scheduling_stats.scheduled_requests = request_count;
@@ -523,7 +535,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     request_infos.reserve(static_cast<size_t>(request_count));
     int64_t max_blocks_per_seq = 0;
     int64_t checked_total_tokens = 0;
-    for (const RequestData& req_data : output.scheduled_reqs)
+    for (const RequestData &req_data : output.scheduled_reqs)
     {
         const auto count_it = output.num_scheduled_tokens.find(req_data.req_id);
         if (count_it == output.num_scheduled_tokens.end())
@@ -543,23 +555,19 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
         {
             throw std::runtime_error(std::string(kCaller) + ": new_token_ids is shorter than scheduled budget.");
         }
-        const int32_t context_len = checked_context_len(
-            req_data.num_computed_tokens,
-            scheduled_tokens,
-            kCaller);
+        const int32_t context_len = checked_context_len(req_data.num_computed_tokens, scheduled_tokens, kCaller);
         const int32_t required_blocks = required_block_count(context_len, kv_block_size_tokens_);
         validate_required_blocks(req_data, num_layers, required_blocks, kCaller);
 
-        for (const std::vector<int32_t>& layer_blocks : req_data.block_tables)
+        for (const std::vector<int32_t> &layer_blocks : req_data.block_tables)
         {
             max_blocks_per_seq = std::max(max_blocks_per_seq, static_cast<int64_t>(layer_blocks.size()));
         }
 
         bool request_has_prefill = false;
         bool request_has_decode = false;
-        batch.scheduling_stats.max_context_len = std::max<int64_t>(
-            batch.scheduling_stats.max_context_len,
-            static_cast<int64_t>(context_len));
+        batch.scheduling_stats.max_context_len =
+            std::max<int64_t>(batch.scheduling_stats.max_context_len, static_cast<int64_t>(context_len));
         for (int32_t i = 0; i < scheduled_tokens; ++i)
         {
             const int32_t position = req_data.num_computed_tokens + i;
@@ -583,11 +591,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
             ++batch.scheduling_stats.decode_requests;
         }
 
-        request_infos.push_back(PreparedRequestInfo{
-            &req_data,
-            scheduled_tokens,
-            context_len,
-            required_blocks});
+        request_infos.push_back(PreparedRequestInfo{&req_data, scheduled_tokens, context_len, required_blocks});
         checked_total_tokens += scheduled_tokens;
     }
     if (checked_total_tokens != total_tokens)
@@ -603,9 +607,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     std::vector<int32_t> slot_values(static_cast<size_t>(total_tokens), 0);
     std::vector<int32_t> seq_index_values(static_cast<size_t>(total_tokens), 0);
     std::vector<int32_t> context_values(static_cast<size_t>(request_count), 0);
-    std::vector<int32_t> block_table_values(
-        static_cast<size_t>(num_layers * request_count * max_blocks_per_seq),
-        -1);
+    std::vector<int32_t> block_table_values(static_cast<size_t>(num_layers * request_count * max_blocks_per_seq), -1);
 
     int64_t flat_token_index = 0;
     int64_t seq_index = 0;
@@ -614,19 +616,17 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     batch.sampling_params.reserve(static_cast<size_t>(request_count));
     batch.token_histories.reserve(static_cast<size_t>(request_count));
 
-    for (const PreparedRequestInfo& info : request_infos)
+    for (const PreparedRequestInfo &info : request_infos)
     {
-        const RequestData& req_data = *info.req_data;
+        const RequestData &req_data = *info.req_data;
         context_values[static_cast<size_t>(seq_index)] = info.context_len;
         for (size_t layer = 0; layer < req_data.block_tables.size(); ++layer)
         {
-            const std::vector<int32_t>& layer_blocks = req_data.block_tables[layer];
+            const std::vector<int32_t> &layer_blocks = req_data.block_tables[layer];
             for (size_t col = 0; col < layer_blocks.size(); ++col)
-            {   // block_table_values[num_layers, num_seqs, max_blocks_per_seq]
-                block_table_values[
-                    static_cast<int64_t>(layer) * request_count * max_blocks_per_seq
-                    + seq_index * max_blocks_per_seq
-                    + static_cast<int64_t>(col)] = layer_blocks[col];
+            { // block_table_values[num_layers, num_seqs, max_blocks_per_seq]
+                block_table_values[static_cast<int64_t>(layer) * request_count * max_blocks_per_seq +
+                                   seq_index * max_blocks_per_seq + static_cast<int64_t>(col)] = layer_blocks[col];
             }
         }
 
@@ -666,17 +666,13 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput& out
     prepared.seq_indices = make_int32_tensor_from_host(seq_index_values, {total_tokens}, runtime_device, kCaller);
     prepared.context_lens = make_int32_tensor_from_host(context_values, {request_count}, runtime_device, kCaller);
     prepared.block_tables = make_int32_tensor_from_host(
-        block_table_values,
-        {num_layers, request_count, max_blocks_per_seq},
-        runtime_device,
-        kCaller);
+        block_table_values, {num_layers, request_count, max_blocks_per_seq}, runtime_device, kCaller);
     populate_prefill_segments(request_infos, total_tokens, prepared);
     return batch;
 }
 
-Tensor ModelRunner::run_model(const PreparedInputs& inputs,
-                              ExecutionContext& exec_ctx,
-                              RuntimeProfilingStats* profiling) const
+Tensor ModelRunner::run_model(const PreparedInputs &inputs, ExecutionContext &exec_ctx,
+                              RuntimeProfilingStats *profiling) const
 {
     validate_prepared_tensor_pack(inputs, model_->num_layers(), "ModelRunner::run_model");
     if (inputs.input_ids.numel() == 0)
@@ -704,20 +700,19 @@ Tensor ModelRunner::run_model(const PreparedInputs& inputs,
     return model_->forward(inputs, runtime_ctx);
 }
 
-ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
+ModelRunnerOutput ModelRunner::run(const SchedulerOutput &scheduler_output)
 {
     if (model_ == nullptr)
     {
         throw std::runtime_error("ModelRunner: model must be non-null.");
     }
-    ExecutionContext& exec_ctx = require_global_execution_context("ModelRunner::run");
-    const c10::Device runtime_device = exec_ctx.device();
-
-    synchronize_for_profile(runtime_device);
+    validate_handles();
+    ExecutionContext &exec_ctx = *execution_context_;
+    synchronize_for_profile(exec_ctx);
     const auto prepare_start = ProfileClock::now();
     PreparedBatch batch = prepare_batch(scheduler_output, exec_ctx);
-    const PreparedInputs& inputs = batch.inputs;
-    synchronize_for_profile(runtime_device);
+    const PreparedInputs &inputs = batch.inputs;
+    synchronize_for_profile(exec_ctx);
     const auto prepare_end = ProfileClock::now();
 
     ModelRunnerOutput output;
@@ -731,15 +726,15 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         return output;
     }
 
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto model_start = ProfileClock::now();
     Tensor logits = run_model(inputs, exec_ctx, &output.profiling);
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto model_end = ProfileClock::now();
 
     std::vector<int32_t> logit_sample_rows = inputs.sample_row_offsets;
-    if (logits.size(0) == static_cast<int64_t>(inputs.sample_row_offsets.size())
-        && logits.size(0) != inputs.input_ids.size(0))
+    if (logits.size(0) == static_cast<int64_t>(inputs.sample_row_offsets.size()) &&
+        logits.size(0) != inputs.input_ids.size(0))
     {
         logit_sample_rows.resize(inputs.sample_row_offsets.size());
         for (size_t i = 0; i < logit_sample_rows.size(); ++i)
@@ -761,12 +756,12 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         Tensor seq_indices_cpu = tensor_to_cpu_contiguous(inputs.seq_indices);
         Tensor context_lens_cpu = tensor_to_cpu_contiguous(inputs.context_lens);
         Tensor block_tables_cpu = tensor_to_cpu_contiguous(inputs.block_tables);
-        const float* logits_ptr = logits_cpu.data_ptr<float>();
-        const int32_t* position_ptr = positions_cpu.data_ptr<int32_t>();
-        const int32_t* slot_ptr = slot_mapping_cpu.data_ptr<int32_t>();
-        const int32_t* seq_index_ptr = seq_indices_cpu.data_ptr<int32_t>();
-        const int32_t* context_ptr = context_lens_cpu.data_ptr<int32_t>();
-        const int32_t* block_ptr = block_tables_cpu.data_ptr<int32_t>();
+        const float *logits_ptr = logits_cpu.data_ptr<float>();
+        const int32_t *position_ptr = positions_cpu.data_ptr<int32_t>();
+        const int32_t *slot_ptr = slot_mapping_cpu.data_ptr<int32_t>();
+        const int32_t *seq_index_ptr = seq_indices_cpu.data_ptr<int32_t>();
+        const int32_t *context_ptr = context_lens_cpu.data_ptr<int32_t>();
+        const int32_t *block_ptr = block_tables_cpu.data_ptr<int32_t>();
         const std::vector<int64_t> block_shape = tensor_shape(block_tables_cpu);
         const int64_t num_seqs = block_shape.size() == 3 ? block_shape[1] : 0;
         const int64_t max_blocks_per_seq = block_shape.size() == 3 ? block_shape[2] : 0;
@@ -776,10 +771,9 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
             const int32_t input_row = inputs.sample_row_offsets[i];
             const int32_t logit_row = logit_sample_rows[i];
             const int32_t seq_index = seq_index_ptr[input_row];
-            const std::vector<int32_t> top_tokens = top_k_token_ids(
-                logits_ptr + static_cast<size_t>(logit_row) * static_cast<size_t>(model_->vocab_size()),
-                model_->vocab_size(),
-                debug_top_k);
+            const std::vector<int32_t> top_tokens =
+                top_k_token_ids(logits_ptr + static_cast<size_t>(logit_row) * static_cast<size_t>(model_->vocab_size()),
+                                model_->vocab_size(), debug_top_k);
 
             std::cerr << "{\"event\":\"tinyllm_model_runner_logits\",";
             std::cerr << "\"step\":" << debug_step_index_ << ",";
@@ -797,19 +791,23 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
             std::cerr << "\"top_tokens\":[";
             for (size_t j = 0; j < top_tokens.size(); ++j)
             {
-                if (j != 0) std::cerr << ",";
+                if (j != 0)
+                    std::cerr << ",";
                 std::cerr << top_tokens[j];
             }
             std::cerr << "],\"top_logits\":[";
             for (size_t j = 0; j < top_tokens.size(); ++j)
             {
-                if (j != 0) std::cerr << ",";
-                std::cerr << logits_ptr[static_cast<size_t>(logit_row) * static_cast<size_t>(model_->vocab_size()) + static_cast<size_t>(top_tokens[j])];
+                if (j != 0)
+                    std::cerr << ",";
+                std::cerr << logits_ptr[static_cast<size_t>(logit_row) * static_cast<size_t>(model_->vocab_size()) +
+                                        static_cast<size_t>(top_tokens[j])];
             }
             std::cerr << "],\"top_in_history\":[";
             for (size_t j = 0; j < top_tokens.size(); ++j)
             {
-                if (j != 0) std::cerr << ",";
+                if (j != 0)
+                    std::cerr << ",";
                 std::cerr << (token_in_history(top_tokens[j], batch.token_histories[i]) ? "true" : "false");
             }
             std::cerr << "],\"layer0_blocks\":[";
@@ -820,8 +818,10 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
                 for (int64_t col = 0; col < block_limit; ++col)
                 {
                     const int32_t block_id = block_ptr[static_cast<int64_t>(seq_index) * max_blocks_per_seq + col];
-                    if (block_id < 0) break;
-                    if (!first) std::cerr << ",";
+                    if (block_id < 0)
+                        break;
+                    if (!first)
+                        std::cerr << ",";
                     first = false;
                     std::cerr << block_id;
                 }
@@ -849,16 +849,12 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput& scheduler_output)
         output.profiling.decode_ms_total = model_ms;
     }
 
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto sampling_start = ProfileClock::now();
-    const SamplerBatch sampler_batch{
-        logit_sample_rows,
-        model_->vocab_size(),
-        &batch.token_histories,
-        &batch.sampling_params,
-        &batch.req_ids};
+    const SamplerBatch sampler_batch{logit_sample_rows, model_->vocab_size(), &batch.token_histories,
+                                     &batch.sampling_params, &batch.req_ids};
     std::vector<int32_t> sampled_rows = sample_rows(logits, sampler_batch);
-    synchronize_for_profile(runtime_device);
+    synchronize_for_profile(exec_ctx);
     const auto sampling_end = ProfileClock::now();
     output.profiling.sampling_ms = elapsed_profile_ms(sampling_start, sampling_end);
     output.profiling.sampled_tokens = static_cast<int64_t>(inputs.sample_row_offsets.size());

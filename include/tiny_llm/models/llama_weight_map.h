@@ -8,7 +8,8 @@
 #include "tiny_llm/models/llama_config.h"
 #include "tiny_llm/runtime/parallel_config.h"
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 class HFSafeTensorLoader;
 
@@ -18,35 +19,32 @@ class HFSafeTensorLoader;
  * Raw pointers are exposed for zero-copy binding while Tensor handles are
  * retained internally to keep backing storage alive for the whole model.
  */
-class WeightMap {
-public:
-    static WeightMap from_safetensors(const HFSafeTensorLoader& loader);
-    static WeightMap from_safetensors(const HFSafeTensorLoader& loader,
-                                      const ParallelConfig& parallel_config);
+class WeightMap
+{
+  public:
+    static WeightMap from_safetensors(const HFSafeTensorLoader &loader);
+    static WeightMap from_safetensors(const HFSafeTensorLoader &loader, const ParallelConfig &parallel_config);
 
-    void add_tensor(const std::string& name, const Tensor& tensor);
-    void add_tensor(const std::string& name,
-                    void* data,
-                    const std::vector<int64_t>& shape,
-                    DType dtype);
+    void add_tensor(const std::string &name, const Tensor &tensor);
+    void add_tensor(const std::string &name, void *data, const std::vector<int64_t> &shape, DType dtype);
 
-    bool contains(const std::string& name) const;
-    void* get_tensor(const std::string& name) const;
-    const Tensor& get_tensor_view(const std::string& name) const;
+    bool contains(const std::string &name) const;
+    void *get_tensor(const std::string &name) const;
+    const Tensor &get_tensor_view(const std::string &name) const;
     std::vector<std::string> keys() const;
 
-    template <typename T>
-    T* get_tensor_as(const std::string& name) const
+    template <typename T> T *get_tensor_as(const std::string &name) const
     {
-        return static_cast<T*>(get_tensor(name));
+        return static_cast<T *>(get_tensor(name));
     }
 
-private:
-    std::unordered_map<std::string, void*> tensor_ptrs_;
+  private:
+    std::unordered_map<std::string, void *> tensor_ptrs_;
     std::unordered_map<std::string, Tensor> tensor_views_;
 };
 
-struct LlamaLayerWeights {
+struct LlamaLayerWeights
+{
     Tensor input_layernorm;
     Tensor q_proj;
     Tensor k_proj;
@@ -58,20 +56,18 @@ struct LlamaLayerWeights {
     Tensor down_proj;
 };
 
-struct LlamaWeights {
+struct LlamaWeights
+{
     Tensor embed_tokens;
     std::vector<LlamaLayerWeights> layers;
     Tensor norm;
     Tensor lm_head;
 };
 
-LlamaWeights load_llama_weights(const HFSafeTensorLoader& loader,
-                                const LlamaConfig& config);
-LlamaWeights load_llama_weights(const HFSafeTensorLoader& loader,
-                                const LlamaConfig& config,
-                                const ParallelConfig& parallel_config);
+LlamaWeights load_llama_weights(const HFSafeTensorLoader &loader, const LlamaConfig &config);
+LlamaWeights load_llama_weights(const HFSafeTensorLoader &loader, const LlamaConfig &config,
+                                const ParallelConfig &parallel_config);
 
-LlamaWeights load_llama_weights(const WeightMap& weight_map,
-                                const LlamaConfig& config);
+LlamaWeights load_llama_weights(const WeightMap &weight_map, const LlamaConfig &config);
 
 } // namespace tiny_llm

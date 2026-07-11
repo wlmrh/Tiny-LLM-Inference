@@ -5,11 +5,12 @@
 
 #include <stdexcept>
 
-namespace tiny_llm {
-namespace modules {
+namespace tiny_llm
+{
+namespace modules
+{
 
-RMSNorm::RMSNorm(int32_t hidden_size, float eps)
-    : hidden_size_(hidden_size), eps_(eps)
+RMSNorm::RMSNorm(int32_t hidden_size, float eps) : hidden_size_(hidden_size), eps_(eps)
 {
     if (hidden_size_ <= 0)
     {
@@ -21,7 +22,7 @@ RMSNorm::RMSNorm(int32_t hidden_size, float eps)
     }
 }
 
-void RMSNorm::bind_weights(const Tensor& weight)
+void RMSNorm::bind_weights(const Tensor &weight)
 {
     if (!weight.defined())
     {
@@ -43,20 +44,19 @@ void RMSNorm::bind_weights(const Tensor& weight)
     weight_ = register_parameter("weight", weight, /*requires_grad=*/false);
 }
 
-void RMSNorm::bind_weights(float* weight)
+void RMSNorm::bind_weights(float *weight)
 {
     if (weight == nullptr)
     {
         throw std::runtime_error("modules::RMSNorm::bind_weights: weight pointer must be non-null.");
     }
 
-    const auto options = torch::TensorOptions()
-        .dtype(to_torch_scalar_type(DType::kFloat32))
-        .device(infer_blob_device(weight));
+    const auto options =
+        torch::TensorOptions().dtype(to_torch_scalar_type(DType::kFloat32)).device(infer_blob_device(weight));
     bind_weights(torch::from_blob(weight, {hidden_size_}, options));
 }
 
-Tensor RMSNorm::forward(const Tensor& input, ExecutionContext& ctx) const
+Tensor RMSNorm::forward(const Tensor &input, ExecutionContext &ctx) const
 {
     if (!input.defined())
     {
@@ -68,14 +68,14 @@ Tensor RMSNorm::forward(const Tensor& input, ExecutionContext& ctx) const
     return output;
 }
 
-void RMSNorm::forward(const Tensor& input, Tensor& output, ExecutionContext& ctx) const
+void RMSNorm::forward(const Tensor &input, Tensor &output, ExecutionContext &ctx) const
 {
     validate_forward_inputs(input, output);
 
     ops::rmsnorm(input, weight_, output, ctx, eps_);
 }
 
-void RMSNorm::validate_forward_inputs(const Tensor& input, const Tensor& output) const
+void RMSNorm::validate_forward_inputs(const Tensor &input, const Tensor &output) const
 {
     if (!weight_.defined())
     {

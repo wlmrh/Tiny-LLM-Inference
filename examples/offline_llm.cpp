@@ -6,9 +6,10 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
-tiny_llm::ParallelConfig parse_device(const std::string& value)
+tiny_llm::ParallelConfig parse_device(const std::string &value)
 {
     if (value == "cpu")
     {
@@ -28,11 +29,11 @@ tiny_llm::ParallelConfig parse_device(const std::string& value)
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     try
     {
-        const char* env_model = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR");
+        const char *env_model = std::getenv("TINYLLM_HF_TINY_LLAMA_DIR");
         const std::string model = argc > 1 ? argv[1] : (env_model != nullptr ? env_model : "/models/smollm2-135M");
         const std::string device = argc > 2 ? argv[2] : "cpu";
 
@@ -50,19 +51,18 @@ int main(int argc, char** argv)
             "The future of AI is",
         };
 
-        const std::vector<tiny_llm::CompletionOutput> outputs =
-            llm.generate(prompts, sampling_params);
+        const std::vector<tiny_llm::CompletionOutput> outputs = llm.generate(prompts, sampling_params);
 
         std::cout << "\nGenerated Outputs:\n";
         std::cout << "------------------------------------------------------------\n";
-        for (const tiny_llm::CompletionOutput& output : outputs)
+        for (const tiny_llm::CompletionOutput &output : outputs)
         {
             std::cout << "Prompt:    " << output.prompt << "\n";
             std::cout << "Output:    " << output.text << "\n";
             std::cout << "------------------------------------------------------------\n";
         }
     }
-    catch (const std::exception& e)
+    catch (const std::exception &e)
     {
         std::cerr << e.what() << "\n";
         return 1;

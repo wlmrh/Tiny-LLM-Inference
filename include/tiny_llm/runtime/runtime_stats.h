@@ -2,12 +2,14 @@
 
 #include <cstdint>
 
-namespace tiny_llm {
+namespace tiny_llm
+{
 
 /**
  * @brief Fine-grained runtime timing for one engine step or one generation.
  */
-struct RuntimeProfilingStats {
+struct RuntimeProfilingStats
+{
     double prepare_inputs_ms = 0.0;
     double prefill_ms = 0.0;
     double decode_ms_total = 0.0;
@@ -30,7 +32,7 @@ struct RuntimeProfilingStats {
     int64_t max_context_len = 0;
     int64_t profiled_steps = 0;
 
-    void add(const RuntimeProfilingStats& other);
+    void add(const RuntimeProfilingStats &other);
 };
 
 } // namespace tiny_llm

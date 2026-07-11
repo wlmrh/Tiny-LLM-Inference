@@ -10,12 +10,13 @@
 #include <cstdint>
 #include <vector>
 
-namespace {
-std::vector<int32_t> copy_int32_tensor(const tiny_llm::Tensor& tensor)
+namespace
+{
+std::vector<int32_t> copy_int32_tensor(const tiny_llm::Tensor &tensor)
 {
     tiny_llm::Tensor cpu = tensor.cpu().contiguous();
     std::vector<int32_t> values(static_cast<size_t>(cpu.numel()));
-    const int32_t* ptr = cpu.data_ptr<int32_t>();
+    const int32_t *ptr = cpu.data_ptr<int32_t>();
     for (size_t i = 0; i < values.size(); ++i)
     {
         values[i] = ptr[i];
@@ -23,23 +24,27 @@ std::vector<int32_t> copy_int32_tensor(const tiny_llm::Tensor& tensor)
     return values;
 }
 
-class FakeModel final : public tiny_llm::Model {
-public:
-    int32_t num_layers() const override { return 2; }
-    int32_t vocab_size() const override { return 128; }
+class FakeModel final : public tiny_llm::Model
+{
+  public:
+    int32_t num_layers() const override
+    {
+        return 2;
+    }
+    int32_t vocab_size() const override
+    {
+        return 128;
+    }
 
-    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs& inputs,
-                             tiny_llm::RuntimeContext& ctx) override
+    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs &inputs, tiny_llm::RuntimeContext &ctx) override
     {
         capture_inputs(inputs);
         tiny_llm::Tensor input_cpu = inputs.input_ids.cpu().contiguous();
-        tiny_llm::Tensor logits = torch::full(
-            {inputs.input_ids.size(0), vocab_size()},
-            -1000.0f,
-            torch::TensorOptions().dtype(torch::kFloat32).device(ctx.device()));
+        tiny_llm::Tensor logits = torch::full({inputs.input_ids.size(0), vocab_size()}, -1000.0f,
+                                              torch::TensorOptions().dtype(torch::kFloat32).device(ctx.device()));
         tiny_llm::Tensor logits_cpu = logits.cpu();
-        const int32_t* input = input_cpu.data_ptr<int32_t>();
-        float* out = logits_cpu.data_ptr<float>();
+        const int32_t *input = input_cpu.data_ptr<int32_t>();
+        float *out = logits_cpu.data_ptr<float>();
         for (int64_t row = 0; row < input_cpu.numel(); ++row)
         {
             out[row * vocab_size() + ((input[row] + 1) % vocab_size())] = 1000.0f;
@@ -56,8 +61,8 @@ public:
     std::vector<int64_t> last_block_tables_shape;
     std::vector<int32_t> last_sample_row_offsets;
 
-private:
-    void capture_inputs(const tiny_llm::PreparedInputs& inputs)
+  private:
+    void capture_inputs(const tiny_llm::PreparedInputs &inputs)
     {
         ++forward_calls;
         last_input_ids = copy_int32_tensor(inputs.input_ids);
@@ -70,22 +75,27 @@ private:
     }
 };
 
-class CompactLogitsModel final : public tiny_llm::Model {
-public:
-    int32_t num_layers() const override { return 2; }
-    int32_t vocab_size() const override { return 128; }
+class CompactLogitsModel final : public tiny_llm::Model
+{
+  public:
+    int32_t num_layers() const override
+    {
+        return 2;
+    }
+    int32_t vocab_size() const override
+    {
+        return 128;
+    }
 
-    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs& inputs,
-                             tiny_llm::RuntimeContext& ctx) override
+    tiny_llm::Tensor forward(const tiny_llm::PreparedInputs &inputs, tiny_llm::RuntimeContext &ctx) override
     {
         tiny_llm::Tensor input_cpu = inputs.input_ids.cpu().contiguous();
-        tiny_llm::Tensor logits = torch::full(
-            {static_cast<int64_t>(inputs.sample_row_offsets.size()), vocab_size()},
-            -1000.0f,
-            torch::TensorOptions().dtype(torch::kFloat32).device(ctx.device()));
+        tiny_llm::Tensor logits =
+            torch::full({static_cast<int64_t>(inputs.sample_row_offsets.size()), vocab_size()}, -1000.0f,
+                        torch::TensorOptions().dtype(torch::kFloat32).device(ctx.device()));
         tiny_llm::Tensor logits_cpu = logits.cpu();
-        const int32_t* input = input_cpu.data_ptr<int32_t>();
-        float* out = logits_cpu.data_ptr<float>();
+        const int32_t *input = input_cpu.data_ptr<int32_t>();
+        float *out = logits_cpu.data_ptr<float>();
         for (size_t sample_index = 0; sample_index < inputs.sample_row_offsets.size(); ++sample_index)
         {
             const int32_t input_row = inputs.sample_row_offsets[sample_index];
@@ -95,7 +105,7 @@ public:
     }
 };
 
-tiny_llm::EngineArgs make_model_runner_args(tiny_llm::Model* model, tiny_llm::ExecutionContext* ctx)
+tiny_llm::EngineArgs make_model_runner_args(tiny_llm::Model *model, tiny_llm::ExecutionContext *ctx)
 {
     tiny_llm::EngineArgs args;
     args.model = model;
@@ -124,7 +134,7 @@ tiny_llm::SchedulerOutput make_valid_output()
     output.total_num_scheduled_tokens = 4;
     return output;
 }
-}
+} // namespace
 
 TEST(ModelRunnerPreparedInputsTest, FlattensSchedulerOutputIntoRuntimeTensors)
 {
@@ -207,4 +217,18 @@ TEST(ModelRunnerPreparedInputsTest, RejectsInvalidTokensDuringRun)
     tiny_llm::SchedulerOutput output = make_valid_output();
     output.scheduled_reqs[0].new_token_ids[2] = model.vocab_size();
     EXPECT_THROW(runner.run(output), std::runtime_error);
+}
+
+TEST(ModelRunnerPreparedInputsTest, RejectsCpuBFloat16WithoutFallback)
+{
+    FakeModel model;
+    tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);
+
+    tiny_llm::EngineArgs compute_args = make_model_runner_args(&model, &exec_ctx);
+    compute_args.compute_dtype = tiny_llm::RuntimeDType::kBFloat16;
+    EXPECT_THROW({ tiny_llm::ModelRunner runner(compute_args, nullptr); }, std::runtime_error);
+
+    tiny_llm::EngineArgs kv_args = make_model_runner_args(&model, &exec_ctx);
+    kv_args.kv_cache_dtype = tiny_llm::RuntimeDType::kBFloat16;
+    EXPECT_THROW({ tiny_llm::ModelRunner runner(kv_args, nullptr); }, std::runtime_error);
 }

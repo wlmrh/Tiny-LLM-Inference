@@ -3,7 +3,6 @@ build/
 .venv/
 .cache/
 .devcontainer/
-Dockerfile
 .DS_Store
 build-cuda/
 build-*/
