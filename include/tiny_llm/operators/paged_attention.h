@@ -46,29 +46,6 @@ struct LlamaAttentionParams
     int32_t head_dim = 0;
 };
 
-// Legacy compatibility API. New model code should pass metadata explicitly
-// through RuntimeContext/LlamaAttentionParams instead of using thread-local state.
-void set_paged_attention_runtime_metadata(const Tensor &slot_mapping, const Tensor &seq_indices,
-                                          const Tensor &context_lens, const Tensor &block_tables,
-                                          int32_t block_size_tokens);
-
-void clear_paged_attention_runtime_metadata();
-const PagedAttentionRuntimeMetadata &current_paged_attention_runtime_metadata();
-
-class PagedAttentionRuntimeMetadataGuard
-{
-  public:
-    explicit PagedAttentionRuntimeMetadataGuard(const PagedAttentionRuntimeMetadata &metadata);
-    ~PagedAttentionRuntimeMetadataGuard();
-
-    PagedAttentionRuntimeMetadataGuard(const PagedAttentionRuntimeMetadataGuard &) = delete;
-    PagedAttentionRuntimeMetadataGuard &operator=(const PagedAttentionRuntimeMetadataGuard &) = delete;
-
-  private:
-    PagedAttentionRuntimeMetadata previous_{};
-};
-
-void attention_paged(const Tensor &q, Tensor &out, ExecutionContext &ctx);
 void llama_attention_forward(const LlamaAttentionParams &params);
 void llama_attention(const Tensor &positions, const Tensor &q, const Tensor &k, const Tensor &v, Tensor &out,
                      ExecutionContext &ctx, int32_t layer_id, int32_t num_attention_heads, int32_t num_key_value_heads,

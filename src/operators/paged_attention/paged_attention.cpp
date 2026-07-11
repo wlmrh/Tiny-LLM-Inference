@@ -7,10 +7,8 @@
 #include "tiny_llm/runtime/kv_cache.h"
 
 #include <cstdlib>
-#include <cstring>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #if TINYLLM_ENABLE_CUDA
@@ -25,40 +23,29 @@ namespace ops
 namespace
 {
 
-thread_local PagedAttentionRuntimeMetadata g_runtime_metadata;
-
-const PagedAttentionRuntimeMetadata *explicit_or_legacy_metadata(const LlamaAttentionParams &params)
-{
-    if (params.metadata != nullptr)
-    {
-        return params.metadata;
-    }
-    return &g_runtime_metadata;
-}
-
 bool wants_torch_reference_backend()
 {
     const char *value = std::getenv("TINYLLM_PAGED_ATTENTION_BACKEND");
     return value != nullptr && std::string(value) == "torch";
 }
 
-void validate_attention_paged_metadata(const Tensor &q)
+void validate_attention_paged_metadata(const Tensor &q, const PagedAttentionRuntimeMetadata &metadata)
 {
-    if (!g_runtime_metadata.enabled)
+    if (!metadata.enabled)
     {
         return;
     }
 
-    if (g_runtime_metadata.slot_mapping == nullptr || g_runtime_metadata.seq_indices == nullptr ||
-        g_runtime_metadata.context_lens == nullptr || g_runtime_metadata.block_tables == nullptr)
+    if (metadata.slot_mapping == nullptr || metadata.seq_indices == nullptr || metadata.context_lens == nullptr ||
+        metadata.block_tables == nullptr)
     {
         throw std::runtime_error("attention_paged: runtime metadata pointers must be non-null when enabled.");
     }
 
-    const Tensor &slot_mapping = *g_runtime_metadata.slot_mapping;
-    const Tensor &seq_indices = *g_runtime_metadata.seq_indices;
-    const Tensor &context_lens = *g_runtime_metadata.context_lens;
-    const Tensor &block_tables = *g_runtime_metadata.block_tables;
+    const Tensor &slot_mapping = *metadata.slot_mapping;
+    const Tensor &seq_indices = *metadata.seq_indices;
+    const Tensor &context_lens = *metadata.context_lens;
+    const Tensor &block_tables = *metadata.block_tables;
 
     if (tensor_dtype(slot_mapping) != DType::kInt32 || tensor_dtype(seq_indices) != DType::kInt32 ||
         tensor_dtype(context_lens) != DType::kInt32 || tensor_dtype(block_tables) != DType::kInt32)
@@ -106,7 +93,7 @@ void validate_attention_paged_metadata(const Tensor &q)
     {
         throw std::runtime_error("attention_paged: block_tables dimensions must be positive.");
     }
-    if (g_runtime_metadata.block_size_tokens <= 0)
+    if (metadata.block_size_tokens <= 0)
     {
         throw std::runtime_error("attention_paged: block_size_tokens must be positive.");
     }
@@ -132,8 +119,7 @@ void validate_attention_paged_metadata(const Tensor &q)
         const int64_t required_blocks =
             context_len == 0
                 ? 0
-                : (static_cast<int64_t>(context_len) - 1) / static_cast<int64_t>(g_runtime_metadata.block_size_tokens) +
-                      1;
+                : (static_cast<int64_t>(context_len) - 1) / static_cast<int64_t>(metadata.block_size_tokens) + 1;
 
         int64_t valid_blocks_in_row = 0;
         for (int64_t col = 0; col < max_blocks_per_seq; ++col)
@@ -165,7 +151,7 @@ void validate_attention_paged_metadata(const Tensor &q)
             throw std::runtime_error("attention_paged: slot_mapping values must be non-negative.");
         }
 
-        const int32_t block_id = slot / g_runtime_metadata.block_size_tokens;
+        const int32_t block_id = slot / metadata.block_size_tokens;
         if (known_block_ids.find(block_id) == known_block_ids.end())
         {
             throw std::runtime_error("attention_paged: slot_mapping references an unknown physical block.");
@@ -363,44 +349,6 @@ void validate_paged_metadata_for_attention(const LlamaAttentionParams &params)
     }
 }
 
-void set_paged_attention_runtime_metadata(const Tensor &slot_mapping, const Tensor &seq_indices,
-                                          const Tensor &context_lens, const Tensor &block_tables,
-                                          int32_t block_size_tokens)
-{
-    g_runtime_metadata.slot_mapping = &slot_mapping;
-    g_runtime_metadata.seq_indices = &seq_indices;
-    g_runtime_metadata.context_lens = &context_lens;
-    g_runtime_metadata.block_tables = &block_tables;
-    g_runtime_metadata.block_size_tokens = block_size_tokens;
-    g_runtime_metadata.enabled = true;
-}
-
-void clear_paged_attention_runtime_metadata()
-{
-    g_runtime_metadata.slot_mapping = nullptr;
-    g_runtime_metadata.seq_indices = nullptr;
-    g_runtime_metadata.context_lens = nullptr;
-    g_runtime_metadata.block_tables = nullptr;
-    g_runtime_metadata.block_size_tokens = 0;
-    g_runtime_metadata.enabled = false;
-}
-
-const PagedAttentionRuntimeMetadata &current_paged_attention_runtime_metadata()
-{
-    return g_runtime_metadata;
-}
-
-PagedAttentionRuntimeMetadataGuard::PagedAttentionRuntimeMetadataGuard(const PagedAttentionRuntimeMetadata &metadata)
-    : previous_(g_runtime_metadata)
-{
-    g_runtime_metadata = metadata;
-}
-
-PagedAttentionRuntimeMetadataGuard::~PagedAttentionRuntimeMetadataGuard()
-{
-    g_runtime_metadata = previous_;
-}
-
 void attention_paged(const Tensor &q, Tensor &out, ExecutionContext &ctx)
 {
 #if !TINYLLM_ENABLE_CUDA
@@ -422,7 +370,7 @@ void attention_paged(const Tensor &q, Tensor &out, ExecutionContext &ctx)
         throw std::runtime_error("attention_paged: q and out pointers must be non-null.");
     }
 
-    validate_attention_paged_metadata(q);
+    validate_attention_paged_metadata(q, PagedAttentionRuntimeMetadata{});
 
 #if TINYLLM_ENABLE_CUDA
     const float *q_ptr = static_cast<const float *>(tensor_data(q));
@@ -441,8 +389,7 @@ void attention_paged(const Tensor &q, Tensor &out, ExecutionContext &ctx)
 
 void llama_attention_forward(const LlamaAttentionParams &input_params)
 {
-    LlamaAttentionParams params = input_params;
-    params.metadata = explicit_or_legacy_metadata(params);
+    const LlamaAttentionParams &params = input_params;
 
     validate_llama_attention_params(params);
     validate_same_device({std::cref(*params.positions), std::cref(*params.q), std::cref(*params.k),
@@ -485,7 +432,7 @@ void llama_attention(const Tensor &positions, const Tensor &q, const Tensor &k, 
     params.v = &v;
     params.out = &out;
     params.ctx = &ctx;
-    params.metadata = &g_runtime_metadata;
+    params.metadata = nullptr;
     params.layer_id = layer_id;
     params.num_attention_heads = num_attention_heads;
     params.num_key_value_heads = num_key_value_heads;

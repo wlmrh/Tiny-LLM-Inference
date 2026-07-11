@@ -88,14 +88,6 @@ TEST(PagedAttentionTest, DirectAndPagedCpuPathsMatchExpectedValues)
     EXPECT_NEAR(kv_pool[3], 1.0f, 1e-5f);
     EXPECT_NEAR(kv_pool[4], 10.0f, 1e-5f);
     EXPECT_NEAR(kv_pool[7], 40.0f, 1e-5f);
-
-    std::fill(kv_pool.begin(), kv_pool.end(), 0.0f);
-    tiny_llm::Tensor compat_out = torch::empty({2, 2}, torch::TensorOptions().dtype(torch::kFloat32));
-    tiny_llm::ops::set_paged_attention_runtime_metadata(slot_mapping, seq_indices, context_lens, block_tables,
-                                                        kBlockSizeTokens);
-    tiny_llm::ops::llama_attention(positions, q, k, v, compat_out, paged_ctx, 0, 1, 1, 2);
-    tiny_llm::ops::clear_paged_attention_runtime_metadata();
-    expect_attention_output(compat_out);
 }
 
 TEST(PagedAttentionTest, RejectsInvalidRuntimeMetadata)
