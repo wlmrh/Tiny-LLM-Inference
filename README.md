@@ -1,5 +1,8 @@
 # Tiny-LLM-Inference
 
+[![CI](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml/badge.svg)](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 ## Project Overview
 
 Tiny-LLM-Inference is a compact C++17, single-process decoder-only LLM inference engine inspired by vLLM. It is designed for offline generation with request scheduling, paged KV cache management, Hugging Face tokenizer/safetensors loading, model execution, and configurable sampling.
@@ -12,6 +15,8 @@ The runtime targets LLaMA-style checkpoints, including small LLaMA/SmolLM2-compa
 - Local Hugging Face checkpoint directories only; no model download layer is provided.
 - CPU is the default backend; CUDA supports one selected device when enabled at build time.
 - No HTTP/gRPC server is included. Use the C++ API example or CLI generation tools for local inference.
+
+See [Project Status](docs/Project_Status.md) for the support matrix, explicit non-goals, and benchmark-claim policy.
 
 ## Features
 
@@ -72,6 +77,15 @@ The same flow is available through the built example:
 - CUDA Toolkit when building with `TINYLLM_ENABLE_CUDA=ON`
 
 ## Build
+
+Preset-based builds are the recommended reproducible path:
+
+```bash
+cmake --preset cpu-release
+cmake --build --preset cpu-release -j
+```
+
+The explicit commands below remain available for custom dependency locations.
 
 CPU build:
 
@@ -134,6 +148,12 @@ Run the default test suite after a CPU build:
 ctest --test-dir build --output-on-failure
 ```
 
+Model-backed tests use `TINYLLM_HF_TINY_LLAMA_DIR`; they report a skip rather than using a remote model. Public CI
+runs model-independent CPU tests. CUDA and model-backed checks are release gates on a GPU host.
+
 ## Documentation
 
 Start with [docs/README.md](docs/README.md) for architecture and module-level documentation. Repository-specific agent workflow and coding conventions are in [AGENTS.md](AGENTS.md).
+
+Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md). Releases are recorded in [CHANGELOG.md](CHANGELOG.md). The
+source is available under the [Apache License 2.0](LICENSE).

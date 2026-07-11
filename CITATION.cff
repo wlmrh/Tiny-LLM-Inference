@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If Tiny-LLM-Inference supports your work, please cite this software."
+title: "Tiny-LLM-Inference"
+type: software
+authors:
+  - family-names: Tang
+    given-names: Qi
+    alias: wlmrh
+repository-code: "https://github.com/wlmrh/Tiny-LLM-Inference"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-07-11

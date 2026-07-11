@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "cpu-debug",
+      "inherits": "base",
+      "displayName": "CPU debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "TINYLLM_ENABLE_CUDA": "OFF" }
+    },
+    {
+      "name": "cpu-release",
+      "inherits": "base",
+      "displayName": "CPU release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "TINYLLM_ENABLE_CUDA": "OFF" }
+    },
+    {
+      "name": "ci-cpu",
+      "inherits": "cpu-release",
+      "displayName": "CPU continuous integration",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "TINYLLM_BUILD_BENCHMARKS": "OFF",
+        "TINYLLM_BUILD_EXAMPLES": "ON",
+        "TINYLLM_BUILD_TOOLS": "ON",
+        "TINYLLM_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "cuda-release",
+      "inherits": "base",
+      "displayName": "CUDA release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "TINYLLM_ENABLE_CUDA": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cpu-debug", "configurePreset": "cpu-debug" },
+    { "name": "cpu-release", "configurePreset": "cpu-release" },
+    { "name": "ci-cpu", "configurePreset": "ci-cpu" },
+    { "name": "cuda-release", "configurePreset": "cuda-release" }
+  ],
+  "testPresets": [
+    { "name": "ci-cpu", "configurePreset": "ci-cpu", "output": { "outputOnFailure": true } },
+    { "name": "cuda-release", "configurePreset": "cuda-release", "output": { "outputOnFailure": true } }
+  ]
+}
