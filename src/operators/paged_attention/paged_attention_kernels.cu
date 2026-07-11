@@ -3,8 +3,8 @@
 
 #include <cfloat>
 #include <cmath>
-#include <cuda_runtime.h>
 #include <cuda_bf16.h>
+#include <cuda_runtime.h>
 
 namespace tiny_llm::ops::cuda
 {
@@ -117,12 +117,12 @@ __global__ void write_paged_kv_cache_kernel(const float *k, const float *v, cons
 }
 
 template <typename KVType>
-__global__ void paged_attention_kernel(const float *q, float *out, const int32_t *positions,
-                                       const int32_t *seq_indices, const int32_t *context_lens,
-                                       const int32_t *block_tables, const KVType *kv_pool_base, int64_t rows,
-                                       int64_t num_seqs, int64_t max_blocks_per_seq, int64_t num_blocks,
-                                       int64_t block_size_bytes, int32_t block_size_tokens, int32_t layer_id,
-                                       int32_t num_attention_heads, int32_t num_key_value_heads, int32_t head_dim)
+__global__ void paged_attention_kernel(const float *q, float *out, const int32_t *positions, const int32_t *seq_indices,
+                                       const int32_t *context_lens, const int32_t *block_tables,
+                                       const KVType *kv_pool_base, int64_t rows, int64_t num_seqs,
+                                       int64_t max_blocks_per_seq, int64_t num_blocks, int64_t block_size_bytes,
+                                       int32_t block_size_tokens, int32_t layer_id, int32_t num_attention_heads,
+                                       int32_t num_key_value_heads, int32_t head_dim)
 {
     extern __shared__ float shared[];
     float *reduce = shared;
@@ -243,7 +243,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
         const int32_t src_offset = src_pos % block_size_tokens;
         const KVType *key_base = reinterpret_cast<const KVType *>(reinterpret_cast<const char *>(kv_pool_base) +
                                                                   static_cast<int64_t>(block_id) * block_size_bytes) +
-                                static_cast<int64_t>(src_offset) * kv_size + static_cast<int64_t>(kv_head) * head_dim;
+                                 static_cast<int64_t>(src_offset) * kv_size + static_cast<int64_t>(kv_head) * head_dim;
         float score = 0.0f;
         for (int32_t dim = 0; dim < head_dim; ++dim)
         {
@@ -285,7 +285,8 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
         const KVType *key_base =
             block + static_cast<int64_t>(src_offset) * kv_size + static_cast<int64_t>(kv_head) * head_dim;
         const KVType *value_base = block + static_cast<int64_t>(block_size_tokens) * kv_size +
-                                   static_cast<int64_t>(src_offset) * kv_size + static_cast<int64_t>(kv_head) * head_dim;
+                                   static_cast<int64_t>(src_offset) * kv_size +
+                                   static_cast<int64_t>(kv_head) * head_dim;
 
         float score = 0.0f;
         for (int32_t dim = 0; dim < head_dim; ++dim)
@@ -372,12 +373,11 @@ void launch_write_paged_kv_cache_f32(const float *k, const float *v, const int32
 }
 
 void launch_paged_attention_bf16_kv(const float *q, const float *k, const float *v, float *out,
-                                    const int32_t *positions, const int32_t *seq_indices,
-                                    const int32_t *context_lens, const int32_t *block_tables, void *kv_pool_base,
-                                    int64_t rows, int64_t num_seqs, int64_t max_blocks_per_seq, int64_t num_blocks,
-                                    int64_t block_size_bytes, int32_t block_size_tokens, int32_t layer_id,
-                                    int32_t num_attention_heads, int32_t num_key_value_heads, int32_t head_dim,
-                                    cudaStream_t stream)
+                                    const int32_t *positions, const int32_t *seq_indices, const int32_t *context_lens,
+                                    const int32_t *block_tables, void *kv_pool_base, int64_t rows, int64_t num_seqs,
+                                    int64_t max_blocks_per_seq, int64_t num_blocks, int64_t block_size_bytes,
+                                    int32_t block_size_tokens, int32_t layer_id, int32_t num_attention_heads,
+                                    int32_t num_key_value_heads, int32_t head_dim, cudaStream_t stream)
 {
     if (rows <= 0 || num_attention_heads <= 0 || num_key_value_heads <= 0 || head_dim <= 0)
     {

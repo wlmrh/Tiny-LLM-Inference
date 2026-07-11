@@ -42,7 +42,8 @@ Tensor kv_block_tensor(KVCache &kv_cache, int32_t block_id, int32_t block_size_t
         block_ptr += static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size) * element_bytes;
     }
 
-    const c10::ScalarType scalar_type = kv_cache.dtype() == RuntimeDType::kBFloat16 ? torch::kBFloat16 : torch::kFloat32;
+    const c10::ScalarType scalar_type =
+        kv_cache.dtype() == RuntimeDType::kBFloat16 ? torch::kBFloat16 : torch::kFloat32;
     return torch::from_blob(block_ptr, {block_size_tokens, kv_size},
                             torch::TensorOptions().dtype(scalar_type).device(kv_cache.device()));
 }
@@ -352,8 +353,8 @@ bool try_run_cuda_optimized_attention(const LlamaAttentionParams &params)
             params.metadata->context_lens->data_ptr<int32_t>(), params.metadata->block_tables->data_ptr<int32_t>(),
             kv_cache.block_pool_base(), params.q->size(0), block_shape[1], block_shape[2],
             static_cast<int64_t>(kv_cache.total_block_count()), static_cast<int64_t>(kv_cache.block_size_bytes()),
-            params.metadata->block_size_tokens, params.layer_id, params.num_attention_heads,
-            params.num_key_value_heads, params.head_dim, params.ctx->stream());
+            params.metadata->block_size_tokens, params.layer_id, params.num_attention_heads, params.num_key_value_heads,
+            params.head_dim, params.ctx->stream());
         return true;
     }
     void *base = kv_cache.block_pool_base();
