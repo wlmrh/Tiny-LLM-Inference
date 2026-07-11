@@ -219,7 +219,7 @@ TEST(ModelRunnerPreparedInputsTest, RejectsInvalidTokensDuringRun)
     EXPECT_THROW(runner.run(output), std::runtime_error);
 }
 
-TEST(ModelRunnerPreparedInputsTest, RejectsUnimplementedRuntimeDTypesWithoutFallback)
+TEST(ModelRunnerPreparedInputsTest, RejectsCpuBFloat16WithoutFallback)
 {
     FakeModel model;
     tiny_llm::ExecutionContext exec_ctx(nullptr, nullptr, nullptr);

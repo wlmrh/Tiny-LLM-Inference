@@ -25,6 +25,7 @@ See [Project Status](docs/Project_Status.md) for the support matrix, explicit no
 - Scheduler-managed waiting/running queues, chunked prefill/decode, preemption, and paged KV cache ownership.
 - Hugging Face `tokenizer.json` or `tokenizer.model`, single-file `model.safetensors`, and sorted sharded safetensors.
 - LLaMA/SmolLM2/Qwen2-family model path with CPU execution and optional CUDA kernels.
+- Independent CUDA compute/KV dtype controls (`fp32` or experimental `bf16`) with no silent fallback.
 - Default greedy decoding, HuggingFace-style repetition penalty, and seeded temperature/top-k/top-p sampling.
 
 ## Quickstart
@@ -119,12 +120,15 @@ For direct JSONL output or explicit KV block sizing, use `llama_engine_generate`
 ```bash
 ./build-cuda/tools/llama_engine_generate \
   --device cuda:0 \
+  --dtype bf16 \
+  --kv-cache-dtype bf16 \
   /models/Qwen2.5-1.5B-Instruct \
   8 \
   hello
 ```
 
-`llama_engine_generate` prints one JSON object per prompt and also supports `--kv-num-blocks N`.
+`llama_engine_generate` prints one JSON object per prompt and also supports `--kv-num-blocks N`. BF16 is CUDA-only and
+experimental in v0.1.0; see [Project Status](docs/Project_Status.md) before interpreting memory or throughput results.
 
 ## Benchmarks
 
@@ -138,7 +142,8 @@ python3 benchmark/run_benchmark_suite.py \
 
 It writes workload JSONL, TinyLLM request event traces, summary JSON, and Markdown reports under
 `benchmark/results/`. The lower-level `llama_engine_benchmark` binary also supports
-`--workload-jsonl`, full sampling flags, and `--events-jsonl` for request-level timing.
+`--workload-jsonl`, full sampling flags, dtype flags, and `--events-jsonl` for request-level timing. Reports include
+the selected dtypes and environment metadata.
 
 ## Tests
 
