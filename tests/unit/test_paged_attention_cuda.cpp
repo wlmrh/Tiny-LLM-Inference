@@ -82,7 +82,8 @@ struct CaseResult
 };
 
 CaseResult run_prefill_then_decode(bool optimized, int32_t num_attention_heads, int32_t num_key_value_heads,
-                                   int32_t head_dim, int32_t block_size_tokens, int32_t prefill_tokens)
+                                   int32_t head_dim, int32_t block_size_tokens, int32_t prefill_tokens,
+                                   tiny_llm::RuntimeDType kv_dtype = tiny_llm::RuntimeDType::kFloat32)
 {
     if (optimized)
     {
@@ -96,15 +97,19 @@ CaseResult run_prefill_then_decode(bool optimized, int32_t num_attention_heads, 
     const int32_t block_count = (prefill_tokens + 1 + block_size_tokens - 1) / block_size_tokens;
     const int32_t kv_size = num_key_value_heads * head_dim;
     const int32_t hidden_size = num_attention_heads * head_dim;
-    const size_t block_floats = 2 * static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
-    tiny_llm::Tensor pool = torch::zeros({static_cast<int64_t>(block_count * block_floats)},
-                                         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+    const size_t block_elements = 2 * static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
+    const c10::ScalarType pool_type =
+        kv_dtype == tiny_llm::RuntimeDType::kBFloat16 ? torch::kBFloat16 : torch::kFloat32;
+    tiny_llm::Tensor pool = torch::zeros({static_cast<int64_t>(block_count * block_elements)},
+                                         torch::TensorOptions().dtype(pool_type).device(torch::kCUDA));
 
-    tiny_llm::BlockAllocator blocks(block_count, block_floats * sizeof(float), pool.data_ptr<float>(),
+    tiny_llm::BlockAllocator blocks(block_count, block_elements * tiny_llm::runtime_dtype_size(kv_dtype),
+                                    pool.data_ptr(),
                                     tiny_llm::ParallelConfig::cuda(0));
     tiny_llm::KVCache::Config kv_cfg;
     kv_cfg.num_layers = 1;
     kv_cfg.block_size_tokens = block_size_tokens;
+    kv_cfg.dtype = kv_dtype;
     tiny_llm::KVCache kv_cache(kv_cfg, &blocks);
     tiny_llm::ExecutionContext ctx(nullptr, nullptr, &kv_cache, tiny_llm::ParallelConfig::cuda(0));
 
@@ -353,4 +358,19 @@ TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceAboveSingleBlockThr
     }
 
     expect_optimized_matches_reference(1, 1, 8, 16, 1032, 2e-4f);
+}
+
+TEST(PagedAttentionCudaTest, BFloat16KvCacheMatchesFloat32Reference)
+{
+    check_cuda(cudaSetDevice(0), "set CUDA device");
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    const CaseResult fp32 = run_prefill_then_decode(false, 12, 2, 128, 16, 24);
+    const CaseResult bf16 = run_prefill_then_decode(false, 12, 2, 128, 16, 24,
+                                                    tiny_llm::RuntimeDType::kBFloat16);
+    expect_close(bf16.prefill, fp32.prefill, 2e-2f);
+    expect_close(bf16.decode, fp32.decode, 2e-2f);
 }

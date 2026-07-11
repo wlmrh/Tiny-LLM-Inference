@@ -98,7 +98,8 @@ void KVCacheManager::bind(KVCache *kv)
 }
 
 void KVCacheManager::init_owned(int32_t kv_num_layers, int32_t kv_block_size_tokens, size_t kv_num_blocks,
-                                size_t kv_block_size_bytes, void *kv_memory_pool, ParallelConfig parallel_config)
+                                size_t kv_block_size_bytes, void *kv_memory_pool, ParallelConfig parallel_config,
+                                RuntimeDType kv_cache_dtype)
 {
     if (kv_num_layers <= 0)
     {
@@ -125,6 +126,7 @@ void KVCacheManager::init_owned(int32_t kv_num_layers, int32_t kv_block_size_tok
     KVCache::Config kv_cfg;
     kv_cfg.num_layers = kv_num_layers;
     kv_cfg.block_size_tokens = kv_block_size_tokens;
+    kv_cfg.dtype = kv_cache_dtype;
 
     owned_kv_.reset();
     owned_blocks_ =
@@ -364,12 +366,17 @@ Scheduler::Scheduler(const EngineArgs &args) : Scheduler(args.scheduler_config)
         {
             throw std::runtime_error("Scheduler: KV cache device does not match EngineArgs parallel_config.");
         }
+        if (args.kv->dtype() != args.kv_cache_dtype)
+        {
+            throw std::runtime_error("Scheduler: KV cache dtype does not match EngineArgs kv_cache_dtype.");
+        }
         kvcache_manager->bind(args.kv);
         return;
     }
 
     kvcache_manager->init_owned(args.kv_num_layers, args.kv_block_size_tokens, args.kv_num_blocks,
-                                args.kv_block_size_bytes, args.kv_memory_pool, args.parallel_config);
+                                args.kv_block_size_bytes, args.kv_memory_pool, args.parallel_config,
+                                args.kv_cache_dtype);
 }
 
 Scheduler::Scheduler(KVCache *kv, SchedulerConfig config) : Scheduler(config)

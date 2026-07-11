@@ -401,13 +401,13 @@ void ModelRunner::init_from_args(const EngineArgs &args)
 {
     owned_hf_loaders_.clear();
     args.parallel_config.validate();
-    if (args.kv_cache_dtype != RuntimeDType::kFloat32)
-    {
-        throw std::runtime_error("ModelRunner: bfloat16 KV cache is not enabled until paged attention supports it.");
-    }
     if (args.compute_dtype == RuntimeDType::kBFloat16 && !args.parallel_config.is_cuda())
     {
         throw std::runtime_error("ModelRunner: bfloat16 compute requires a CUDA device.");
+    }
+    if (args.kv_cache_dtype == RuntimeDType::kBFloat16 && !args.parallel_config.is_cuda())
+    {
+        throw std::runtime_error("ModelRunner: bfloat16 KV cache requires a CUDA device.");
     }
 
     if (args.kv_block_size_tokens <= 0)

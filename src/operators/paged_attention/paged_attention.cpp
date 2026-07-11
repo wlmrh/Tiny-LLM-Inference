@@ -341,7 +341,7 @@ void validate_paged_metadata_for_attention(const LlamaAttentionParams &params)
     }
 
     const int32_t kv_size = kv_hidden_size(params.num_key_value_heads, params.head_dim);
-    const size_t kv_token_bytes = static_cast<size_t>(kv_size) * sizeof(float);
+    const size_t kv_token_bytes = static_cast<size_t>(kv_size) * runtime_dtype_size(kv_cache->dtype());
     const size_t required_block_bytes = 2 * static_cast<size_t>(metadata.block_size_tokens) * kv_token_bytes;
     if (kv_cache->block_size_bytes() < required_block_bytes)
     {

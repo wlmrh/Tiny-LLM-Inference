@@ -252,10 +252,6 @@ void LLM::initialize()
     {
         throw std::runtime_error("LLM: bfloat16 compute and KV cache require a CUDA device.");
     }
-    if (options_.kv_cache_dtype == RuntimeDType::kBFloat16)
-    {
-        throw std::runtime_error("LLM: bfloat16 KV cache is not enabled until paged attention supports it.");
-    }
     const std::filesystem::path model_dir(options_.model);
     validate_model_dir(model_dir, options_.weight_file);
 

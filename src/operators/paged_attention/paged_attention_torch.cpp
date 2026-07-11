@@ -35,14 +35,16 @@ Tensor kv_block_tensor(KVCache &kv_cache, int32_t block_id, int32_t block_size_t
         throw std::runtime_error("llama_attention: KV block pointer is null.");
     }
 
-    float *block_ptr = static_cast<float *>(block);
+    auto *block_ptr = static_cast<uint8_t *>(block);
+    const size_t element_bytes = runtime_dtype_size(kv_cache.dtype());
     if (value_block)
     {
-        block_ptr += static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
+        block_ptr += static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size) * element_bytes;
     }
 
+    const c10::ScalarType scalar_type = kv_cache.dtype() == RuntimeDType::kBFloat16 ? torch::kBFloat16 : torch::kFloat32;
     return torch::from_blob(block_ptr, {block_size_tokens, kv_size},
-                            torch::TensorOptions().dtype(torch::kFloat32).device(kv_cache.device()));
+                            torch::TensorOptions().dtype(scalar_type).device(kv_cache.device()));
 }
 
 #if TINYLLM_ENABLE_CUDA
@@ -339,6 +341,10 @@ bool try_run_cuda_optimized_attention(const LlamaAttentionParams &params)
     }
 
     KVCache &kv_cache = *params.ctx->kv();
+    if (kv_cache.dtype() != RuntimeDType::kFloat32)
+    {
+        return false;
+    }
     void *base = kv_cache.block_pool_base();
     if (base == nullptr || kv_cache.total_block_count() == 0)
     {

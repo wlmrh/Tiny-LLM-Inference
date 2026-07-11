@@ -1,5 +1,6 @@
 #pragma once
 #include "tiny_llm/runtime/parallel_config.h"
+#include "tiny_llm/runtime/runtime_dtype.h"
 #include "utils/cuda_compat.h"
 #include <c10/core/Device.h>
 #include <cstdint>
@@ -31,6 +32,7 @@ class KVCache
     {
         int32_t num_layers = 0;         ///< Total number of transformer layers in the model.
         int32_t block_size_tokens = 16; ///< Number of tokens stored in a single physical block.
+        RuntimeDType dtype = RuntimeDType::kFloat32;
     };
 
     /**
@@ -56,6 +58,11 @@ class KVCache
     int32_t block_size_tokens() const
     {
         return cfg_.block_size_tokens;
+    }
+
+    RuntimeDType dtype() const
+    {
+        return cfg_.dtype;
     }
 
     /**
