@@ -11,8 +11,7 @@
 namespace tiny_llm
 {
 ScopedRuntimeProfile::ScopedRuntimeProfile(RuntimeContext &ctx, double RuntimeProfilingStats::*field)
-    : stats_(ctx.profiling_stats()), field_(field), device_(ctx.device()),
-      stream_(ctx.execution().stream()),
+    : stats_(ctx.profiling_stats()), field_(field), device_(ctx.device()), stream_(ctx.execution().stream()),
       enabled_(ctx.profile_detail_enabled() && field_ != nullptr)
 {
     if (enabled_)
