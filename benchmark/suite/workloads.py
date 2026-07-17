@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -51,6 +52,35 @@ def make_prompt(tokenizer: Any, target_tokens: int, seed: int) -> Tuple[str, Lis
     return best, best_ids
 
 
+def generate_arrival_ms(
+    request_count: int,
+    pattern: str = "simultaneous",
+    request_rate_rps: float = 0.0,
+    seed: int = 0,
+) -> List[float]:
+    if request_count < 0:
+        raise ValueError("request_count must be non-negative")
+    if pattern == "simultaneous":
+        return [0.0] * request_count
+    if pattern not in {"fixed", "poisson"}:
+        raise ValueError(f"unsupported arrival pattern: {pattern}")
+    if request_rate_rps <= 0.0:
+        raise ValueError("request_rate_rps must be positive for fixed or poisson arrivals")
+
+    if pattern == "fixed":
+        interval_ms = 1000.0 / request_rate_rps
+        return [index * interval_ms for index in range(request_count)]
+
+    rng = random.Random(seed)
+    arrivals: List[float] = []
+    current_ms = 0.0
+    for index in range(request_count):
+        if index > 0:
+            current_ms += rng.expovariate(request_rate_rps) * 1000.0
+        arrivals.append(current_ms)
+    return arrivals
+
+
 def write_workload_jsonl(
     output_path: Path,
     tokenizer: Any,
@@ -61,6 +91,12 @@ def write_workload_jsonl(
     batch = int(scenario["batch"])
     input_tokens = int(scenario["input_tokens"])
     max_new_tokens = int(scenario["output_tokens"])
+    if batch <= 0 or input_tokens <= 0 or max_new_tokens <= 0:
+        raise ValueError("batch, input_tokens, and output_tokens must be positive")
+    arrival_pattern = str(scenario.get("arrival_pattern", defaults.get("arrival_pattern", "simultaneous")))
+    request_rate_rps = float(scenario.get("request_rate_rps", defaults.get("request_rate_rps", 0.0)))
+    arrival_seed = int(scenario.get("arrival_seed", defaults.get("arrival_seed", 0)))
+    arrivals = generate_arrival_ms(batch, arrival_pattern, request_rate_rps, arrival_seed)
     records: List[Dict[str, Any]] = []
     with output_path.open("w", encoding="utf-8") as handle:
         for index in range(batch):
@@ -78,7 +114,7 @@ def write_workload_jsonl(
                     scenario.get("repetition_penalty", defaults.get("repetition_penalty", 1.0))
                 ),
                 "ignore_eos": bool(scenario.get("ignore_eos", defaults.get("ignore_eos", False))),
-                "arrival_ms": float(scenario.get("arrival_ms", defaults.get("arrival_ms", 0.0))),
+                "arrival_ms": arrivals[index],
             }
             records.append(record)
             handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -89,5 +125,7 @@ def write_workload_jsonl(
         "target_input_tokens": input_tokens,
         "actual_input_tokens": sum(len(item["input_ids"]) for item in records),
         "max_new_tokens": max_new_tokens,
+        "arrival_pattern": arrival_pattern,
+        "request_rate_rps": request_rate_rps,
+        "arrival_seed": arrival_seed,
     }
-
