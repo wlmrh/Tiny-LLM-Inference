@@ -3,6 +3,8 @@
 #include "tiny_llm/runtime/llm.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
+#include "progress_guard.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -114,8 +116,10 @@ struct RepeatMetrics
     double total_ms = 0.0;
     double first_token_ms = 0.0;
     double prepare_inputs_ms = 0.0;
+    double model_ms_total = 0.0;
     double prefill_ms = 0.0;
     double decode_ms_total = 0.0;
+    double mixed_model_ms = 0.0;
     double sampling_ms = 0.0;
     double embedding_ms = 0.0;
     double qkv_proj_ms = 0.0;
@@ -1117,10 +1121,8 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
 
             const std::vector<tiny_llm::LLMStepOutput> step_outputs = llm.step();
             profile.add(llm.last_step_profile());
-            if (llm.has_unfinished_requests() && llm.last_step_profile().scheduled_tokens == 0)
-            {
-                throw std::runtime_error("open-loop benchmark made no progress with unfinished requests.");
-            }
+            tiny_llm::benchmark::require_step_progress(llm.has_unfinished_requests(),
+                                                       llm.last_step_profile().scheduled_tokens);
             for (const tiny_llm::LLMStepOutput &output : step_outputs)
             {
                 const auto it = request_to_index.find(output.request_id);
@@ -1144,8 +1146,10 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
     metrics.total_ms = elapsed_ms(generation_start, generation_end);
     metrics.first_token_ms = saw_first_token ? elapsed_ms(generation_start, first_token_time) : 0.0;
     metrics.prepare_inputs_ms = profile.prepare_inputs_ms;
+    metrics.model_ms_total = profile.model_ms_total;
     metrics.prefill_ms = profile.prefill_ms;
     metrics.decode_ms_total = profile.decode_ms_total;
+    metrics.mixed_model_ms = profile.mixed_model_ms;
     metrics.sampling_ms = profile.sampling_ms;
     metrics.embedding_ms = profile.embedding_ms;
     metrics.qkv_proj_ms = profile.qkv_proj_ms;
@@ -1364,8 +1368,10 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::vector<double> total_ms;
     std::vector<double> first_token_ms;
     std::vector<double> prepare_inputs_ms;
+    std::vector<double> model_ms_total;
     std::vector<double> prefill_ms;
     std::vector<double> decode_ms_total;
+    std::vector<double> mixed_model_ms;
     std::vector<double> decode_ms_per_token;
     std::vector<double> sampling_ms;
     std::vector<double> embedding_ms;
@@ -1390,8 +1396,10 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     total_ms.reserve(repeats.size());
     first_token_ms.reserve(repeats.size());
     prepare_inputs_ms.reserve(repeats.size());
+    model_ms_total.reserve(repeats.size());
     prefill_ms.reserve(repeats.size());
     decode_ms_total.reserve(repeats.size());
+    mixed_model_ms.reserve(repeats.size());
     decode_ms_per_token.reserve(repeats.size());
     sampling_ms.reserve(repeats.size());
     embedding_ms.reserve(repeats.size());
@@ -1422,10 +1430,13 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
         total_ms.push_back(metrics.total_ms);
         first_token_ms.push_back(metrics.first_token_ms);
         prepare_inputs_ms.push_back(metrics.prepare_inputs_ms);
+        model_ms_total.push_back(metrics.model_ms_total);
         prefill_ms.push_back(metrics.prefill_ms);
         decode_ms_total.push_back(metrics.decode_ms_total);
-        decode_ms_per_token.push_back(
-            metrics.decode_tokens > 0 ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens) : 0.0);
+        mixed_model_ms.push_back(metrics.mixed_model_ms);
+        decode_ms_per_token.push_back(metrics.decode_tokens > 0 && metrics.mixed_model_ms == 0.0
+                                          ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens)
+                                          : 0.0);
         sampling_ms.push_back(metrics.sampling_ms);
         embedding_ms.push_back(metrics.embedding_ms);
         qkv_proj_ms.push_back(metrics.qkv_proj_ms);
@@ -1458,9 +1469,13 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     const double avg_total_ms = mean(total_ms);
     const double avg_first_ms = mean(first_token_ms);
     const double avg_prepare_inputs_ms = mean(prepare_inputs_ms);
+    const double avg_model_ms_total = mean(model_ms_total);
     const double avg_prefill_ms = mean(prefill_ms);
     const double avg_decode_ms_total = mean(decode_ms_total);
+    const double avg_mixed_model_ms = mean(mixed_model_ms);
     const double avg_decode_ms_per_token = mean(decode_ms_per_token);
+    const bool decode_ms_per_token_valid =
+        std::all_of(mixed_model_ms.begin(), mixed_model_ms.end(), [](double value) { return value == 0.0; });
     const double avg_sampling_ms = mean(sampling_ms);
     const double avg_embedding_ms = mean(embedding_ms);
     const double avg_qkv_proj_ms = mean(qkv_proj_ms);
@@ -1510,9 +1525,18 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "  avg_generated_tokens: " << avg_generated_tokens << "\n";
     std::cout << "  total_generated_tokens: " << generated_tokens << "\n";
     std::cout << "  prepare_inputs_ms: " << avg_prepare_inputs_ms << "\n";
+    std::cout << "  model_ms_total: " << avg_model_ms_total << "\n";
     std::cout << "  prefill_ms: " << avg_prefill_ms << "\n";
     std::cout << "  decode_ms_total: " << avg_decode_ms_total << "\n";
-    std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
+    std::cout << "  mixed_model_ms: " << avg_mixed_model_ms << "\n";
+    if (decode_ms_per_token_valid)
+    {
+        std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
+    }
+    else
+    {
+        std::cout << "  decode_ms_per_token: unavailable (mixed model steps)\n";
+    }
     std::cout << "  sampling_ms: " << avg_sampling_ms << "\n";
     if (has_cuda_memory)
     {
@@ -1662,9 +1686,12 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "\"avg_generated_tokens\":" << avg_generated_tokens << ",";
     std::cout << "\"total_generated_tokens\":" << generated_tokens << ",";
     std::cout << "\"prepare_inputs_ms\":" << avg_prepare_inputs_ms << ",";
+    std::cout << "\"model_ms_total\":" << avg_model_ms_total << ",";
     std::cout << "\"prefill_ms\":" << avg_prefill_ms << ",";
     std::cout << "\"decode_ms_total\":" << avg_decode_ms_total << ",";
+    std::cout << "\"mixed_model_ms\":" << avg_mixed_model_ms << ",";
     std::cout << "\"decode_ms_per_token\":" << avg_decode_ms_per_token << ",";
+    std::cout << "\"decode_ms_per_token_valid\":" << (decode_ms_per_token_valid ? "true" : "false") << ",";
     std::cout << "\"sampling_ms\":" << avg_sampling_ms << ",";
     std::cout << "\"embedding_ms\":" << avg_embedding_ms << ",";
     std::cout << "\"qkv_proj_ms\":" << avg_qkv_proj_ms << ",";
