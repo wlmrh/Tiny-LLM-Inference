@@ -37,6 +37,8 @@ jobs:
             | xargs -0 clang-format-14 --dry-run --Werror
       - name: Check Python syntax
         run: python -m compileall -q benchmark scripts
+      - name: Test benchmark utilities
+        run: python -m unittest discover -s benchmark/tests -p 'test_*.py'
       - name: Configure
         run: cmake --preset ci-cpu
       - name: Build

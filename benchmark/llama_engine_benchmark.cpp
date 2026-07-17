@@ -3,9 +3,12 @@
 #include "tiny_llm/runtime/llm.h"
 #include "tiny_llm/runtime/tokenizer.h"
 
+#include "progress_guard.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -17,6 +20,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #if TINYLLM_ENABLE_CUDA
@@ -44,6 +49,8 @@ struct Options
     bool profile_detail = false;
     std::vector<std::string> prompts;
     std::vector<std::string> request_ids;
+    std::vector<double> arrival_ms;
+    std::string traffic_mode = "offline";
     std::filesystem::path model_dir;
     std::filesystem::path workload_jsonl;
     std::filesystem::path events_jsonl;
@@ -94,6 +101,7 @@ struct RequestTrace
     std::string request_id;
     size_t prompt_index = 0;
     double submit_ms = 0.0;
+    double admit_ms = 0.0;
     double first_token_ms = -1.0;
     double finish_ms = -1.0;
     int64_t prompt_tokens = 0;
@@ -108,8 +116,10 @@ struct RepeatMetrics
     double total_ms = 0.0;
     double first_token_ms = 0.0;
     double prepare_inputs_ms = 0.0;
+    double model_ms_total = 0.0;
     double prefill_ms = 0.0;
     double decode_ms_total = 0.0;
+    double mixed_model_ms = 0.0;
     double sampling_ms = 0.0;
     double embedding_ms = 0.0;
     double qkv_proj_ms = 0.0;
@@ -442,6 +452,22 @@ bool json_float_field(const std::string &line, const std::string &key, float &va
     return true;
 }
 
+bool json_double_field(const std::string &line, const std::string &key, double &value)
+{
+    const size_t pos = find_json_value(line, key);
+    if (pos == std::string::npos)
+    {
+        return false;
+    }
+    size_t consumed = 0;
+    value = std::stod(line.substr(pos), &consumed);
+    if (consumed == 0 || !std::isfinite(value))
+    {
+        throw std::runtime_error("invalid numeric workload field: " + key);
+    }
+    return true;
+}
+
 bool json_bool_field(const std::string &line, const std::string &key, bool &value)
 {
     const size_t pos = find_json_value(line, key);
@@ -476,6 +502,7 @@ void load_workload_jsonl(Options &options)
 
     options.prompts.clear();
     options.request_ids.clear();
+    options.arrival_ms.clear();
     std::string line;
     int64_t line_number = 0;
     int32_t workload_max_new_tokens = -1;
@@ -576,8 +603,15 @@ void load_workload_jsonl(Options &options)
             workload_top_k_set = true;
         }
 
+        double arrival_ms = 0.0;
+        if (json_double_field(line, "arrival_ms", arrival_ms) && arrival_ms < 0.0)
+        {
+            throw std::runtime_error("workload arrival_ms must be non-negative at line " + std::to_string(line_number));
+        }
+
         options.prompts.push_back(std::move(prompt));
         options.request_ids.push_back(std::move(request_id));
+        options.arrival_ms.push_back(arrival_ms);
     }
     if (!options.max_new_tokens_explicit && workload_max_new_tokens > 0)
     {
@@ -608,6 +642,26 @@ void load_workload_jsonl(Options &options)
     {
         throw std::runtime_error("workload JSONL did not contain any requests: " + options.workload_jsonl.string());
     }
+
+    std::vector<size_t> order(options.prompts.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(),
+                     [&](size_t lhs, size_t rhs) { return options.arrival_ms[lhs] < options.arrival_ms[rhs]; });
+    std::vector<std::string> sorted_prompts;
+    std::vector<std::string> sorted_request_ids;
+    std::vector<double> sorted_arrival_ms;
+    sorted_prompts.reserve(order.size());
+    sorted_request_ids.reserve(order.size());
+    sorted_arrival_ms.reserve(order.size());
+    for (size_t index : order)
+    {
+        sorted_prompts.push_back(std::move(options.prompts[index]));
+        sorted_request_ids.push_back(std::move(options.request_ids[index]));
+        sorted_arrival_ms.push_back(options.arrival_ms[index]);
+    }
+    options.prompts = std::move(sorted_prompts);
+    options.request_ids = std::move(sorted_request_ids);
+    options.arrival_ms = std::move(sorted_arrival_ms);
 }
 
 bool has_safetensors_weight(const std::filesystem::path &model_dir)
@@ -661,6 +715,7 @@ void print_usage(const char *argv0)
               << " [--temperature F] [--top-p F] [--top-k N]"
               << " [--repetition-penalty F] [--seed N] [--stop-token-id N]..."
               << " [--prompt TEXT]... [--workload-jsonl PATH] [--events-jsonl PATH]"
+              << " [--traffic-mode offline|open-loop]"
               << " [--json] [--profile-detail] [--ignore-eos] <model_dir>\n";
 }
 
@@ -733,6 +788,14 @@ Options parse_args(int argc, char **argv)
         else if (arg == "--events-jsonl")
         {
             options.events_jsonl = expand_user_path(require_value("--events-jsonl"));
+        }
+        else if (arg == "--traffic-mode")
+        {
+            options.traffic_mode = require_value("--traffic-mode");
+            if (options.traffic_mode != "offline" && options.traffic_mode != "open-loop")
+            {
+                throw std::runtime_error("--traffic-mode must be offline or open-loop.");
+            }
         }
         else if (arg == "--temperature")
         {
@@ -811,6 +874,14 @@ Options parse_args(int argc, char **argv)
         {
             options.request_ids.push_back("request-" + std::to_string(i));
         }
+    }
+    if (options.arrival_ms.empty())
+    {
+        options.arrival_ms.assign(options.prompts.size(), 0.0);
+    }
+    if (options.arrival_ms.size() != options.prompts.size())
+    {
+        throw std::runtime_error("arrival_ms and prompts must have the same length.");
     }
     options.parallel_config.validate();
 #if !TINYLLM_ENABLE_CUDA
@@ -922,12 +993,15 @@ size_t estimate_kv_num_blocks(const std::vector<int64_t> &prompt_token_counts, i
 RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_ms, bool measure)
 {
     RepeatMetrics metrics;
+    const bool open_loop = options.traffic_mode == "open-loop";
     metrics.request_traces.reserve(options.prompts.size());
     for (size_t i = 0; i < options.prompts.size(); ++i)
     {
         RequestTrace trace;
         trace.request_id = options.request_ids[i];
         trace.prompt_index = i;
+        trace.submit_ms = open_loop && measure ? options.arrival_ms[i] : 0.0;
+        trace.admit_ms = open_loop ? -1.0 : 0.0;
         if (i < options.prompt_token_counts.size())
         {
             trace.prompt_tokens = options.prompt_token_counts[i];
@@ -952,42 +1026,115 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
         reset_cuda_peak_memory(options.parallel_config);
     }
     const auto generation_start = Clock::now();
-    const std::vector<tiny_llm::CompletionOutput> outputs =
-        llm.generate(options.prompts, sampling_params,
-                     [&](const tiny_llm::CompletionStreamOutput &output)
-                     {
-                         if (!saw_first_token)
-                         {
-                             saw_first_token = true;
-                             first_token_time = Clock::now();
-                         }
-                         if (!measure || output.prompt_index >= metrics.request_traces.size())
-                         {
-                             return;
-                         }
-                         RequestTrace &trace = metrics.request_traces[output.prompt_index];
-                         const double event_ms = elapsed_ms(generation_start, Clock::now());
-                         if (trace.first_token_ms < 0.0)
-                         {
-                             trace.first_token_ms = event_ms;
-                         }
-                         if (output.token_id >= 0)
-                         {
-                             TokenTraceEvent event;
-                             event.token_index =
-                                 output.token_ids.empty() ? 0 : static_cast<int32_t>(output.token_ids.size() - 1);
-                             event.token_id = output.token_id;
-                             event.time_ms = event_ms;
-                             event.delta_text = output.delta_text;
-                             event.finished = output.finished;
-                             trace.tokens.push_back(std::move(event));
-                         }
-                         if (output.finished && trace.finish_ms < 0.0)
-                         {
-                             trace.finish_ms = event_ms;
-                             trace.finish_reason = output.finish_reason;
-                         }
-                     });
+    std::vector<tiny_llm::CompletionOutput> outputs(options.prompts.size());
+    tiny_llm::RuntimeProfilingStats profile;
+    for (size_t i = 0; i < options.prompts.size(); ++i)
+    {
+        outputs[i].prompt = options.prompts[i];
+    }
+
+    auto record_output = [&](size_t prompt_index, const std::string &delta_text, int32_t token_id,
+                             const std::string &text, const std::vector<int32_t> &token_ids, bool finished,
+                             const std::string &finish_reason)
+    {
+        tiny_llm::CompletionOutput &completion = outputs[prompt_index];
+        completion.text = text;
+        completion.token_ids = token_ids;
+        completion.finished = finished;
+        completion.finish_reason = finish_reason;
+        if (token_id >= 0 && !saw_first_token)
+        {
+            saw_first_token = true;
+            first_token_time = Clock::now();
+        }
+        if (!measure || prompt_index >= metrics.request_traces.size())
+        {
+            return;
+        }
+
+        RequestTrace &trace = metrics.request_traces[prompt_index];
+        const double event_ms = elapsed_ms(generation_start, Clock::now());
+        if (token_id >= 0 && trace.first_token_ms < 0.0)
+        {
+            trace.first_token_ms = event_ms;
+        }
+        if (token_id >= 0)
+        {
+            TokenTraceEvent event;
+            event.token_index = token_ids.empty() ? 0 : static_cast<int32_t>(token_ids.size() - 1);
+            event.token_id = token_id;
+            event.time_ms = event_ms;
+            event.delta_text = delta_text;
+            event.finished = finished;
+            trace.tokens.push_back(std::move(event));
+        }
+        if (finished && trace.finish_ms < 0.0)
+        {
+            trace.finish_ms = event_ms;
+            trace.finish_reason = finish_reason;
+        }
+    };
+
+    if (!open_loop)
+    {
+        outputs = llm.generate(options.prompts, sampling_params,
+                               [&](const tiny_llm::CompletionStreamOutput &output)
+                               {
+                                   record_output(output.prompt_index, output.delta_text, output.token_id, output.text,
+                                                 output.token_ids, output.finished, output.finish_reason);
+                               });
+        profile = llm.last_generation_profile();
+    }
+    else
+    {
+        size_t next_request = 0;
+        std::unordered_map<uint64_t, size_t> request_to_index;
+        request_to_index.reserve(options.prompts.size());
+        while (next_request < options.prompts.size() || llm.has_unfinished_requests())
+        {
+            if (!llm.has_unfinished_requests() && next_request < options.prompts.size())
+            {
+                const double target_ms = measure ? options.arrival_ms[next_request] : 0.0;
+                const auto target_time = generation_start + std::chrono::duration_cast<Clock::duration>(
+                                                                std::chrono::duration<double, std::milli>(target_ms));
+                std::this_thread::sleep_until(target_time);
+            }
+
+            double now_ms = elapsed_ms(generation_start, Clock::now());
+            while (next_request < options.prompts.size() &&
+                   (measure ? options.arrival_ms[next_request] : 0.0) <= now_ms)
+            {
+                const uint64_t internal_id = llm.add_request(options.prompts[next_request], sampling_params);
+                request_to_index.emplace(internal_id, next_request);
+                if (measure)
+                {
+                    metrics.request_traces[next_request].admit_ms = elapsed_ms(generation_start, Clock::now());
+                }
+                ++next_request;
+                now_ms = elapsed_ms(generation_start, Clock::now());
+            }
+
+            if (!llm.has_unfinished_requests())
+            {
+                continue;
+            }
+
+            const std::vector<tiny_llm::LLMStepOutput> step_outputs = llm.step();
+            profile.add(llm.last_step_profile());
+            tiny_llm::benchmark::require_step_progress(llm.has_unfinished_requests(),
+                                                       llm.last_step_profile().scheduled_tokens);
+            for (const tiny_llm::LLMStepOutput &output : step_outputs)
+            {
+                const auto it = request_to_index.find(output.request_id);
+                if (it == request_to_index.end())
+                {
+                    throw std::runtime_error("open-loop benchmark received output for an unknown request.");
+                }
+                record_output(it->second, output.delta_text, output.token_id, output.text, output.token_ids,
+                              output.finished, output.finish_reason);
+            }
+        }
+    }
     const auto generation_end = Clock::now();
 
     if (!measure)
@@ -998,10 +1145,11 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
     metrics.load_ms = load_ms;
     metrics.total_ms = elapsed_ms(generation_start, generation_end);
     metrics.first_token_ms = saw_first_token ? elapsed_ms(generation_start, first_token_time) : 0.0;
-    const tiny_llm::RuntimeProfilingStats &profile = llm.last_generation_profile();
     metrics.prepare_inputs_ms = profile.prepare_inputs_ms;
+    metrics.model_ms_total = profile.model_ms_total;
     metrics.prefill_ms = profile.prefill_ms;
     metrics.decode_ms_total = profile.decode_ms_total;
+    metrics.mixed_model_ms = profile.mixed_model_ms;
     metrics.sampling_ms = profile.sampling_ms;
     metrics.embedding_ms = profile.embedding_ms;
     metrics.qkv_proj_ms = profile.qkv_proj_ms;
@@ -1151,18 +1299,29 @@ void print_request_metrics_json(const std::vector<RequestTrace> &traces)
             std::cout << ",";
         }
         const RequestTrace &trace = traces[i];
-        const double tpot_ms = trace.generated_tokens > 1 ? (trace.finish_ms - std::max(0.0, trace.first_token_ms)) /
+        const double queue_ms = std::max(0.0, trace.admit_ms - trace.submit_ms);
+        const double ttft_ms =
+            trace.first_token_ms >= 0.0 ? std::max(0.0, trace.first_token_ms - trace.submit_ms) : 0.0;
+        const double engine_ttft_ms =
+            trace.first_token_ms >= 0.0 ? std::max(0.0, trace.first_token_ms - trace.admit_ms) : 0.0;
+        const double tpot_ms = trace.generated_tokens > 1 ? std::max(0.0, trace.finish_ms - trace.first_token_ms) /
                                                                 static_cast<double>(trace.generated_tokens - 1)
                                                           : 0.0;
+        const double e2e_ms = trace.finish_ms >= 0.0 ? std::max(0.0, trace.finish_ms - trace.submit_ms) : 0.0;
         std::cout << "{";
         std::cout << "\"request_id\":\"" << json_escape(trace.request_id) << "\",";
         std::cout << "\"prompt_index\":" << trace.prompt_index << ",";
         std::cout << "\"prompt_tokens\":" << trace.prompt_tokens << ",";
         std::cout << "\"generated_tokens\":" << trace.generated_tokens << ",";
         std::cout << "\"submit_ms\":" << trace.submit_ms << ",";
+        std::cout << "\"admit_ms\":" << trace.admit_ms << ",";
         std::cout << "\"first_token_ms\":" << trace.first_token_ms << ",";
         std::cout << "\"finish_ms\":" << trace.finish_ms << ",";
+        std::cout << "\"queue_ms\":" << queue_ms << ",";
+        std::cout << "\"ttft_ms\":" << ttft_ms << ",";
+        std::cout << "\"engine_ttft_ms\":" << engine_ttft_ms << ",";
         std::cout << "\"tpot_ms\":" << tpot_ms << ",";
+        std::cout << "\"e2e_ms\":" << e2e_ms << ",";
         std::cout << "\"finish_reason\":\"" << json_escape(trace.finish_reason) << "\"";
         std::cout << "}";
     }
@@ -1185,6 +1344,9 @@ void write_trace_events(const std::filesystem::path &path, int32_t repeat_index,
         out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
             << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"submit\",\"time_ms\":" << trace.submit_ms
             << "}\n";
+        out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
+            << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"admit\",\"time_ms\":" << trace.admit_ms
+            << "}\n";
         for (const TokenTraceEvent &event : trace.tokens)
         {
             out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
@@ -1206,8 +1368,10 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::vector<double> total_ms;
     std::vector<double> first_token_ms;
     std::vector<double> prepare_inputs_ms;
+    std::vector<double> model_ms_total;
     std::vector<double> prefill_ms;
     std::vector<double> decode_ms_total;
+    std::vector<double> mixed_model_ms;
     std::vector<double> decode_ms_per_token;
     std::vector<double> sampling_ms;
     std::vector<double> embedding_ms;
@@ -1232,8 +1396,10 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     total_ms.reserve(repeats.size());
     first_token_ms.reserve(repeats.size());
     prepare_inputs_ms.reserve(repeats.size());
+    model_ms_total.reserve(repeats.size());
     prefill_ms.reserve(repeats.size());
     decode_ms_total.reserve(repeats.size());
+    mixed_model_ms.reserve(repeats.size());
     decode_ms_per_token.reserve(repeats.size());
     sampling_ms.reserve(repeats.size());
     embedding_ms.reserve(repeats.size());
@@ -1264,10 +1430,13 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
         total_ms.push_back(metrics.total_ms);
         first_token_ms.push_back(metrics.first_token_ms);
         prepare_inputs_ms.push_back(metrics.prepare_inputs_ms);
+        model_ms_total.push_back(metrics.model_ms_total);
         prefill_ms.push_back(metrics.prefill_ms);
         decode_ms_total.push_back(metrics.decode_ms_total);
-        decode_ms_per_token.push_back(
-            metrics.decode_tokens > 0 ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens) : 0.0);
+        mixed_model_ms.push_back(metrics.mixed_model_ms);
+        decode_ms_per_token.push_back(metrics.decode_tokens > 0 && metrics.mixed_model_ms == 0.0
+                                          ? metrics.decode_ms_total / static_cast<double>(metrics.decode_tokens)
+                                          : 0.0);
         sampling_ms.push_back(metrics.sampling_ms);
         embedding_ms.push_back(metrics.embedding_ms);
         qkv_proj_ms.push_back(metrics.qkv_proj_ms);
@@ -1300,9 +1469,13 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     const double avg_total_ms = mean(total_ms);
     const double avg_first_ms = mean(first_token_ms);
     const double avg_prepare_inputs_ms = mean(prepare_inputs_ms);
+    const double avg_model_ms_total = mean(model_ms_total);
     const double avg_prefill_ms = mean(prefill_ms);
     const double avg_decode_ms_total = mean(decode_ms_total);
+    const double avg_mixed_model_ms = mean(mixed_model_ms);
     const double avg_decode_ms_per_token = mean(decode_ms_per_token);
+    const bool decode_ms_per_token_valid =
+        std::all_of(mixed_model_ms.begin(), mixed_model_ms.end(), [](double value) { return value == 0.0; });
     const double avg_sampling_ms = mean(sampling_ms);
     const double avg_embedding_ms = mean(embedding_ms);
     const double avg_qkv_proj_ms = mean(qkv_proj_ms);
@@ -1339,6 +1512,7 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "  device: " << options.device_text << "\n";
     std::cout << "  compute dtype: " << tiny_llm::runtime_dtype_name(options.compute_dtype) << "\n";
     std::cout << "  KV cache dtype: " << tiny_llm::runtime_dtype_name(options.kv_cache_dtype) << "\n";
+    std::cout << "  traffic mode: " << options.traffic_mode << "\n";
     std::cout << "  prompts: " << options.prompts.size() << ", warmup: " << options.warmup
               << ", repeat: " << options.repeat << ", max_new_tokens: " << options.max_new_tokens
               << ", ignore_eos: " << (options.ignore_eos ? "on" : "off")
@@ -1351,9 +1525,18 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "  avg_generated_tokens: " << avg_generated_tokens << "\n";
     std::cout << "  total_generated_tokens: " << generated_tokens << "\n";
     std::cout << "  prepare_inputs_ms: " << avg_prepare_inputs_ms << "\n";
+    std::cout << "  model_ms_total: " << avg_model_ms_total << "\n";
     std::cout << "  prefill_ms: " << avg_prefill_ms << "\n";
     std::cout << "  decode_ms_total: " << avg_decode_ms_total << "\n";
-    std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
+    std::cout << "  mixed_model_ms: " << avg_mixed_model_ms << "\n";
+    if (decode_ms_per_token_valid)
+    {
+        std::cout << "  decode_ms_per_token: " << avg_decode_ms_per_token << "\n";
+    }
+    else
+    {
+        std::cout << "  decode_ms_per_token: unavailable (mixed model steps)\n";
+    }
     std::cout << "  sampling_ms: " << avg_sampling_ms << "\n";
     if (has_cuda_memory)
     {
@@ -1480,6 +1663,7 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "\"device\":\"" << json_escape(options.device_text) << "\",";
     std::cout << "\"compute_dtype\":\"" << tiny_llm::runtime_dtype_name(options.compute_dtype) << "\",";
     std::cout << "\"kv_cache_dtype\":\"" << tiny_llm::runtime_dtype_name(options.kv_cache_dtype) << "\",";
+    std::cout << "\"traffic_mode\":\"" << options.traffic_mode << "\",";
     std::cout << "\"prompt_count\":" << options.prompts.size() << ",";
     std::cout << "\"prompt_tokens\":" << prompt_tokens << ",";
     std::cout << "\"warmup\":" << options.warmup << ",";
@@ -1502,9 +1686,12 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "\"avg_generated_tokens\":" << avg_generated_tokens << ",";
     std::cout << "\"total_generated_tokens\":" << generated_tokens << ",";
     std::cout << "\"prepare_inputs_ms\":" << avg_prepare_inputs_ms << ",";
+    std::cout << "\"model_ms_total\":" << avg_model_ms_total << ",";
     std::cout << "\"prefill_ms\":" << avg_prefill_ms << ",";
     std::cout << "\"decode_ms_total\":" << avg_decode_ms_total << ",";
+    std::cout << "\"mixed_model_ms\":" << avg_mixed_model_ms << ",";
     std::cout << "\"decode_ms_per_token\":" << avg_decode_ms_per_token << ",";
+    std::cout << "\"decode_ms_per_token_valid\":" << (decode_ms_per_token_valid ? "true" : "false") << ",";
     std::cout << "\"sampling_ms\":" << avg_sampling_ms << ",";
     std::cout << "\"embedding_ms\":" << avg_embedding_ms << ",";
     std::cout << "\"qkv_proj_ms\":" << avg_qkv_proj_ms << ",";

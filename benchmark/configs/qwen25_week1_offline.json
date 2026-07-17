@@ -1,0 +1,53 @@
+{
+  "label": "qwen25_week1_offline",
+  "model_dir": "/models/Qwen2.5-1.5B-Instruct",
+  "tinyllm_binary": "build-cuda/benchmark/llama_engine_benchmark",
+  "vllm_python": "/root/autodl-tmp/venvs/vllm/bin/python",
+  "device": "cuda:0",
+  "backends": ["tinyllm", "transformers", "vllm"],
+  "defaults": {
+    "warmup": 1,
+    "repeat": 3,
+    "benchmark_mode": "fixed_output_perf",
+    "traffic_mode": "offline",
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "seed": 0,
+    "ignore_eos": true,
+    "tinyllm_dtype": "fp32",
+    "tinyllm_kv_cache_dtype": "fp32",
+    "vllm_dtype": "float32"
+  },
+  "workloads": [
+    {
+      "name": "correctness",
+      "batch": 4,
+      "input_tokens": 32,
+      "output_tokens": 16,
+      "warmup": 0,
+      "repeat": 1,
+      "benchmark_mode": "correctness",
+      "ignore_eos": false
+    },
+    {
+      "name": "interactive",
+      "batch": 1,
+      "input_tokens": 128,
+      "output_tokens": 64
+    },
+    {
+      "name": "long_prefill",
+      "batch": 4,
+      "input_tokens": 1024,
+      "output_tokens": 64
+    },
+    {
+      "name": "decode_heavy",
+      "batch": 8,
+      "input_tokens": 128,
+      "output_tokens": 128
+    }
+  ]
+}

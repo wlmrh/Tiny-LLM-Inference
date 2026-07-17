@@ -832,19 +832,16 @@ ModelRunnerOutput ModelRunner::run(const SchedulerOutput &scheduler_output)
     }
 
     const double model_ms = elapsed_profile_ms(model_start, model_end);
-    const int64_t model_tokens = output.profiling.scheduled_tokens;
-    if (model_tokens > 0 && output.profiling.prefill_tokens > 0 && output.profiling.decode_tokens > 0)
+    output.profiling.model_ms_total = model_ms;
+    if (output.profiling.prefill_tokens > 0 && output.profiling.decode_tokens > 0)
     {
-        output.profiling.prefill_ms =
-            model_ms * static_cast<double>(output.profiling.prefill_tokens) / static_cast<double>(model_tokens);
-        output.profiling.decode_ms_total =
-            model_ms * static_cast<double>(output.profiling.decode_tokens) / static_cast<double>(model_tokens);
+        output.profiling.mixed_model_ms = model_ms;
     }
     else if (output.profiling.prefill_tokens > 0)
     {
         output.profiling.prefill_ms = model_ms;
     }
-    else
+    else if (output.profiling.decode_tokens > 0)
     {
         output.profiling.decode_ms_total = model_ms;
     }

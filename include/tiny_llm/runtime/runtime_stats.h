@@ -11,8 +11,10 @@ namespace tiny_llm
 struct RuntimeProfilingStats
 {
     double prepare_inputs_ms = 0.0;
+    double model_ms_total = 0.0;
     double prefill_ms = 0.0;
     double decode_ms_total = 0.0;
+    double mixed_model_ms = 0.0;
     double sampling_ms = 0.0;
     double embedding_ms = 0.0;
     double qkv_proj_ms = 0.0;

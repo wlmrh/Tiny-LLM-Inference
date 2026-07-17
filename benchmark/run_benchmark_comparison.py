@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ignore-eos", action="store_true", help="require backends to generate max_new_tokens")
     parser.add_argument("--workload-jsonl", help="flat JSONL workload with prompt/request_id records")
     parser.add_argument("--events-jsonl", help="TinyLLM raw request event JSONL output path")
+    parser.add_argument("--traffic-mode", choices=("offline", "open-loop"), default="offline")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--top-k", type=non_negative_int, default=0)
@@ -163,6 +164,8 @@ def run_tinyllm(args: argparse.Namespace) -> Dict[str, Any]:
     if args.events_jsonl:
         common.insert(-1, str(Path(args.events_jsonl).expanduser()))
         common.insert(-2, "--events-jsonl")
+    common.insert(-1, args.traffic_mode)
+    common.insert(-2, "--traffic-mode")
     return run_command([str(binary), *common], "tinyllm")
 
 
@@ -261,6 +264,7 @@ def build_comparison(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "results": results,
         "ratios": {},
         "ratio_status": {},
+        "output_agreement": {},
     }
     tiny = by_backend.get("tinyllm")
     hf = by_backend.get("transformers")
@@ -275,6 +279,26 @@ def build_comparison(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         add_pair_comparison(ratios, ratio_status, "transformers", "vllm", hf, vllm, target)
     comparison["ratios"] = ratios
     comparison["ratio_status"] = ratio_status
+    for left_name, right_name in (("tinyllm", "transformers"), ("tinyllm", "vllm"), ("transformers", "vllm")):
+        left = by_backend.get(left_name)
+        right = by_backend.get(right_name)
+        if left is None or right is None:
+            continue
+        left_samples = {str(item.get("request_id")): item for item in left.get("samples", [])}
+        right_samples = {str(item.get("request_id")): item for item in right.get("samples", [])}
+        request_ids = sorted(set(left_samples) | set(right_samples))
+        mismatches = []
+        for request_id in request_ids:
+            left_tokens = left_samples.get(request_id, {}).get("token_ids")
+            right_tokens = right_samples.get(request_id, {}).get("token_ids")
+            if left_tokens != right_tokens:
+                mismatches.append(request_id)
+        comparison["output_agreement"][f"{left_name}_vs_{right_name}"] = {
+            "match": not mismatches and bool(request_ids),
+            "compared_requests": len(request_ids),
+            "mismatch_count": len(mismatches),
+            "mismatched_request_ids": mismatches,
+        }
     return comparison
 
 
@@ -357,6 +381,8 @@ def print_table(results: List[Dict[str, Any]], comparison: Dict[str, Any]) -> No
 
 def main() -> int:
     args = parse_args()
+    if args.traffic_mode == "open-loop" and args.selected_backends != ["tinyllm"]:
+        raise RuntimeError("open-loop traffic mode only supports the TinyLLM backend")
     results: List[Dict[str, Any]] = []
     if "tinyllm" in args.selected_backends:
         results.append(run_tinyllm(args))
@@ -367,6 +393,7 @@ def main() -> int:
     comparison = build_comparison(results)
     comparison["benchmark_mode"] = args.benchmark_mode
     comparison["ignore_eos"] = bool(args.ignore_eos)
+    comparison["traffic_mode"] = args.traffic_mode
     print_table(results, comparison)
     if args.json:
         print(json.dumps(comparison, separators=(",", ":")))

@@ -8,8 +8,10 @@ namespace tiny_llm
 void RuntimeProfilingStats::add(const RuntimeProfilingStats &other)
 {
     prepare_inputs_ms += other.prepare_inputs_ms;
+    model_ms_total += other.model_ms_total;
     prefill_ms += other.prefill_ms;
     decode_ms_total += other.decode_ms_total;
+    mixed_model_ms += other.mixed_model_ms;
     sampling_ms += other.sampling_ms;
     embedding_ms += other.embedding_ms;
     qkv_proj_ms += other.qkv_proj_ms;

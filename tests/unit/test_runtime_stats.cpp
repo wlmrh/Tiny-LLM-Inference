@@ -6,8 +6,10 @@ TEST(RuntimeProfilingStatsTest, AddAggregatesCountersAndKeepsMaxContextLen)
 {
     tiny_llm::RuntimeProfilingStats total;
     total.prepare_inputs_ms = 1.0;
+    total.model_ms_total = 1.5;
     total.prefill_ms = 2.0;
     total.decode_ms_total = 3.0;
+    total.mixed_model_ms = 3.5;
     total.sampling_ms = 4.0;
     total.embedding_ms = 5.0;
     total.qkv_proj_ms = 6.0;
@@ -29,8 +31,10 @@ TEST(RuntimeProfilingStatsTest, AddAggregatesCountersAndKeepsMaxContextLen)
 
     tiny_llm::RuntimeProfilingStats step;
     step.prepare_inputs_ms = 0.5;
+    step.model_ms_total = 1.0;
     step.prefill_ms = 1.5;
     step.decode_ms_total = 2.5;
+    step.mixed_model_ms = 2.0;
     step.sampling_ms = 3.5;
     step.embedding_ms = 4.5;
     step.qkv_proj_ms = 5.5;
@@ -53,8 +57,10 @@ TEST(RuntimeProfilingStatsTest, AddAggregatesCountersAndKeepsMaxContextLen)
     total.add(step);
 
     EXPECT_DOUBLE_EQ(total.prepare_inputs_ms, 1.5);
+    EXPECT_DOUBLE_EQ(total.model_ms_total, 2.5);
     EXPECT_DOUBLE_EQ(total.prefill_ms, 3.5);
     EXPECT_DOUBLE_EQ(total.decode_ms_total, 5.5);
+    EXPECT_DOUBLE_EQ(total.mixed_model_ms, 5.5);
     EXPECT_DOUBLE_EQ(total.sampling_ms, 7.5);
     EXPECT_DOUBLE_EQ(total.embedding_ms, 9.5);
     EXPECT_DOUBLE_EQ(total.qkv_proj_ms, 11.5);

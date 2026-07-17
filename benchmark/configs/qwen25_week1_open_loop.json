@@ -1,0 +1,64 @@
+{
+  "label": "qwen25_week1_open_loop",
+  "model_dir": "/models/Qwen2.5-1.5B-Instruct",
+  "tinyllm_binary": "build-cuda/benchmark/llama_engine_benchmark",
+  "device": "cuda:0",
+  "backends": ["tinyllm"],
+  "defaults": {
+    "warmup": 1,
+    "repeat": 1,
+    "benchmark_mode": "fixed_output_perf",
+    "traffic_mode": "open-loop",
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "seed": 0,
+    "ignore_eos": true,
+    "tinyllm_dtype": "fp32",
+    "tinyllm_kv_cache_dtype": "fp32",
+    "arrival_seed": 20260717
+  },
+  "workloads": [
+    {
+      "name": "poisson_025c",
+      "batch": 200,
+      "input_tokens": 128,
+      "output_tokens": 64,
+      "arrival_pattern": "poisson",
+      "request_rate_fraction": 0.25
+    },
+    {
+      "name": "poisson_050c",
+      "batch": 200,
+      "input_tokens": 128,
+      "output_tokens": 64,
+      "arrival_pattern": "poisson",
+      "request_rate_fraction": 0.5
+    },
+    {
+      "name": "poisson_075c",
+      "batch": 200,
+      "input_tokens": 128,
+      "output_tokens": 64,
+      "arrival_pattern": "poisson",
+      "request_rate_fraction": 0.75
+    },
+    {
+      "name": "poisson_090c",
+      "batch": 200,
+      "input_tokens": 128,
+      "output_tokens": 64,
+      "arrival_pattern": "poisson",
+      "request_rate_fraction": 0.9
+    },
+    {
+      "name": "fixed_050c",
+      "batch": 200,
+      "input_tokens": 128,
+      "output_tokens": 64,
+      "arrival_pattern": "fixed",
+      "request_rate_fraction": 0.5
+    }
+  ]
+}
