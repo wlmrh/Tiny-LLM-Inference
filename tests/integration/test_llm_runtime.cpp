@@ -128,6 +128,78 @@ TEST(LLMRuntimeIntegrationTest, GenerateWithCallbackReturnsEventsAndFinalOutputs
     }
 }
 
+TEST(LLMRuntimeIntegrationTest, IncrementalRequestsCanBeInterleavedAndProfiled)
+{
+    const std::filesystem::path model_dir(resolve_model_dir());
+    std::string skip_reason;
+    if (!has_required_model_files(model_dir, skip_reason))
+    {
+        GTEST_SKIP() << skip_reason;
+    }
+
+#if TINYLLM_ENABLE_CUDA
+    tiny_llm::LLMOptions options(model_dir.string(), tiny_llm::ParallelConfig::cuda(0));
+#else
+    tiny_llm::LLMOptions options(model_dir.string());
+#endif
+    tiny_llm::LLM llm(options);
+
+    tiny_llm::LLMSamplingParams short_params;
+    short_params.temperature = 0.0f;
+    short_params.max_tokens = 2;
+    tiny_llm::LLMSamplingParams long_params = short_params;
+    long_params.max_tokens = 5;
+
+    const uint64_t first_id = llm.add_request("hello", short_params);
+    EXPECT_TRUE(llm.has_unfinished_requests());
+    EXPECT_THROW(llm.generate("must be rejected", short_params), std::runtime_error);
+
+    std::vector<tiny_llm::LLMStepOutput> first_outputs = llm.step();
+    EXPECT_GT(llm.last_step_profile().scheduled_tokens, 0);
+
+    const uint64_t second_id = llm.add_request("tiny llm inference", long_params);
+    EXPECT_NE(first_id, second_id);
+
+    bool first_finished = false;
+    bool second_finished = false;
+    bool saw_first_token = false;
+    bool saw_second_token = false;
+    auto consume = [&](const std::vector<tiny_llm::LLMStepOutput> &outputs)
+    {
+        for (const tiny_llm::LLMStepOutput &output : outputs)
+        {
+            EXPECT_GE(output.token_id, 0);
+            EXPECT_FALSE(output.token_ids.empty());
+            if (output.request_id == first_id)
+            {
+                saw_first_token = true;
+                first_finished = output.finished;
+            }
+            else if (output.request_id == second_id)
+            {
+                saw_second_token = true;
+                second_finished = output.finished;
+            }
+            else
+            {
+                ADD_FAILURE() << "Unexpected request id " << output.request_id;
+            }
+        }
+    };
+    consume(first_outputs);
+
+    while (llm.has_unfinished_requests())
+    {
+        consume(llm.step());
+        EXPECT_GT(llm.last_step_profile().scheduled_tokens, 0);
+    }
+
+    EXPECT_TRUE(first_finished);
+    EXPECT_TRUE(second_finished);
+    EXPECT_TRUE(saw_first_token);
+    EXPECT_TRUE(saw_second_token);
+}
+
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; ++i)

@@ -51,6 +51,23 @@ struct LLMOptions
 
 using LLMSamplingParams = UserSamplingParams;
 
+/**
+ * @brief Per-request output emitted by one incremental LLM step.
+ *
+ * LLM is a single-threaded facade. Callers may add requests between step()
+ * boundaries, but must not call its methods concurrently.
+ */
+struct LLMStepOutput
+{
+    uint64_t request_id = 0;
+    std::string delta_text;
+    std::string text;
+    std::vector<int32_t> token_ids;
+    int32_t token_id = -1;
+    bool finished = false;
+    std::string finish_reason;
+};
+
 struct CompletionOutput
 {
     std::string prompt;
@@ -91,6 +108,15 @@ class LLM
     CompletionOutput generate(const std::string &prompt, const LLMSamplingParams &sampling_params = LLMSamplingParams{},
                               CompletionStreamCallback callback = CompletionStreamCallback{});
 
+    uint64_t add_request(const std::string &prompt, const LLMSamplingParams &sampling_params = LLMSamplingParams{});
+    bool has_unfinished_requests() const;
+    std::vector<LLMStepOutput> step();
+
+    const RuntimeProfilingStats &last_step_profile() const
+    {
+        return last_step_profile_;
+    }
+
     const RuntimeProfilingStats &last_generation_profile() const
     {
         return last_generation_profile_;
@@ -105,6 +131,7 @@ class LLM
     std::unique_ptr<StackAllocator> workspace_;
     std::unique_ptr<LLMEngine> engine_;
     void *kv_pool_ = nullptr;
+    RuntimeProfilingStats last_step_profile_;
     RuntimeProfilingStats last_generation_profile_;
 };
 

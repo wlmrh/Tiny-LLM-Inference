@@ -194,9 +194,10 @@ LLM::~LLM()
 LLM::LLM(LLM &&other) noexcept
     : options_(std::move(other.options_)), tokenizer_(std::move(other.tokenizer_)),
       workspace_(std::move(other.workspace_)), engine_(std::move(other.engine_)), kv_pool_(other.kv_pool_),
-      last_generation_profile_(other.last_generation_profile_)
+      last_step_profile_(other.last_step_profile_), last_generation_profile_(other.last_generation_profile_)
 {
     other.kv_pool_ = nullptr;
+    other.last_step_profile_ = RuntimeProfilingStats{};
     other.last_generation_profile_ = RuntimeProfilingStats{};
 }
 
@@ -214,8 +215,10 @@ LLM &LLM::operator=(LLM &&other) noexcept
         workspace_ = std::move(other.workspace_);
         engine_ = std::move(other.engine_);
         kv_pool_ = other.kv_pool_;
+        last_step_profile_ = other.last_step_profile_;
         last_generation_profile_ = other.last_generation_profile_;
         other.kv_pool_ = nullptr;
+        other.last_step_profile_ = RuntimeProfilingStats{};
         other.last_generation_profile_ = RuntimeProfilingStats{};
     }
     return *this;
@@ -338,6 +341,10 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string> &prom
     {
         return {};
     }
+    if (has_unfinished_requests())
+    {
+        throw std::runtime_error("LLM::generate: cannot start batch generation while incremental requests are active.");
+    }
 
     last_generation_profile_ = RuntimeProfilingStats{};
 
@@ -347,33 +354,28 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string> &prom
 
     for (size_t i = 0; i < prompts.size(); ++i)
     {
-        const uint64_t request_id = engine_->add_request(prompts[i], sampling_params);
+        const uint64_t request_id = add_request(prompts[i], sampling_params);
         results[i].prompt = prompts[i];
         request_to_index.emplace(request_id, i);
     }
 
-    while (engine_->has_unfinished_requests())
+    while (has_unfinished_requests())
     {
-        const std::vector<UserOutput> step_outputs = engine_->step();
-        last_generation_profile_.add(engine_->last_step_profile());
-        for (const UserOutput &output : step_outputs)
+        const std::vector<LLMStepOutput> step_outputs = step();
+        last_generation_profile_.add(last_step_profile());
+        for (const LLMStepOutput &output : step_outputs)
         {
-            auto it = request_to_index.find(output.internal_id);
+            auto it = request_to_index.find(output.request_id);
             if (it == request_to_index.end())
             {
                 continue;
-            }
-            if (!output.error_message.empty())
-            {
-                throw std::runtime_error("LLM::generate: request " + std::to_string(output.internal_id) +
-                                         " failed: " + output.error_message);
             }
 
             const size_t prompt_index = it->second;
             CompletionOutput &result = results[prompt_index];
             result.text = output.text;
-            result.token_ids = output.generated_token_ids;
-            result.finished = output.is_finished;
+            result.token_ids = output.token_ids;
+            result.finished = output.finished;
             result.finish_reason = output.finish_reason;
 
             if (callback)
@@ -382,7 +384,7 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string> &prom
                 static_cast<CompletionOutput &>(stream_output) = result;
                 stream_output.prompt_index = prompt_index;
                 stream_output.delta_text = output.delta_text;
-                stream_output.token_id = result.token_ids.empty() ? -1 : result.token_ids.back();
+                stream_output.token_id = output.token_id;
                 callback(stream_output);
             }
         }
@@ -397,6 +399,53 @@ CompletionOutput LLM::generate(const std::string &prompt, const LLMSamplingParam
     std::vector<CompletionOutput> outputs =
         generate(std::vector<std::string>{prompt}, sampling_params, std::move(callback));
     return outputs.empty() ? CompletionOutput{} : std::move(outputs.front());
+}
+
+uint64_t LLM::add_request(const std::string &prompt, const LLMSamplingParams &sampling_params)
+{
+    if (engine_ == nullptr)
+    {
+        throw std::runtime_error("LLM::add_request: engine is not initialized.");
+    }
+    return engine_->add_request(prompt, sampling_params);
+}
+
+bool LLM::has_unfinished_requests() const
+{
+    return engine_ != nullptr && engine_->has_unfinished_requests();
+}
+
+std::vector<LLMStepOutput> LLM::step()
+{
+    if (engine_ == nullptr)
+    {
+        throw std::runtime_error("LLM::step: engine is not initialized.");
+    }
+
+    const std::vector<UserOutput> user_outputs = engine_->step();
+    last_step_profile_ = engine_->last_step_profile();
+
+    std::vector<LLMStepOutput> outputs;
+    outputs.reserve(user_outputs.size());
+    for (const UserOutput &output : user_outputs)
+    {
+        if (!output.error_message.empty())
+        {
+            throw std::runtime_error("LLM::step: request " + std::to_string(output.internal_id) +
+                                     " failed: " + output.error_message);
+        }
+
+        LLMStepOutput step_output;
+        step_output.request_id = output.internal_id;
+        step_output.delta_text = output.delta_text;
+        step_output.text = output.text;
+        step_output.token_ids = output.generated_token_ids;
+        step_output.token_id = step_output.token_ids.empty() ? -1 : step_output.token_ids.back();
+        step_output.finished = output.is_finished;
+        step_output.finish_reason = output.finish_reason;
+        outputs.push_back(std::move(step_output));
+    }
+    return outputs;
 }
 
 } // namespace tiny_llm
