@@ -114,9 +114,10 @@ The C++ runner deliberately rejects mixed output lengths in offline mode. In ope
 each request's own `max_new_tokens`, records requested/generated token counts, limits warmup with
 `--warmup-request-count`, and estimates KV capacity from at most 16 active requests plus 20% slack.
 
-The first fixed-data run is currently blocked by a deterministic incremental output-decoding failure.
-See [realistic-v1 blocked run evidence](../../benchmark/reports/realistic-v1/BLOCKED.md). No partial
-throughput result is treated as a completed report.
+The completed fixed-data run and its validation evidence are published in the
+[realistic-v1 benchmark report](../../benchmark/reports/realistic-v1/README.md). All three capacity
+calibrations and twelve 1,000-request trace replays completed with full request-event streams; the
+report retains the single-process, single-device and non-production-SLA claim boundary.
 
 Benchmark policy:
 

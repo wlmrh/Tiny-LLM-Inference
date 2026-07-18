@@ -4,11 +4,12 @@ This directory contains the current English documentation for the Tiny-LLM-Infer
 
 ## Core Documents
 
-- [Architecture](Architecture.md): end-to-end runtime architecture, ownership boundaries, rendered D2 architecture map, execution flow, data flow, and build layout.
+- [Architecture](Architecture.md): end-to-end runtime architecture, ownership boundaries, fixed-layout SVG architecture map, execution flow, data flow, and build layout.
 - [Design Review Notes](Design_Review_Notes.md): implementation issues, redundant fields, and cleanup candidates found while documenting the current code.
 - [Project Status](Project_Status.md): supported platforms, explicit non-goals, and performance-claim boundaries.
 - [v0.1.0 Release Checklist](Release_Checklist.md): validation evidence and remaining release-operator actions.
 - [v0.1.0 Benchmark Report](../benchmark/reports/v0.1.0/README.md): pinned-model correctness, three-backend offline results, open-loop latency, and reproduction evidence.
+- [Realistic-v1 Benchmark Report](../benchmark/reports/realistic-v1/README.md): BurstGPT/OASST1 workload construction, three-backend offline cohorts, per-window capacity, trace replay, and grouped latency evidence.
 - [v0.1.0 GitHub Release](https://github.com/wlmrh/Tiny-LLM-Inference/releases/tag/v0.1.0): signed source release and downloadable benchmark artifacts.
 
 ## Module Documents

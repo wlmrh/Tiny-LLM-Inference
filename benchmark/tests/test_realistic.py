@@ -19,6 +19,7 @@ from suite.realistic import (
     select_trace_windows,
     sha256_text,
 )
+from run_realistic_benchmark import build_public_manifest
 from transformers_generate_benchmark import trim_generated_tokens_at_eos
 
 
@@ -150,6 +151,45 @@ class RealisticWorkloadTest(unittest.TestCase):
         self.assertEqual(trim_generated_tokens_at_eos([10, 11, 99, 99], 99, False), [10, 11, 99])
         self.assertEqual(trim_generated_tokens_at_eos([10, 11, 99, 99], 99, True), [10, 11, 99, 99])
         self.assertEqual(trim_generated_tokens_at_eos([10, 11], 99, False), [10, 11])
+
+    def test_public_manifest_records_pinned_sources_without_private_dataset_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            burstgpt = root / "trace.csv"
+            oasst1 = root / "trees.jsonl.gz"
+            burstgpt.write_text("trace", encoding="utf-8")
+            oasst1.write_text("oasst", encoding="utf-8")
+            model_dir = root / "model"
+            model_dir.mkdir()
+            for name in ("config.json", "tokenizer.json", "model.safetensors"):
+                (model_dir / name).write_text(name, encoding="utf-8")
+            sources = {
+                "burstgpt": {
+                    "repo_id": "HPMLL/BurstGPT",
+                    "revision": "burst-revision",
+                    "sha256": sha256_text("trace"),
+                },
+                "oasst1": {
+                    "repo_id": "OpenAssistant/oasst1",
+                    "revision": "oasst-revision",
+                    "sha256": sha256_text("oasst"),
+                },
+                "model": {"repo_id": "Qwen/model", "revision": "model-revision"},
+            }
+            prepared = {
+                "burstgpt": {"path": str(burstgpt), "sha256": sha256_text("trace")},
+                "oasst1": {"path": str(oasst1), "sha256": sha256_text("oasst")},
+                "model_dir": str(model_dir),
+            }
+            manifest = build_public_manifest(prepared, sources, model_dir)
+
+        self.assertEqual(manifest["burstgpt"]["revision"], "burst-revision")
+        self.assertEqual(manifest["burstgpt"]["filename"], "trace.csv")
+        self.assertNotIn("path", manifest["burstgpt"])
+        self.assertEqual(manifest["oasst1"]["revision"], "oasst-revision")
+        self.assertEqual(manifest["model"]["revision"], "model-revision")
+        self.assertEqual(len(manifest["model"]["files"]), 3)
+        self.assertNotIn("model_dir", manifest)
 
 
 if __name__ == "__main__":

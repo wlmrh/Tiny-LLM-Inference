@@ -12,15 +12,13 @@ The project is intentionally scoped as a **single-process, single-device, offlin
 
 ![Tiny-LLM-Inference architecture](docs/architecture.svg)
 
-```text
-LLM -> LLMEngine -> EngineCore -> Scheduler / ModelRunner -> Model
-```
+Nested boxes show ownership, rounded rectangles are executable components, and cylinders are KV-storage views. Dashed blue arrows show the `EngineCore`-mediated request/result flow between stages; the return from `ModelRunner` is applied by `Scheduler::update_from_output()` before an `EngineCoreOutput` reaches output processing. Green arrows show KV management. The two `Paged KV cache` cylinders are aliases of the same scheduler-owned storage, repeated only to keep the diagram's routing orthogonal. Data types are written on the producing or consuming component rather than drawn as peer modules.
 
-- `LLM` owns user-facing offline generation resources.
-- `LLMEngine` handles text/tokenizer I/O.
-- `EngineCore` coordinates scheduling and model execution over token IDs.
-- `Scheduler` owns request state, chunked prefill/decode decisions, preemption, and paged KV lifecycle.
-- `ModelRunner` prepares tensors and runtime metadata, invokes the model, and samples request-final rows.
+- `LLM` owns the deployment resources and `LLMEngine`; `LLMEngine` owns input/output processing and the token-level `EngineCore`.
+- `InputPreprocessor` produces validated `EngineCoreRequest` objects, while `OutPreprocessor` turns `EngineCoreOutput` into incremental `UserOutput`.
+- `EngineCore` drives each step by calling `Scheduler::schedule()`, `ModelRunner::run()`, and then `Scheduler::update_from_output()`.
+- `Scheduler` owns request state, queues, token budgets, preemption, and `KVCacheManager`; the model reads and writes the same scheduler-owned paged KV cache during attention.
+- `Sampler` returns token IDs inside `ModelRunnerOutput`; `EngineCore` passes that output to `Scheduler`, so the sampler and scheduler do not communicate directly.
 - LLaMA/SmolLM2 and Qwen2-family checkpoints share the LLaMA-style model path.
 
 See [Architecture](docs/Architecture.md) for ownership, scheduling, KV cache, tensor metadata, and device boundaries.
@@ -200,9 +198,10 @@ python3 benchmark/industrial_benchmark.py --preset regression
 ```
 
 See [Tools, Tests, and Benchmarks](docs/modules/Tools_Tests_and_Benchmarks.md) for workload and reporting details.
-The [realistic-v1 benchmark status](benchmark/reports/realistic-v1/BLOCKED.md) records the fixed
-BurstGPT/OASST1 methodology and its current deterministic runtime blocker; it does not replace the
-verified v0.1.0 headline results above.
+The [realistic-v1 benchmark report](benchmark/reports/realistic-v1/README.md) combines three fixed
+BurstGPT arrival/length windows with length-matched OASST1 prompts, per-window capacity calibration,
+12 trace replays, and three-backend offline cohorts. It complements rather than replaces the verified
+v0.1.0 headline results above.
 
 ## Tests
 

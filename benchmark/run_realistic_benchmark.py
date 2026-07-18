@@ -141,6 +141,50 @@ def save_json(path: Path, data: Dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def public_file_record(path: Path) -> Dict[str, Any]:
+    return {"filename": path.name, "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+
+
+def build_public_manifest(
+    prepared_manifest: Dict[str, Any], config_sources: Dict[str, Any], model_dir: Path
+) -> Dict[str, Any]:
+    manifest = dict(prepared_manifest)
+    manifest["sources"] = config_sources
+    for source_name in ("burstgpt", "oasst1"):
+        source = dict(config_sources[source_name])
+        prepared = dict(manifest.get(source_name, {}))
+        path_text = prepared.pop("path", "")
+        if path_text:
+            source_path = Path(path_text)
+            if not source_path.is_file():
+                raise RuntimeError(f"missing {source_name} source file: {source_path}")
+            prepared.update(public_file_record(source_path))
+        actual_sha256 = str(prepared.get("sha256", ""))
+        expected_sha256 = str(source.get("sha256", ""))
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError(
+                f"{source_name} SHA-256 mismatch during publish: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+        manifest[source_name] = {**source, **prepared}
+
+    required_model_files = [model_dir / "config.json", model_dir / "tokenizer.json"]
+    optional_model_files = [model_dir / "tokenizer_config.json", model_dir / "generation_config.json"]
+    model_files = required_model_files + [path for path in optional_model_files if path.is_file()]
+    model_files.extend(sorted(model_dir.glob("*.safetensors")))
+    missing_model_files = [str(path) for path in required_model_files if not path.is_file()]
+    if missing_model_files or not any(path.suffix == ".safetensors" for path in model_files):
+        details = ", ".join(missing_model_files) or "no safetensors files"
+        raise RuntimeError(f"incomplete model files during publish: {details}")
+    manifest["model"] = {
+        **config_sources["model"],
+        "local_path": str(model_dir),
+        "files": [public_file_record(path) for path in model_files],
+    }
+    manifest.pop("model_dir", None)
+    return manifest
+
+
 def range_summary(values: List[float]) -> Dict[str, float]:
     if not values:
         return {"min": 0.0, "median": 0.0, "max": 0.0}
@@ -458,7 +502,10 @@ def publish(args: argparse.Namespace, prepared: Path, output: Path, trace: Dict[
     if not args.publish_dir:
         return
     publish_dir = Path(args.publish_dir)
-    manifest = json.loads((prepared / "workload-manifest.json").read_text(encoding="utf-8"))
+    prepared_manifest = json.loads((prepared / "workload-manifest.json").read_text(encoding="utf-8"))
+    manifest = build_public_manifest(
+        prepared_manifest, args.config_data["sources"], Path(args.model_dir)
+    )
     selection = json.loads((prepared / "selection.json").read_text(encoding="utf-8"))
     refresh_trace_summaries(trace, args.config_data["relative_slo"])
     trace_environment = trace.get("environment", {})
