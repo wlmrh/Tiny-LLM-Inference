@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from suite.realistic import ISL_BUCKETS, OSL_BUCKETS, bucket_name
+
 
 def percentile(values: List[float], q: float) -> float:
     if not values:
@@ -54,6 +56,7 @@ def read_event_metrics(path: Path) -> Dict[str, Any]:
                     "first_token_ms": -1.0,
                     "finish_ms": -1.0,
                     "generated_tokens": 0,
+                    "requested_tokens": int(event.get("requested_tokens", 0)),
                     "finish_reason": "",
                     "_event_counts": {"submit": 0, "admit": 0, "token": 0, "finish": 0},
                 },
@@ -63,6 +66,7 @@ def read_event_metrics(path: Path) -> Dict[str, Any]:
                 item["_event_counts"][event_type] += 1
             if event_type == "submit":
                 item["submit_ms"] = float(event.get("time_ms", 0.0))
+                item["requested_tokens"] = int(event.get("requested_tokens", item["requested_tokens"]))
             elif event_type == "admit":
                 item["admit_ms"] = float(event.get("time_ms", 0.0))
             elif event_type == "token":
@@ -97,10 +101,16 @@ def read_event_metrics(path: Path) -> Dict[str, Any]:
             admit_ms = submit_ms
             item["admit_ms"] = admit_ms
         generated_tokens = int(item["generated_tokens"])
+        requested_tokens = int(item["requested_tokens"])
         if event_counts["token"] != generated_tokens:
             completeness_errors.append(
                 f"repeat={item['repeat']} request_id={item['request_id']} token event count "
                 f"{event_counts['token']} != generated_tokens {generated_tokens}"
+            )
+        if requested_tokens > 0 and generated_tokens != requested_tokens:
+            completeness_errors.append(
+                f"repeat={item['repeat']} request_id={item['request_id']} generated_tokens "
+                f"{generated_tokens} != requested_tokens {requested_tokens}"
             )
         request_ttft = max(0.0, first_token_ms - submit_ms) if first_token_ms >= 0.0 else 0.0
         request_engine_ttft = max(0.0, first_token_ms - admit_ms) if first_token_ms >= 0.0 else 0.0
@@ -136,4 +146,74 @@ def read_event_metrics(path: Path) -> Dict[str, Any]:
             "e2e_ms": summarize_values(e2e_ms),
             "tpot_ms": summarize_values(tpot_ms),
         },
+    }
+
+
+def summarize_requests(requests: List[Dict[str, Any]]) -> Dict[str, Any]:
+    metric_names = ("queue_ms", "ttft_ms", "engine_ttft_ms", "e2e_ms", "tpot_ms")
+    generated = sum(int(item.get("generated_tokens", 0)) for item in requests)
+    prompt_tokens = sum(int(item.get("prompt_len", item.get("prompt_tokens", 0))) for item in requests)
+    duration_ms = max((float(item.get("finish_ms", 0.0)) for item in requests), default=0.0)
+    return {
+        "request_count": len(requests),
+        "metrics": {
+            name: summarize_values([float(item.get(name, 0.0)) for item in requests]) for name in metric_names
+        },
+        "request_per_s": len(requests) * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
+        "input_tokens_per_s": prompt_tokens * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
+        "output_tokens_per_s": generated * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
+        "wall_clock_ms": duration_ms,
+    }
+
+
+def enrich_and_group_requests(
+    requests: List[Dict[str, Any]], workload_records: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    metadata = {str(item["request_id"]): item for item in workload_records}
+    enriched: List[Dict[str, Any]] = []
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for request in requests:
+        item = dict(request)
+        source = metadata.get(str(item["request_id"]), {})
+        for key in (
+            "prompt_len",
+            "max_new_tokens",
+            "source_log_type",
+            "language",
+            "window_id",
+            "prompt_sha256",
+        ):
+            if key in source:
+                item[key] = source[key]
+        enriched.append(item)
+        labels = (
+            f"log_type:{item.get('source_log_type', 'unknown')}",
+            f"isl:{bucket_name(int(item.get('prompt_len', 0)), ISL_BUCKETS)}",
+            f"osl:{bucket_name(int(item.get('max_new_tokens', 0)), OSL_BUCKETS)}",
+        )
+        for label in labels:
+            groups.setdefault(label, []).append(item)
+    return {
+        "requests": enriched,
+        "overall": summarize_requests(enriched),
+        "groups": {name: summarize_requests(values) for name, values in sorted(groups.items())},
+    }
+
+
+def relative_goodput(
+    requests: List[Dict[str, Any]], ttft_slo_ms: float, tpot_slo_ms: float
+) -> Dict[str, float]:
+    good = sum(
+        1
+        for item in requests
+        if float(item.get("ttft_ms", 0.0)) <= ttft_slo_ms
+        and float(item.get("tpot_ms", 0.0)) <= tpot_slo_ms
+    )
+    duration_ms = max((float(item.get("finish_ms", 0.0)) for item in requests), default=0.0)
+    return {
+        "good_requests": float(good),
+        "good_request_ratio": good / len(requests) if requests else 0.0,
+        "goodput_request_per_s": good * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
+        "ttft_slo_ms": ttft_slo_ms,
+        "tpot_slo_ms": tpot_slo_ms,
     }

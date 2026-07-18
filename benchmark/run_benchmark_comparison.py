@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tinyllm-dtype", default="fp32", choices=("fp32", "bf16"))
     parser.add_argument("--tinyllm-kv-cache-dtype", default="fp32", choices=("fp32", "bf16"))
     parser.add_argument("--warmup", type=non_negative_int, default=1)
+    parser.add_argument("--warmup-request-count", type=non_negative_int, default=0)
     parser.add_argument("--repeat", type=positive_int, default=3)
     parser.add_argument("--max-new-tokens", type=positive_int, default=8)
     parser.add_argument("--ignore-eos", action="store_true", help="require backends to generate max_new_tokens")
@@ -153,6 +154,7 @@ def run_tinyllm(args: argparse.Namespace) -> Dict[str, Any]:
     common = command_common_args(args)
     json_index = len(common) - 2
     common[json_index:json_index] = ["--max-num-batched-token-cap", str(args.max_num_batched_token_cap)]
+    common[json_index:json_index] = ["--warmup-request-count", str(args.warmup_request_count)]
     common[json_index:json_index] = [
         "--dtype",
         args.tinyllm_dtype,
@@ -223,7 +225,12 @@ def target_generated_tokens(results: List[Dict[str, Any]]) -> int:
     if not results:
         return 0
     first = results[0]
-    return int(first.get("prompt_count", 0)) * int(first.get("max_new_tokens", 0))
+    return int(
+        first.get(
+            "requested_generated_tokens",
+            int(first.get("prompt_count", 0)) * int(first.get("max_new_tokens", 0)),
+        )
+    )
 
 
 def generated_tokens_match(item: Dict[str, Any], target: int) -> bool:
