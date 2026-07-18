@@ -3,6 +3,14 @@
 Tiny-LLM-Inference is a source-built, single-process offline inference runtime. It is intended for systems learning,
 correctness work, and controlled performance experiments; it is not an HTTP service or a distributed serving stack.
 
+## v0.1.0 release baseline
+
+The v0.1.0 release candidate was validated on an NVIDIA GeForce RTX 4080 SUPER with pinned SmolLM2-135M and
+Qwen2.5-1.5B-Instruct snapshots. CPU, CUDA, real-model, FP32 generation, BF16 smoke, and three-backend token-alignment
+gates passed. The release benchmark includes offline TinyLLM/Transformers/vLLM results and five 200-request TinyLLM
+open-loop workloads. See the [v0.1.0 benchmark report](../benchmark/reports/v0.1.0/README.md) for the tested commit,
+environment, model file hashes, workloads, raw JSON, strengths, and limitations.
+
 ## Supported
 
 - Linux CPU and one selected NVIDIA CUDA device.
@@ -20,8 +28,8 @@ attention kernel. CPU BF16 requests fail explicitly and never silently fall back
 - FP16 execution, fully BF16-resident weights/activations, or quantization.
 - Tensor/pipeline parallelism, serving protocols, prefix caching, LoRA, or multimodal models.
 
-Performance reports apply only to their recorded model, dtype, hardware, workload, and software environment. A result
-against Transformers is a baseline comparison, not a claim of production parity with vLLM or TensorRT-LLM.
+Performance reports apply only to their recorded model, dtype, hardware, workload, and software environment. Results
+against Transformers and vLLM are baseline comparisons, not claims of production parity with vLLM or TensorRT-LLM.
 
 ## BF16 maturity
 

@@ -19,7 +19,7 @@
 
 ## Release operator actions
 
-- [ ] Run the regression benchmark preset on the release commit and archive its JSON/Markdown report.
+- [x] Run the regression benchmark preset on the release commit and archive its JSON/Markdown report.
 - [ ] Confirm the Git working tree is clean and public CI is green.
 - [ ] Push the release branch, review the diff, merge it, then create signed tag `v0.1.0`.
 - [ ] Publish release notes from `CHANGELOG.md` and attach the archived benchmark report.
