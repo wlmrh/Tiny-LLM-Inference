@@ -17,6 +17,7 @@ from suite.realistic import (
     scale_trace_arrivals,
     select_trace_windows,
 )
+from transformers_generate_benchmark import trim_generated_tokens_at_eos
 
 
 class FakeTokenizer:
@@ -131,6 +132,11 @@ class RealisticWorkloadTest(unittest.TestCase):
         self.assertIn("isl:1-128", grouped["groups"])
         goodput = relative_goodput(grouped["requests"], 20.0, 10.0)
         self.assertEqual(goodput["good_requests"], 1.0)
+
+    def test_transformers_batch_padding_is_trimmed_after_eos(self):
+        self.assertEqual(trim_generated_tokens_at_eos([10, 11, 99, 99], 99, False), [10, 11, 99])
+        self.assertEqual(trim_generated_tokens_at_eos([10, 11, 99, 99], 99, True), [10, 11, 99, 99])
+        self.assertEqual(trim_generated_tokens_at_eos([10, 11], 99, False), [10, 11])
 
 
 if __name__ == "__main__":

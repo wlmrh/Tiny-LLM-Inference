@@ -258,8 +258,15 @@ def generate_once(
     samples = []
     for idx, row in enumerate(output_ids):
         generated_ids = row[input_width:]
-        generated_token_ids = [int(token_id) for token_id in generated_ids.detach().cpu().tolist()]
+        generated_token_ids = trim_generated_tokens_at_eos(
+            [int(token_id) for token_id in generated_ids.detach().cpu().tolist()],
+            tokenizer.eos_token_id,
+            bool(args.ignore_eos),
+        )
         generated_tokens += len(generated_token_ids)
+        finished_by_eos = bool(
+            tokenizer.eos_token_id is not None and tokenizer.eos_token_id in generated_token_ids
+        )
         samples.append(
             {
                 "request_id": request_ids[idx],
@@ -267,10 +274,8 @@ def generate_once(
                 "output_text": tokenizer.decode(generated_token_ids, skip_special_tokens=True),
                 "generated_text": tokenizer.decode(generated_token_ids, skip_special_tokens=True),
                 "token_ids": generated_token_ids,
-                "finished": bool(
-                    tokenizer.eos_token_id is not None and tokenizer.eos_token_id in generated_token_ids
-                ),
-                "finish_reason": "length",
+                "finished": finished_by_eos or len(generated_token_ids) >= args.max_new_tokens,
+                "finish_reason": "eos" if finished_by_eos else "length",
             }
         )
 
@@ -297,6 +302,25 @@ def mean(values: List[float]) -> float:
     if not values:
         return 0.0
     return sum(values) / len(values)
+
+
+def trim_generated_tokens_at_eos(
+    token_ids: List[int], eos_token_id: Optional[int], ignore_eos: bool
+) -> List[int]:
+    """Remove batch-padding tokens emitted after a sequence reaches EOS.
+
+    ``transformers.generate`` pads completed rows to the longest generated row
+    in a batch.  Those padding tokens are not generated work and must not be
+    compared with backends that return each request's sequence independently.
+    Keep the first EOS token itself so token-ID correctness remains exact.
+    """
+    if ignore_eos or eos_token_id is None:
+        return token_ids
+    try:
+        eos_index = token_ids.index(int(eos_token_id))
+    except ValueError:
+        return token_ids
+    return token_ids[: eos_index + 1]
 
 
 def build_summary(args: argparse.Namespace, model_dir: Path, device_text: str, prompts: List[str], repeats: List[Dict[str, Any]]) -> Dict[str, Any]:

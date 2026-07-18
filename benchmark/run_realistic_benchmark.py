@@ -272,7 +272,7 @@ def run_offline(args: argparse.Namespace, prepared: Path, output: Path, environm
                 for name, agreement in comparison.get("output_agreement", {}).items():
                     if not agreement.get("match", False):
                         raise RuntimeError(f"correctness mismatch for {name}")
-            if comparison.get("ratio_status") and any(
+            if cohort_name != "correctness" and comparison.get("ratio_status") and any(
                 not item.get("valid", False) for item in comparison["ratio_status"].values()
             ):
                 raise RuntimeError(f"generated token mismatch in {cohort_name} shard {shard_index}")
