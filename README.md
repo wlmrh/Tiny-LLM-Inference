@@ -36,21 +36,32 @@ See [Architecture](docs/Architecture.md) for ownership, scheduling, KV cache, te
 
 ## Verified v0.1.0 Results
 
-Release validation is being regenerated from the pinned SmolLM2-135M and Qwen2.5-1.5B-Instruct snapshots on an NVIDIA GeForce RTX 4080 SUPER. The final table will be populated only from the archived v0.1.0 JSON reports.
+Release validation used candidate commit `25e2355921b033abb89091d15f768c57c715c63c` with `git_dirty=false`, an NVIDIA GeForce RTX 4080 SUPER, driver 595.71.05, CUDA 12.8, pinned Qwen2.5-1.5B-Instruct revision `989aa798...`, and FP32 compute/KV for headline measurements.
 
 | Validation | Result |
 | --- | --- |
-| TinyLLM / Transformers / vLLM greedy token agreement | Pending v0.1.0 release run |
-| CPU and CUDA test suites | Pending v0.1.0 release run |
-| Five 200-request open-loop workloads | Pending v0.1.0 release run |
+| TinyLLM / Transformers / vLLM greedy token agreement | Exact pairwise match; 0 mismatches, no backend skips |
+| CPU and CUDA test suites | CPU 65/65 plus 7/7 model-backed; CUDA 78/78 |
+| Five 200-request open-loop workloads | 200/200 each; complete events and monotonic percentiles |
 
 | Workload | Backend | TTFT ms | E2E tok/s | Decode tok/s |
 | --- | --- | ---: | ---: | ---: |
-| interactive | TinyLLM / Transformers / vLLM | Pending | Pending | Pending |
-| long-prefill | TinyLLM / Transformers / vLLM | Pending | Pending | Pending |
-| decode-heavy | TinyLLM / Transformers / vLLM | Pending | Pending | Pending |
+| interactive | TinyLLM | 18.716 | 87.985 | 88.897 |
+| interactive | Transformers | 26.268 | 45.505 | 45.646 |
+| interactive | vLLM | 32.426 | 103.138 | 107.124 |
+| long-prefill | TinyLLM | 520.538 | 131.462 | 176.620 |
+| long-prefill | Transformers | 514.774 | 118.813 | 153.670 |
+| long-prefill | vLLM | 62.298 | 357.240 | 385.141 |
+| decode-heavy | TinyLLM | 109.237 | 503.314 | 527.716 |
+| decode-heavy | Transformers | 117.006 | 285.493 | 292.814 |
+| decode-heavy | vLLM | 55.157 | 731.557 | 755.617 |
 
-The release report will include the tested commit, model revisions, GPU/driver, CUDA and Python package versions, dtype, warmup/repeat policy, workload parameters, raw JSON, and open-loop TTFT/TPOT/E2E percentiles. See the [v0.1.0 benchmark report](benchmark/reports/v0.1.0/README.md).
+| Open-loop workload | TTFT p99 ms | E2E p99 ms |
+| --- | ---: | ---: |
+| Poisson 0.50C (1.966050 req/s) | 65.606 | 956.106 |
+| Poisson 0.90C (3.538890 req/s) | 66.929 | 1068.512 |
+
+TinyLLM outperformed the tested Transformers baseline across the three performance workloads, but trailed vLLM in end-to-end and decode throughput. Long-prefill is the clearest limitation: TinyLLM TTFT was 520.538 ms versus vLLM's 62.298 ms. See the [complete v0.1.0 benchmark report](benchmark/reports/v0.1.0/README.md) for workload definitions, all open-loop percentiles, raw JSON, pinned model hashes, and reproduction commands.
 
 Performance results apply only to their recorded environment and workload. A baseline comparison is not a claim of production parity with vLLM, SGLang, or TensorRT-LLM.
 
