@@ -152,17 +152,42 @@ def read_event_metrics(path: Path) -> Dict[str, Any]:
 def summarize_requests(requests: List[Dict[str, Any]]) -> Dict[str, Any]:
     metric_names = ("queue_ms", "ttft_ms", "engine_ttft_ms", "e2e_ms", "tpot_ms")
     generated = sum(int(item.get("generated_tokens", 0)) for item in requests)
+    requested = sum(int(item.get("requested_tokens", item.get("max_new_tokens", 0))) for item in requests)
     prompt_tokens = sum(int(item.get("prompt_len", item.get("prompt_tokens", 0))) for item in requests)
-    duration_ms = max((float(item.get("finish_ms", 0.0)) for item in requests), default=0.0)
+    submit_times = [float(item.get("submit_ms", 0.0)) for item in requests]
+    finish_times = [float(item.get("finish_ms", -1.0)) for item in requests]
+    valid_finishes = [value for value in finish_times if value >= 0.0]
+    start_ms = min(submit_times, default=0.0)
+    end_ms = max(valid_finishes, default=start_ms)
+    duration_ms = max(0.0, end_ms - start_ms)
+    completed = sum(1 for item in requests if float(item.get("finish_ms", -1.0)) >= 0.0)
+    timeline = []
+    for item in requests:
+        submit_ms = float(item.get("submit_ms", 0.0))
+        finish_ms = float(item.get("finish_ms", -1.0))
+        timeline.append((submit_ms, 1))
+        if finish_ms >= submit_ms:
+            timeline.append((finish_ms, -1))
+    active = 0
+    max_concurrency = 0
+    for _, delta in sorted(timeline, key=lambda event: (event[0], event[1])):
+        active = max(0, active + delta)
+        max_concurrency = max(max_concurrency, active)
     return {
         "request_count": len(requests),
+        "completed_request_count": completed,
+        "error_count": len(requests) - completed,
         "metrics": {
             name: summarize_values([float(item.get(name, 0.0)) for item in requests]) for name in metric_names
         },
         "request_per_s": len(requests) * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
         "input_tokens_per_s": prompt_tokens * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
         "output_tokens_per_s": generated * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
+        "total_tokens_per_s": (prompt_tokens + generated) * 1000.0 / duration_ms if duration_ms > 0.0 else 0.0,
+        "requested_output_tokens": requested,
+        "generated_output_tokens": generated,
         "wall_clock_ms": duration_ms,
+        "max_concurrency": max_concurrency,
     }
 
 

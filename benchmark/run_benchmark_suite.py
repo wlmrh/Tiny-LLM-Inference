@@ -144,7 +144,10 @@ def collect_environment(vllm_python: str) -> Dict[str, Any]:
         ]
     )
     snapshots = {"suite": python_environment(sys.executable)}
-    if os.path.realpath(vllm_python) != os.path.realpath(sys.executable):
+    # A venv may symlink the same interpreter binary while exposing a different
+    # package environment, so compare the requested executable paths rather
+    # than collapsing them with realpath().
+    if os.path.abspath(vllm_python) != os.path.abspath(sys.executable):
         snapshots["vllm"] = python_environment(vllm_python)
     return {
         "git_commit": git_commit,

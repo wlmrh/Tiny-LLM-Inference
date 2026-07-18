@@ -31,7 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-python", default="/root/autodl-tmp/venvs/vllm/bin/python")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--publish-dir")
-    parser.add_argument("--phase", choices=("trace", "offline", "all"), default="all")
+    parser.add_argument("--artifact-checksum-file")
+    parser.add_argument("--phase", choices=("trace", "offline", "publish", "all"), default="all")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     args.config_data = json.loads(Path(args.config).read_text(encoding="utf-8"))
@@ -138,6 +139,62 @@ def comparison_command(
 def save_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def range_summary(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {"min": 0.0, "median": 0.0, "max": 0.0}
+    return {"min": min(values), "median": statistics.median(values), "max": max(values)}
+
+
+def refresh_trace_summaries(trace: Dict[str, Any], slo_config: Dict[str, Any]) -> None:
+    for window in trace.get("windows", {}).values():
+        for load in window.get("loads", {}).values():
+            requests = load.get("request_metrics", {}).get("requests", [])
+            load["request_metrics"] = enrich_and_group_requests(requests, requests)
+        reference_key = f"{float(slo_config['reference_load_fraction']):.2f}C"
+        reference = window.get("loads", {}).get(reference_key)
+        if not reference:
+            continue
+        metrics = reference["request_metrics"]["overall"]["metrics"]
+        ttft_slo = float(metrics["ttft_ms"]["p99"]) * float(slo_config["ttft_p99_multiplier"])
+        tpot_slo = float(metrics["tpot_ms"]["p99"]) * float(slo_config["tpot_p99_multiplier"])
+        for load in window["loads"].values():
+            load["relative_goodput"] = relative_goodput(
+                load["request_metrics"]["requests"], ttft_slo, tpot_slo
+            )
+
+    aggregates: Dict[str, Any] = {}
+    load_names = sorted(
+        {name for window in trace.get("windows", {}).values() for name in window.get("loads", {})}
+    )
+    for load_name in load_names:
+        loads = [
+            window["loads"][load_name]
+            for window in trace.get("windows", {}).values()
+            if load_name in window.get("loads", {})
+        ]
+        scalar_getters = {
+            "target_rps": lambda load: float(load["target_rps"]),
+            "achieved_request_per_s": lambda load: float(load["request_metrics"]["overall"]["request_per_s"]),
+            "input_tokens_per_s": lambda load: float(load["request_metrics"]["overall"]["input_tokens_per_s"]),
+            "output_tokens_per_s": lambda load: float(load["request_metrics"]["overall"]["output_tokens_per_s"]),
+            "total_tokens_per_s": lambda load: float(load["request_metrics"]["overall"]["total_tokens_per_s"]),
+            "wall_clock_ms": lambda load: float(load["request_metrics"]["overall"]["wall_clock_ms"]),
+            "max_concurrency": lambda load: float(load["request_metrics"]["overall"]["max_concurrency"]),
+            "good_request_ratio": lambda load: float(load["relative_goodput"]["good_request_ratio"]),
+        }
+        for metric_name in ("queue_ms", "ttft_ms", "engine_ttft_ms", "tpot_ms", "e2e_ms"):
+            for percentile_name in ("p50", "p95", "p99"):
+                scalar_getters[f"{metric_name}_{percentile_name}"] = (
+                    lambda load, metric_name=metric_name, percentile_name=percentile_name: float(
+                        load["request_metrics"]["overall"]["metrics"][metric_name][percentile_name]
+                    )
+                )
+        aggregates[load_name] = {
+            name: range_summary([getter(load) for load in loads]) for name, getter in scalar_getters.items()
+        }
+    trace["cross_window_summary"] = aggregates
 
 
 def load_or_initialize(path: Path, kind: str, environment: Dict[str, Any]) -> Dict[str, Any]:
@@ -291,13 +348,34 @@ def run_offline(args: argparse.Namespace, prepared: Path, output: Path, environm
 
 
 def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dict[str, Any]) -> str:
+    environment = manifest.get("environment", {})
     lines = [
         "# TinyLLM Realistic Workload Benchmark v1",
+        "",
+        "## Executive summary",
         "",
         "This benchmark combines BurstGPT arrival/length traces with length-matched OASST1 prompts.",
         "It is a single-process, single-device internal submission benchmark, not a production HTTP SLA.",
         "",
-        "## Sources and limitations",
+        "The trace replay uses three non-overlapping 1,000-request windows and calibrates each window",
+        "against its own simultaneous saturation throughput before replaying 0.25C through 0.90C.",
+        "The offline section compares identical prompt cohorts across TinyLLM, Transformers, and vLLM.",
+        "",
+        "## Scope and claim boundary",
+        "",
+        "Results apply only to the recorded commit, model, GPU, dtype, and workloads. Relative goodput",
+        "uses experiment-local thresholds and is not a production SLA or a claim of serving parity.",
+        "",
+        "## Environment",
+        "",
+        f"- Runtime candidate commit: `{environment.get('git_commit', '-')}`",
+        f"- git_dirty: `{environment.get('git_dirty', '-')}`",
+        f"- GPU / driver: `{'; '.join(environment.get('gpu_driver', [])) or '-'}`",
+        f"- CUDA toolkit: `{manifest.get('cuda_toolkit', '-')}`",
+        "- TinyLLM compute / KV dtype: `FP32 / FP32`",
+        "- Sampling: greedy; correctness retains EOS, performance uses fixed output",
+        "",
+        "## Sources and workload construction",
         "",
         "- OASST1 is a content proxy; it is not the original BurstGPT request text.",
         "- BurstGPT token counts come from GPT services and are matched approximately under the Qwen tokenizer.",
@@ -307,25 +385,43 @@ def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dic
         "",
         "## Dataset manifest",
         "",
+        f"- BurstGPT revision: `{manifest.get('burstgpt', {}).get('revision', '-')}`",
         f"- BurstGPT SHA-256: `{manifest.get('burstgpt', {}).get('sha256', '-')}`",
+        f"- OASST1 revision: `{manifest.get('oasst1', {}).get('revision', '-')}`",
         f"- OASST1 SHA-256: `{manifest.get('oasst1', {}).get('sha256', '-')}`",
+        f"- Qwen revision: `{manifest.get('model', {}).get('revision', '-')}`",
         f"- Windows: `{manifest.get('window_count', '-')}` × `{manifest.get('window_size', '-')}` requests",
         "",
-        "## Trace replay",
+        "## Trace capacity and replay results",
         "",
-        "| Window | Capacity req/s | Load | Target req/s | TTFT p99 ms | TPOT p99 ms | E2E p99 ms | Good ratio |",
-        "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+        "`C` is measured independently for each window as `1000 × 1000 / generation_ms`.",
+        "",
+        "| Window | Capacity req/s | Load | Target req/s | Completed | Req/s | TTFT p99 ms | TPOT p99 ms | E2E p99 ms | Max conc. | Good ratio |",
+        "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for window_id, window in sorted(trace.get("windows", {}).items()):
         for load_name, load in sorted(window.get("loads", {}).items()):
-            overall = load["request_metrics"]["overall"]["metrics"]
+            summary = load["request_metrics"]["overall"]
+            metrics = summary["metrics"]
             lines.append(
                 f"| {window_id} | {window['capacity']['capacity_rps']:.6f} | {load_name} | "
-                f"{load['target_rps']:.6f} | {overall['ttft_ms']['p99']:.3f} | "
-                f"{overall['tpot_ms']['p99']:.3f} | {overall['e2e_ms']['p99']:.3f} | "
+                f"{load['target_rps']:.6f} | {summary['completed_request_count']}/{summary['request_count']} | "
+                f"{summary['request_per_s']:.6f} | {metrics['ttft_ms']['p99']:.3f} | "
+                f"{metrics['tpot_ms']['p99']:.3f} | {metrics['e2e_ms']['p99']:.3f} | "
+                f"{summary['max_concurrency']} | "
                 f"{load['relative_goodput']['good_request_ratio']:.4f} |"
             )
-    lines.extend(["", "## Offline three-backend cohorts", ""])
+    lines.extend(
+        [
+            "",
+            "The JSON report additionally contains p50/p95/p99 queue, TTFT, engine TTFT, TPOT, and E2E",
+            "for the overall population and every log-type, ISL, and OSL bucket, together with input/output/total",
+            "token throughput, wall-clock duration, and cross-window min/median/max summaries.",
+            "",
+            "## Offline three-backend cohorts",
+            "",
+        ]
+    )
     for cohort, aggregate in sorted(offline.get("aggregates", {}).items()):
         lines.extend([f"### {cohort}", "", "| Backend | E2E tok/s median | Decode tok/s median | Latency ms median |", "| --- | ---: | ---: | ---: |"])
         for backend, metrics in sorted(aggregate["backends"].items()):
@@ -334,6 +430,27 @@ def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dic
                 f"{metrics['decode_tokens_per_s']['p50']:.3f} | {metrics['avg_total_latency_ms']['p50']:.3f} |"
             )
         lines.append("")
+    lines.extend(
+        [
+            "## Relative goodput",
+            "",
+            "For each window, `TTFT SLO = 2.0 × that window's 0.25C TTFT p99` and",
+            "`TPOT SLO = 1.5 × that window's 0.25C TPOT p99`. A request counts as good only if both",
+            "conditions hold. These are relative experiment thresholds, not production objectives.",
+            "",
+            "## Reproduction",
+            "",
+            "See `manifest.json` for the exact source revisions, file hashes, environment, configuration,",
+            "and complete preparation and execution commands. Real prompt text remains only in the ignored",
+            "server-side workload artifacts; `selection.json` contains source metadata and prompt hashes.",
+            "",
+            "## Raw artifacts",
+            "",
+            "The server-side archive contains prepared private workloads, capacity and replay workloads,",
+            "request events, and unsanitized run JSON. Its SHA-256 is recorded in `manifest.json`; the archive",
+            "is intentionally not committed to Git.",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -343,14 +460,59 @@ def publish(args: argparse.Namespace, prepared: Path, output: Path, trace: Dict[
     publish_dir = Path(args.publish_dir)
     manifest = json.loads((prepared / "workload-manifest.json").read_text(encoding="utf-8"))
     selection = json.loads((prepared / "selection.json").read_text(encoding="utf-8"))
+    refresh_trace_summaries(trace, args.config_data["relative_slo"])
+    trace_environment = trace.get("environment", {})
+    offline_environment = offline.get("environment", {})
+    trace_commit = str(trace_environment.get("git_commit", ""))
+    offline_commit = str(offline_environment.get("git_commit", ""))
+    if trace_commit != offline_commit:
+        raise RuntimeError(f"trace/offline candidate commit mismatch: {trace_commit} != {offline_commit}")
+    if trace_environment.get("git_dirty") or offline_environment.get("git_dirty"):
+        raise RuntimeError("refusing to publish results produced from a dirty worktree")
+    nvcc = subprocess.run(
+        ["/usr/local/cuda-12.8/bin/nvcc", "--version"], check=False, capture_output=True, text=True
+    )
+    manifest["environment"] = trace_environment
+    manifest["cuda_toolkit"] = nvcc.stdout.strip().splitlines()[-1] if nvcc.returncode == 0 else "unknown"
+    manifest["report_generated_by_commit"] = subprocess.run(
+        ["git", "rev-parse", "HEAD"], check=False, capture_output=True, text=True
+    ).stdout.strip()
+    manifest["configuration"] = args.config_data
+    manifest["commands"] = {
+        "prepare": (
+            "python3 benchmark/prepare_realistic_workload.py "
+            "--config benchmark/configs/qwen25_realistic_v1.json "
+            "--burstgpt <dataset-root>/raw/burstgpt/BurstGPT_without_fails_3.csv "
+            "--oasst <dataset-root>/raw/oasst1/2023-04-12_oasst_ready.trees.jsonl.gz "
+            "--model-dir /models/Qwen2.5-1.5B-Instruct --output-dir <dataset-root>/generated"
+        ),
+        "run": (
+            "python3 benchmark/run_realistic_benchmark.py --prepared-dir <dataset-root>/generated "
+            "--config benchmark/configs/qwen25_realistic_v1.json "
+            "--model-dir /models/Qwen2.5-1.5B-Instruct "
+            "--tinyllm-binary build/cuda-release/benchmark/llama_engine_benchmark "
+            "--vllm-python /root/autodl-tmp/venvs/vllm/bin/python "
+            "--output-dir <artifact-root>/run --publish-dir benchmark/reports/realistic-v1 --phase all --resume"
+        ),
+    }
+    if args.artifact_checksum_file:
+        checksum_text = Path(args.artifact_checksum_file).read_text(encoding="utf-8").strip()
+        manifest["raw_artifact"] = {
+            "filename": Path(checksum_text.split()[-1].lstrip("*")).name,
+            "sha256": checksum_text.split()[0],
+        }
     publish_dir.mkdir(parents=True, exist_ok=True)
-    save_json(publish_dir / "manifest.json", manifest)
     (publish_dir / "selection.json").write_text(
         json.dumps(selection, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     save_json(publish_dir / "trace_replay.json", trace)
     save_json(publish_dir / "offline.json", offline)
     (publish_dir / "README.md").write_text(build_markdown(trace, offline, manifest), encoding="utf-8")
+    manifest["published_files"] = {
+        name: {"bytes": (publish_dir / name).stat().st_size, "sha256": sha256_file(publish_dir / name)}
+        for name in ("README.md", "selection.json", "trace_replay.json", "offline.json")
+    }
+    save_json(publish_dir / "manifest.json", manifest)
 
 
 def main() -> int:

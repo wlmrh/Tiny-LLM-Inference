@@ -1,5 +1,24 @@
 {
   "label": "qwen25_realistic_v1",
+  "sources": {
+    "burstgpt": {
+      "repo_id": "HPMLL/BurstGPT",
+      "release": "v2.0",
+      "revision": "7eb2c4f8350f8a6985272386f5c14af1f678b299",
+      "filename": "BurstGPT_without_fails_3.csv",
+      "sha256": "3326259f9efb11845bc5ef85fa97e6f691050b0974621c91ef22acd566c43a40"
+    },
+    "oasst1": {
+      "repo_id": "OpenAssistant/oasst1",
+      "revision": "fdf72ae0827c1cda404aff25b6603abec9e3399b",
+      "filename": "2023-04-12_oasst_ready.trees.jsonl.gz",
+      "sha256": "2a9a8fd343e9b28e04a895a669d3253f82d93e9c174d440199ae19d5fafbdff7"
+    },
+    "model": {
+      "repo_id": "Qwen/Qwen2.5-1.5B-Instruct",
+      "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+    }
+  },
   "model_dir": "/models/Qwen2.5-1.5B-Instruct",
   "device": "cuda:0",
   "dtype": "fp32",

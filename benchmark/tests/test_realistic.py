@@ -14,8 +14,10 @@ from suite.realistic import (
     CandidateMatcher,
     load_burstgpt_rows,
     load_oasst_candidates,
+    public_selection,
     scale_trace_arrivals,
     select_trace_windows,
+    sha256_text,
 )
 from transformers_generate_benchmark import trim_generated_tokens_at_eos
 
@@ -110,8 +112,16 @@ class RealisticWorkloadTest(unittest.TestCase):
             for index in range(60)
         ]
         windows = select_trace_windows(rows, candidates, window_size=4)
+        repeated = select_trace_windows(rows, candidates, window_size=4)
         trace_ids = [item["source_trace_index"] for window in windows for item in window]
         self.assertEqual(len(trace_ids), len(set(trace_ids)))
+        first_selection = json.dumps(
+            [public_selection(window) for window in windows], sort_keys=True, separators=(",", ":")
+        )
+        second_selection = json.dumps(
+            [public_selection(window) for window in repeated], sort_keys=True, separators=(",", ":")
+        )
+        self.assertEqual(sha256_text(first_selection), sha256_text(second_selection))
         scaled = scale_trace_arrivals(windows[0], 2.0)
         self.assertAlmostEqual(scaled[-1]["arrival_ms"], 1500.0)
         self.assertTrue(all(a["arrival_ms"] <= b["arrival_ms"] for a, b in zip(scaled, scaled[1:])))
@@ -129,6 +139,9 @@ class RealisticWorkloadTest(unittest.TestCase):
         ]
         grouped = enrich_and_group_requests(requests, workload)
         self.assertEqual(grouped["overall"]["request_count"], 2)
+        self.assertEqual(grouped["overall"]["completed_request_count"], 2)
+        self.assertEqual(grouped["overall"]["max_concurrency"], 2)
+        self.assertEqual(grouped["overall"]["total_tokens_per_s"], 3400.0)
         self.assertIn("isl:1-128", grouped["groups"])
         goodput = relative_goodput(grouped["requests"], 20.0, 10.0)
         self.assertEqual(goodput["good_requests"], 1.0)

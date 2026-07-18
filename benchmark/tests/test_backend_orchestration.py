@@ -2,11 +2,12 @@ import argparse
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from run_benchmark_suite import resolve_backends, resolved_scenario
+from run_benchmark_suite import collect_environment, resolve_backends, resolved_scenario
 
 
 def make_args(**overrides):
@@ -48,6 +49,15 @@ class BackendOrchestrationTest(unittest.TestCase):
             make_args(capacity_rps=12.0), {}, {"request_rate_fraction": 0.5}
         )
         self.assertEqual(scenario["request_rate_rps"], 6.0)
+
+    def test_collect_environment_keeps_symlinked_venv_packages(self):
+        with mock.patch("run_benchmark_suite.command_output", return_value=""), mock.patch(
+            "run_benchmark_suite.python_environment", side_effect=lambda executable: {"executable": executable}
+        ):
+            environment = collect_environment("/tmp/example-venv/bin/python")
+        self.assertEqual(
+            environment["python"]["vllm"]["executable"], "/tmp/example-venv/bin/python"
+        )
 
 
 if __name__ == "__main__":
