@@ -200,6 +200,9 @@ python3 benchmark/industrial_benchmark.py --preset regression
 ```
 
 See [Tools, Tests, and Benchmarks](docs/modules/Tools_Tests_and_Benchmarks.md) for workload and reporting details.
+The [realistic-v1 benchmark status](benchmark/reports/realistic-v1/BLOCKED.md) records the fixed
+BurstGPT/OASST1 methodology and its current deterministic runtime blocker; it does not replace the
+verified v0.1.0 headline results above.
 
 ## Tests
 
