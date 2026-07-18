@@ -1,0 +1,25 @@
+{
+  "label": "qwen25_realistic_v1",
+  "model_dir": "/models/Qwen2.5-1.5B-Instruct",
+  "device": "cuda:0",
+  "dtype": "fp32",
+  "kv_cache_dtype": "fp32",
+  "window_size": 1000,
+  "window_quantiles": [0.10, 0.50, 0.90],
+  "max_model_tokens": 4096,
+  "max_output_tokens": 512,
+  "warmup_request_count": 32,
+  "load_fractions": [0.25, 0.50, 0.75, 0.90],
+  "relative_slo": {
+    "reference_load_fraction": 0.25,
+    "ttft_p99_multiplier": 2.0,
+    "tpot_p99_multiplier": 1.5
+  },
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "ignore_eos": true
+  }
+}
