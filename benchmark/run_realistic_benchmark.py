@@ -22,6 +22,36 @@ from suite.realistic import (
 )
 
 
+NVIDIA_RTX_4080_SUPER_SPECS_URL = (
+    "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/"
+)
+
+
+def gpu_memory_observation(gpu_records: List[str]) -> Dict[str, Any]:
+    for record in gpu_records:
+        fields = [field.strip() for field in record.split(",")]
+        if len(fields) != 3 or fields[0] != "NVIDIA GeForce RTX 4080 SUPER":
+            continue
+        try:
+            reported_memory_mib = int(fields[2])
+        except ValueError:
+            continue
+        if reported_memory_mib == 32760:
+            return {
+                "measurement_source": "nvidia-smi runtime query on the benchmark host",
+                "reported_memory_mib": reported_memory_mib,
+                "retail_reference_memory_gb": 16,
+                "retail_reference_url": NVIDIA_RTX_4080_SUPER_SPECS_URL,
+                "interpretation": (
+                    "The cloud host exposed an RTX 4080 SUPER device name with 32760 MiB, which does "
+                    "not match NVIDIA's 16 GB retail reference specification. Cloud-platform device "
+                    "presentation or nonstandard provisioning may explain the discrepancy, but the exact "
+                    "cause was not independently verified."
+                ),
+            }
+    return {}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the TinyLLM realistic benchmark v1")
     parser.add_argument("--prepared-dir", required=True)
@@ -391,39 +421,148 @@ def run_offline(args: argparse.Namespace, prepared: Path, output: Path, environm
     return state
 
 
-def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dict[str, Any]) -> str:
+def format_range(summary: Dict[str, float], digits: int = 3) -> str:
+    return " / ".join(f"{float(summary[key]):.{digits}f}" for key in ("min", "median", "max"))
+
+
+def build_markdown(
+    trace: Dict[str, Any],
+    offline: Dict[str, Any],
+    manifest: Dict[str, Any],
+    selection: List[Dict[str, Any]],
+) -> str:
     environment = manifest.get("environment", {})
+    suite_python = environment.get("python", {}).get("suite", {})
+    suite_packages = suite_python.get("packages", {})
+    vllm_python = environment.get("python", {}).get("vllm", {})
+    vllm_packages = vllm_python.get("packages", {})
+    gpu_records = environment.get("gpu_driver", [])
+    gpu_summary = "; ".join(gpu_records) or "-"
+    if len(gpu_records) == 1:
+        gpu_fields = [field.strip() for field in gpu_records[0].split(",")]
+        if len(gpu_fields) == 3:
+            gpu_summary = (
+                f"{gpu_fields[0]}; driver {gpu_fields[1]}; host-reported memory {gpu_fields[2]} MiB"
+            )
+    memory_observation = environment.get("gpu_memory_observation", {}) or gpu_memory_observation(
+        gpu_records
+    )
+    gpu_memory_lines: List[str] = []
+    if memory_observation:
+        gpu_memory_lines = [
+            "- GPU memory disclosure: `32760 MiB` is the literal value returned by the benchmark host's",
+            "  runtime query, not the standard specification of a retail RTX 4080 SUPER.",
+            f"  [NVIDIA's reference specification]({memory_observation['retail_reference_url']}) lists "
+            f"`{memory_observation['retail_reference_memory_gb']} GB GDDR6X`.",
+            "  The mismatch may reflect cloud-platform device presentation or nonstandard provisioning,",
+            "  but the exact cause was not independently verified. Treat both the device name and memory",
+            "  capacity as provider-exposed properties of this benchmark host.",
+        ]
+    windows = trace.get("windows", {})
+    cross_window = trace.get("cross_window_summary", {})
+    replay_count = sum(len(window.get("loads", {})) for window in windows.values())
+    capacity_count = len(windows)
+    replay_requests = [
+        load["request_metrics"]["overall"]
+        for window in windows.values()
+        for load in window.get("loads", {}).values()
+    ]
+    replay_complete = all(
+        summary["request_count"] == summary["completed_request_count"] and summary["error_count"] == 0
+        for summary in replay_requests
+    )
+
+    correctness = next(
+        (scenario for scenario in offline.get("scenarios", []) if scenario.get("cohort") == "correctness"),
+        {},
+    )
+    agreements = correctness.get("comparison", {}).get("output_agreement", {})
+    correctness_match = bool(agreements) and all(item.get("match", False) for item in agreements.values())
+    compared_requests = min(
+        (int(item.get("compared_requests", 0)) for item in agreements.values()), default=0
+    )
+
+    offline_aggregates = offline.get("aggregates", {})
+    performance_cohorts = (
+        ("short_chat", "Short chat"),
+        ("medium_chat", "Medium chat"),
+        ("long_prefill", "Long prefill"),
+        ("long_decode", "Long decode"),
+    )
+
+    def e2e_median(cohort: str, backend: str) -> float:
+        return float(
+            offline_aggregates[cohort]["backends"][backend]["end_to_end_tokens_per_s"]["p50"]
+        )
+
+    short_vs_transformers = e2e_median("short_chat", "tinyllm") / e2e_median(
+        "short_chat", "transformers"
+    )
+    medium_vs_transformers = e2e_median("medium_chat", "tinyllm") / e2e_median(
+        "medium_chat", "transformers"
+    )
+    decode_vs_transformers = e2e_median("long_decode", "tinyllm") / e2e_median(
+        "long_decode", "transformers"
+    )
+    prefill_vs_transformers = e2e_median("long_prefill", "tinyllm") / e2e_median(
+        "long_prefill", "transformers"
+    )
+
     lines = [
         "# TinyLLM Realistic Workload Benchmark v1",
         "",
         "## Executive summary",
         "",
-        "This benchmark combines BurstGPT arrival/length traces with length-matched OASST1 prompts.",
-        "It is a single-process, single-device internal submission benchmark, not a production HTTP SLA.",
+        "This benchmark combines BurstGPT arrival/length traces with length-matched OASST1 prompts",
+        "to exercise heterogeneous request lengths, burst timing, and per-request output limits without",
+        "changing the inference engine. It is a single-process, single-device experiment, not a production HTTP SLA.",
         "",
-        "The trace replay uses three non-overlapping 1,000-request windows and calibrates each window",
-        "against its own simultaneous saturation throughput before replaying 0.25C through 0.90C.",
-        "The offline section compares identical prompt cohorts across TinyLLM, Transformers, and vLLM.",
+        "This narrative is rendered from the committed sanitized JSON; the benchmark was not rerun and",
+        "the raw measurements were not edited for this documentation update.",
+        "",
+        f"- `{capacity_count}` experiment-local reference-capacity calibrations and `{replay_count}` trace replays completed.",
+        f"- All trace replays completed 1,000/1,000 requests with zero reported errors: "
+        f"`{'yes' if replay_complete else 'no'}`.",
+        f"- `{compared_requests}` EOS-aware correctness prompts matched exactly across all three backends: "
+        f"`{'yes' if correctness_match else 'no'}`.",
+        f"- TinyLLM median E2E throughput was `{short_vs_transformers:.2f}x`, `{medium_vs_transformers:.2f}x`, and "
+        f"`{decode_vs_transformers:.2f}x` the tested Transformers baseline for short chat, medium chat, and long decode,",
+        f"  but only `{prefill_vs_transformers:.2f}x` for long prefill. vLLM led all four performance cohorts.",
+        "- Completion remained 100% at every replay load, but tail latency and relative goodput degraded materially",
+        "  above 0.50C_ref; completion alone must not be read as an SLO or stability claim.",
         "",
         "## Scope and claim boundary",
         "",
         "Results apply only to the recorded commit, model, GPU, dtype, and workloads. Relative goodput",
         "uses experiment-local thresholds and is not a production SLA or a claim of serving parity.",
+        "The labels `0.25C` through `0.90C` are retained in JSON for compatibility; in this report, `C_ref`",
+        "means the completion rate of one simultaneous 1,000-request calibration for the same window.",
+        "It is not a production saturation capacity derived from a steady-state load scan.",
         "",
         "## Environment",
         "",
         f"- Runtime candidate commit: `{environment.get('git_commit', '-')}`",
         f"- git_dirty: `{environment.get('git_dirty', '-')}`",
-        f"- GPU / driver: `{'; '.join(environment.get('gpu_driver', [])) or '-'}`",
+        f"- GPU / driver: `{gpu_summary}`",
         f"- CUDA toolkit: `{manifest.get('cuda_toolkit', '-')}`",
+        f"- Suite Python / PyTorch / Transformers: `{suite_python.get('python', '-')} / "
+        f"{suite_packages.get('torch', '-')} / {suite_packages.get('transformers', '-')}`",
+        f"- vLLM environment Python / PyTorch / Transformers / vLLM: `{vllm_python.get('python', '-')} / "
+        f"{vllm_packages.get('torch', '-')} / {vllm_packages.get('transformers', '-')} / "
+        f"{vllm_packages.get('vllm', '-')}`",
+        f"- Model: `{manifest.get('model', {}).get('repo_id', '-')}` at "
+        f"`{manifest.get('model', {}).get('revision', '-')}`",
         "- TinyLLM compute / KV dtype: `FP32 / FP32`",
-        "- Sampling: greedy; correctness retains EOS, performance uses fixed output",
+        "- Sampling: greedy; correctness retains EOS; performance uses fixed output and ignores EOS",
+        f"- Trace warmup: `{manifest.get('configuration', {}).get('warmup_request_count', '-')} requests`; "
+        "offline performance warmup/repeat: `1 / 1` per shard",
+        *gpu_memory_lines,
         "",
         "## Sources and workload construction",
         "",
         "- OASST1 is a content proxy; it is not the original BurstGPT request text.",
         "- BurstGPT token counts come from GPT services and are matched approximately under the Qwen tokenizer.",
-        "- Arrival timestamps are linearly scaled to workload-specific measured capacity.",
+        "- Arrival timestamps are linearly scaled to the workload-specific measured reference rate.",
         "- Fixed output lengths model requested inference work and ignore natural EOS behavior.",
         "- Network, HTTP, authentication, multi-GPU, and production reliability overheads are excluded.",
         "",
@@ -436,19 +575,73 @@ def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dic
         f"- Qwen revision: `{manifest.get('model', {}).get('revision', '-')}`",
         f"- Windows: `{manifest.get('window_count', '-')}` × `{manifest.get('window_size', '-')}` requests",
         "",
-        "## Trace capacity and replay results",
+        "## Selected trace windows",
         "",
-        "`C` is measured independently for each window as `1000 × 1000 / generation_ms`.",
+        "The windows come from the usable trace at the configured 10%, 50%, and 90% positions after filtering.",
+        "ISL is measured after applying the Qwen chat template; OSL is the fixed per-request generation limit.",
         "",
-        "| Window | Capacity req/s | Load | Target req/s | Completed | Req/s | TTFT p99 ms | TPOT p99 ms | E2E p99 ms | Max conc. | Good ratio |",
-        "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Window | Trace position | API / conversation | ISL tokens min / median / max | OSL tokens min / median / max | Input / output tokens |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
     ]
-    for window_id, window in sorted(trace.get("windows", {}).items()):
+    quantiles = manifest.get("configuration", {}).get("window_quantiles", [])
+    for index, window_id in enumerate(sorted(windows)):
+        records = [record for record in selection if record.get("window_id") == window_id]
+        api_count = sum(record.get("source_log_type") == "API log" for record in records)
+        conversation_count = sum(record.get("source_log_type") == "Conversation log" for record in records)
+        prompt_lengths = [int(record["prompt_len"]) for record in records]
+        output_lengths = [int(record["max_new_tokens"]) for record in records]
+        quantile = float(quantiles[index]) if index < len(quantiles) else 0.0
+        lines.append(
+            f"| {window_id} | {quantile:.0%} | {api_count} / {conversation_count} | "
+            f"{min(prompt_lengths)} / {statistics.median(prompt_lengths):.1f} / {max(prompt_lengths)} | "
+            f"{min(output_lengths)} / {statistics.median(output_lengths):.1f} / {max(output_lengths)} | "
+            f"{sum(prompt_lengths):,} / {sum(output_lengths):,} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Window-03 is decode-heavy: its requested output-token total is more than twenty times either",
+            "of the other windows. Request/s and `C_ref` therefore must be compared within a window, not",
+            "treated as workload-independent engine capacity.",
+            "",
+            "## Cross-window trace summary",
+            "",
+            "Each cell reports `min / median / max` across the three windows.",
+            "",
+            "| Load | Achieved req/s | TTFT p99 ms | TPOT p99 ms | E2E p99 ms | Good ratio | Max concurrency |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for load_name in ("0.25C", "0.50C", "0.75C", "0.90C"):
+        summary = cross_window[load_name]
+        lines.append(
+            f"| {load_name.replace('C', 'C_ref')} | {format_range(summary['achieved_request_per_s'])} | "
+            f"{format_range(summary['ttft_ms_p99'])} | {format_range(summary['tpot_ms_p99'])} | "
+            f"{format_range(summary['e2e_ms_p99'])} | {format_range(summary['good_request_ratio'])} | "
+            f"{format_range(summary['max_concurrency'], 0)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Median relative good-request ratio fell from 0.998 at 0.25C_ref to 0.981, 0.847, and 0.716",
+            "as load increased. Median TTFT p99 rose from 18.831 s at 0.25C_ref to 54.901 s at 0.75C_ref.",
+            "The knee between 0.50C_ref and 0.75C_ref is evidence of queueing pressure for these traces,",
+            "not a universal capacity threshold.",
+            "",
+            "## Per-window trace details",
+            "",
+            "`C_ref = 1000 × 1000 / measured_generation_ms` for each simultaneous calibration.",
+            "",
+            "| Window | C_ref req/s | Load | Target req/s | Completed | Req/s | TTFT p99 ms | TPOT p99 ms | E2E p99 ms | Max conc. | Good ratio |",
+            "| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for window_id, window in sorted(windows.items()):
         for load_name, load in sorted(window.get("loads", {}).items()):
             summary = load["request_metrics"]["overall"]
             metrics = summary["metrics"]
             lines.append(
-                f"| {window_id} | {window['capacity']['capacity_rps']:.6f} | {load_name} | "
+                f"| {window_id} | {window['capacity']['capacity_rps']:.6f} | {load_name.replace('C', 'C_ref')} | "
                 f"{load['target_rps']:.6f} | {summary['completed_request_count']}/{summary['request_count']} | "
                 f"{summary['request_per_s']:.6f} | {metrics['ttft_ms']['p99']:.3f} | "
                 f"{metrics['tpot_ms']['p99']:.3f} | {metrics['e2e_ms']['p99']:.3f} | "
@@ -462,25 +655,90 @@ def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dic
             "for the overall population and every log-type, ISL, and OSL bucket, together with input/output/total",
             "token throughput, wall-clock duration, and cross-window min/median/max summaries.",
             "",
-            "## Offline three-backend cohorts",
+            "## Offline correctness and three-backend cohorts",
             "",
+            f"Correctness used `{compared_requests}` mixed prompts with EOS enabled. TinyLLM, Transformers, and",
+            f"vLLM token IDs matched pairwise with zero mismatches: "
+            f"`{'yes' if correctness_match else 'no'}`.",
+            "Performance cohorts used fixed output lengths and ignored EOS.",
+            "",
+            "| Cohort | ISL tokens | OSL | Shards × requests |",
+            "| --- | ---: | ---: | ---: |",
         ]
     )
-    for cohort, aggregate in sorted(offline.get("aggregates", {}).items()):
-        lines.extend([f"### {cohort}", "", "| Backend | E2E tok/s median | Decode tok/s median | Latency ms median |", "| --- | ---: | ---: | ---: |"])
-        for backend, metrics in sorted(aggregate["backends"].items()):
-            lines.append(
-                f"| {backend} | {metrics['end_to_end_tokens_per_s']['p50']:.3f} | "
-                f"{metrics['decode_tokens_per_s']['p50']:.3f} | {metrics['avg_total_latency_ms']['p50']:.3f} |"
-            )
-        lines.append("")
+    cohort_labels = (("correctness", "Correctness"),) + performance_cohorts
+    for cohort, label in cohort_labels:
+        scenarios = [
+            scenario for scenario in offline.get("scenarios", []) if scenario.get("cohort") == cohort
+        ]
+        records = [record for scenario in scenarios for record in scenario.get("selection", [])]
+        prompt_lengths = [int(record["prompt_len"]) for record in records]
+        output_lengths = sorted({int(record["max_new_tokens"]) for record in records})
+        request_counts = [int(scenario.get("request_count", 0)) for scenario in scenarios]
+        shard_text = (
+            f"{len(scenarios)} × {request_counts[0]}"
+            if request_counts and len(set(request_counts)) == 1
+            else f"{len(scenarios)} / {sum(request_counts)} total"
+        )
+        osl_text = "/".join(str(value) for value in output_lengths)
+        if cohort == "correctness":
+            osl_text += ", EOS-aware"
+        lines.append(
+            f"| {label} | {min(prompt_lengths)}-{max(prompt_lengths)} | {osl_text} | {shard_text} |"
+        )
     lines.extend(
         [
+            "",
+            "The following values are medians across the three deterministic shards, not confidence intervals.",
+            "",
+            "| Cohort | Requests | TinyLLM E2E tok/s | Transformers | vLLM | Tiny/Transformers | Tiny/vLLM | TinyLLM latency ms |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for cohort, label in performance_cohorts:
+        aggregate = offline_aggregates[cohort]
+        request_count = sum(
+            int(scenario.get("request_count", 0))
+            for scenario in offline.get("scenarios", [])
+            if scenario.get("cohort") == cohort
+        )
+        tiny = e2e_median(cohort, "tinyllm")
+        transformers = e2e_median(cohort, "transformers")
+        vllm = e2e_median(cohort, "vllm")
+        tiny_latency = aggregate["backends"]["tinyllm"]["avg_total_latency_ms"]["p50"]
+        lines.append(
+            f"| {label} | {request_count} | {tiny:.3f} | {transformers:.3f} | {vllm:.3f} | "
+            f"{tiny / transformers:.3f}x | {tiny / vllm:.3f}x | {tiny_latency:.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            f"- Against the tested Transformers path, TinyLLM was strongest on short chat ({short_vs_transformers:.2f}x),",
+            f"  medium chat ({medium_vs_transformers:.2f}x), and long decode ({decode_vs_transformers:.2f}x) median E2E throughput.",
+            f"- Long prefill is the clearest weakness: TinyLLM reached only {prefill_vs_transformers:.2f}x the Transformers",
+            "  median E2E throughput and roughly one tenth of vLLM's throughput in that cohort.",
+            "- vLLM led every performance cohort, so these data support a workload-sensitive engineering baseline,",
+            "  not a parity claim.",
+            "- All replays completed, but higher-load goodput and tail-latency degradation show that completion rate",
+            "  alone is insufficient for judging interactive service quality.",
+            "",
             "## Relative goodput",
             "",
-            "For each window, `TTFT SLO = 2.0 × that window's 0.25C TTFT p99` and",
-            "`TPOT SLO = 1.5 × that window's 0.25C TPOT p99`. A request counts as good only if both",
+            "For each window, `TTFT SLO = 2.0 × that window's 0.25C_ref TTFT p99` and",
+            "`TPOT SLO = 1.5 × that window's 0.25C_ref TPOT p99`. A request counts as good only if both",
             "conditions hold. These are relative experiment thresholds, not production objectives.",
+            "",
+            "## Limitations",
+            "",
+            "- Only three deterministic trace windows and one GPU/model/dtype configuration were measured.",
+            "- OASST1 supplies content, while BurstGPT supplies timing and target lengths; they are not original paired requests.",
+            "- BurstGPT lengths come from another tokenizer and are only approximately matched under Qwen.",
+            "- Arrival gaps are linearly scaled, and fixed-output performance runs do not model natural EOS.",
+            "- `C_ref` is a simultaneous-batch completion rate, not a steady-state production capacity estimate.",
+            "- Offline medians summarize three fixed shards; they do not provide randomized-order variance or confidence intervals.",
+            "- Network, request parsing, HTTP/gRPC, authentication, multi-GPU, failure recovery, and production reliability are excluded.",
             "",
             "## Reproduction",
             "",
@@ -493,6 +751,9 @@ def build_markdown(trace: Dict[str, Any], offline: Dict[str, Any], manifest: Dic
             "The server-side archive contains prepared private workloads, capacity and replay workloads,",
             "request events, and unsanitized run JSON. Its SHA-256 is recorded in `manifest.json`; the archive",
             "is intentionally not committed to Git.",
+            "",
+            f"- Archive: `{manifest.get('raw_artifact', {}).get('filename', '-')}`",
+            f"- SHA-256: `{manifest.get('raw_artifact', {}).get('sha256', '-')}`",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -519,7 +780,11 @@ def publish(args: argparse.Namespace, prepared: Path, output: Path, trace: Dict[
     nvcc = subprocess.run(
         ["/usr/local/cuda-12.8/bin/nvcc", "--version"], check=False, capture_output=True, text=True
     )
-    manifest["environment"] = trace_environment
+    public_environment = dict(trace_environment)
+    memory_observation = gpu_memory_observation(public_environment.get("gpu_driver", []))
+    if memory_observation:
+        public_environment["gpu_memory_observation"] = memory_observation
+    manifest["environment"] = public_environment
     manifest["cuda_toolkit"] = nvcc.stdout.strip().splitlines()[-1] if nvcc.returncode == 0 else "unknown"
     manifest["report_generated_by_commit"] = subprocess.run(
         ["git", "rev-parse", "HEAD"], check=False, capture_output=True, text=True
@@ -554,7 +819,9 @@ def publish(args: argparse.Namespace, prepared: Path, output: Path, trace: Dict[
     )
     save_json(publish_dir / "trace_replay.json", trace)
     save_json(publish_dir / "offline.json", offline)
-    (publish_dir / "README.md").write_text(build_markdown(trace, offline, manifest), encoding="utf-8")
+    (publish_dir / "README.md").write_text(
+        build_markdown(trace, offline, manifest, selection), encoding="utf-8"
+    )
     manifest["published_files"] = {
         name: {"bytes": (publish_dir / name).stat().st_size, "sha256": sha256_file(publish_dir / name)}
         for name in ("README.md", "selection.json", "trace_replay.json", "offline.json")

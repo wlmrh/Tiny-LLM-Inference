@@ -77,6 +77,13 @@
     "gpu_driver": [
       "NVIDIA GeForce RTX 4080 SUPER, 595.71.05, 32760"
     ],
+    "gpu_memory_observation": {
+      "measurement_source": "nvidia-smi runtime query on the benchmark host",
+      "reported_memory_mib": 32760,
+      "retail_reference_memory_gb": 16,
+      "retail_reference_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/",
+      "interpretation": "The cloud host exposed an RTX 4080 SUPER device name with 32760 MiB, which does not match NVIDIA's 16 GB retail reference specification. Cloud-platform device presentation or nonstandard provisioning may explain the discrepancy, but the exact cause was not independently verified."
+    },
     "python": {
       "suite": {
         "executable": "/root/miniconda3/bin/python3",
@@ -162,8 +169,8 @@
   },
   "published_files": {
     "README.md": {
-      "bytes": 6076,
-      "sha256": "7051c1df3404d65fc593b98377632a9a0b69fa1f6d446647f54ed2b91ca645a1"
+      "bytes": 11592,
+      "sha256": "522dc2f5941525a94c6808bee42defc586bea776e5945bc81e5c8582a6a329d9"
     },
     "selection.json": {
       "bytes": 2408082,
