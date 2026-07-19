@@ -1,12 +1,8 @@
-# Tiny-LLM-Inference Agent Guide
+# Tiny-LLM-Inference Technical Guide
 
 ## Project Context
 
 Tiny-LLM-Inference is a small vLLM-inspired, single-process inference engine. `LLMEngine` owns text/tokenizer I/O; `EngineCore` runs scheduling and model execution over token IDs. The HF runtime supports LLaMA/SmolLM2-compatible models and Qwen2-family checkpoints such as Qwen2.5-1.5B-Instruct.
-
-Default project workflow: perform code changes, builds, tests, benchmarks, and other project commands on the session-provided remote server unless the user explicitly scopes a task to local files. Use the SSH command and password supplied for the current session instead of assuming a persistent host alias.
-
-If the user explicitly requests local project edits, modify files locally but do not configure, build, test, or benchmark the project locally. Local verification should be limited to static checks such as search, diff, and whitespace validation.
 
 ## Stack And Build Assumptions
 
@@ -113,7 +109,6 @@ Useful direct runs:
 - Use `--preset quick --dry-run` for command plumbing checks.
 - Use `--preset profile_prefill --profile-detail` only for bottleneck diagnosis; synchronized per-component timings are not headline throughput numbers.
 - For vLLM comparisons, use fixed-output performance mode so all backends generate the requested token count; output agreement is a sanity/correctness signal, not a requirement for performance ratios.
-- `benchmark/results/` keeps only recent reports; preserve a report elsewhere only when the user asks.
 
 ## Debug And Alignment Tools
 
@@ -128,9 +123,8 @@ Useful direct runs:
 
 Historical `test_llama_phase*` files were temporary bring-up checks and should not be restored as regular tests.
 
-## Qwen2.5 Landmines
+## Qwen2.5 Notes
 
-- Default server model path: `/models/Qwen2.5-1.5B-Instruct`. On AutoDL-style hosts, keep real files under `/root/autodl-tmp/models/` and expose `/models/...` as a symlink to avoid filling the system disk.
 - Qwen2.5-1.5B-Instruct uses tied embeddings, GQA (`num_attention_heads=12`, `num_key_value_heads=2`), q/k/v projection bias, `rope_theta=1000000`, and no `unk_token_id`.
 - Optional integer readers must treat JSON `null` as missing, not as a type error.
-- Direct Hugging Face access may be unavailable on rented servers; `hf-mirror.com` or ModelScope can be used. Validated files are `config.json`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`, and `model.safetensors`.
+- Validated checkpoint files include `config.json`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`, and `model.safetensors`.
