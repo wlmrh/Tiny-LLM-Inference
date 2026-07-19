@@ -93,6 +93,34 @@ TTFT, E2E latency, and TPOT percentiles.
 
 `industrial_benchmark.py` is kept as a legacy preset wrapper for quick optimization loops.
 
+### Realistic trace benchmark
+
+`prepare_realistic_workload.py` builds deterministic workload windows by matching BurstGPT request
+lengths and timestamps to unused OASST1 dialogue prefixes tokenized with the Qwen chat template. Raw
+prompt text stays in the ignored server-side dataset directory. The committed selection metadata keeps
+source indices, timing, token lengths, and prompt hashes, but excludes prompt text, OASST user IDs, and
+raw BurstGPT session IDs.
+
+`run_realistic_benchmark.py` supports:
+
+- per-window simultaneous reference-rate calibration (`C_ref`);
+- linearly scaled 0.25C_ref, 0.50C_ref, 0.75C_ref, and 0.90C_ref trace replay;
+- per-request fixed output lengths in TinyLLM open-loop runs;
+- three-backend correctness and uniform-OSL offline cohorts;
+- grouped request metrics by log type, ISL bucket, and OSL bucket;
+- resumable raw runs and a separate sanitized publish step.
+
+The C++ runner deliberately rejects mixed output lengths in offline mode. In open-loop mode it applies
+each request's own `max_new_tokens`, records requested/generated token counts, limits warmup with
+`--warmup-request-count`, and estimates KV capacity from at most 16 active requests plus 20% slack.
+
+The completed fixed-data run and its validation evidence are published in the
+[realistic-v1 benchmark report](../../benchmark/reports/realistic-v1/README.md). All three experiment-local
+`C_ref` calibrations and twelve 1,000-request trace replays completed with full request-event streams and zero
+reported errors. The report now includes trace-window length composition, cross-window min/median/max statistics,
+three-backend cohort ratios, interpretation, and explicit limitations. `C_ref` is the completion rate of a
+simultaneous 1,000-request calibration, not a steady-state production capacity estimate.
+
 Benchmark policy:
 
 - Use focused presets for tight optimization loops.

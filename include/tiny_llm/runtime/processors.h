@@ -128,6 +128,7 @@ class OutPreprocessor
 
   private:
     std::string incremental_decode(RequestState &state, int32_t new_token_id);
+    std::string finalize_decode(RequestState &state);
     bool check_stop_criteria(RequestState &state, int32_t latest_token);
 
     const Tokenizer *tokenizer_ = nullptr;

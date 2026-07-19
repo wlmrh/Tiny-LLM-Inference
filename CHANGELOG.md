@@ -4,6 +4,8 @@ All notable changes are documented here. Semantic versioning starts with the fir
 
 ## [Unreleased]
 
+- Publish the realistic-v1 benchmark with pinned BurstGPT/OASST1 sources, heterogeneous per-request lengths,
+  three-backend offline cohorts, and twelve 1,000-request trace replays with request-level latency evidence.
 - Continue performance work on fully BF16-resident model execution.
 
 ## [0.1.0] - 2026-07-18

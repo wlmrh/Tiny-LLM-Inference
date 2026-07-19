@@ -11,6 +11,28 @@ gates passed. The release benchmark includes offline TinyLLM/Transformers/vLLM r
 open-loop workloads. See the [v0.1.0 benchmark report](../benchmark/reports/v0.1.0/README.md) for the tested commit,
 environment, model file hashes, workloads, raw JSON, strengths, and limitations.
 
+The host runtime reported `32760 MiB` for a device named NVIDIA GeForce RTX 4080 SUPER, while
+[NVIDIA's retail reference specification](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/)
+lists 16 GB GDDR6X. This discrepancy may be caused by cloud-platform device presentation or nonstandard
+provisioning, but the exact cause was not independently verified. Hardware claims in this project therefore
+refer to the provider-exposed benchmark host rather than a standard retail card configuration.
+
+## realistic-v1 benchmark baseline
+
+The realistic-v1 benchmark extends the release evidence without changing runtime behavior. It combines three
+non-overlapping 1,000-request BurstGPT timing/length windows with length-matched OASST1 prompt content, calibrates
+an experiment-local `C_ref` for each window, and replays each trace at 0.25, 0.50, 0.75, and 0.90 of that reference.
+All 12 replays completed 1,000/1,000 requests with complete request metrics and zero reported errors. An eight-prompt
+EOS-aware cohort produced exact pairwise token-ID agreement across TinyLLM, Transformers, and vLLM.
+
+The offline results are workload-sensitive: TinyLLM exceeded the tested Transformers baseline for short chat,
+medium chat, and long decode, but reached only 0.356x its median E2E throughput for long prefill; vLLM led every
+performance cohort. Across the three replay windows, median relative good-request ratio declined from 0.998 at
+0.25C_ref to 0.716 at 0.90C_ref. These results identify long-prefill and higher-load tail latency as current limits;
+they do not establish production capacity or serving parity. See the
+[realistic-v1 benchmark report](../benchmark/reports/realistic-v1/README.md) for the bound commit, environment,
+source revisions, model hashes, workload composition, full per-window results, and limitations.
+
 ## Supported
 
 - Linux CPU and one selected NVIDIA CUDA device.

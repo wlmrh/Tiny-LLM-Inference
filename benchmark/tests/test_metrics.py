@@ -18,7 +18,14 @@ class MetricsTest(unittest.TestCase):
 
     def test_complete_event_metrics(self):
         events = [
-            {"repeat": 0, "request_id": "r0", "prompt_index": 0, "event": "submit", "time_ms": 10.0},
+            {
+                "repeat": 0,
+                "request_id": "r0",
+                "prompt_index": 0,
+                "event": "submit",
+                "time_ms": 10.0,
+                "requested_tokens": 2,
+            },
             {"repeat": 0, "request_id": "r0", "prompt_index": 0, "event": "admit", "time_ms": 12.0},
             {"repeat": 0, "request_id": "r0", "prompt_index": 0, "event": "token", "time_ms": 20.0},
             {"repeat": 0, "request_id": "r0", "prompt_index": 0, "event": "token", "time_ms": 24.0},
@@ -46,6 +53,7 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual(request["engine_ttft_ms"], 8.0)
         self.assertEqual(request["tpot_ms"], 4.0)
         self.assertEqual(request["e2e_ms"], 14.0)
+        self.assertEqual(request["requested_tokens"], request["generated_tokens"])
         for summary in metrics["summary"].values():
             self.assertLessEqual(summary["p50"], summary["p95"])
             self.assertLessEqual(summary["p95"], summary["p99"])
@@ -61,6 +69,27 @@ class MetricsTest(unittest.TestCase):
             metrics = read_event_metrics(path)
         self.assertFalse(metrics["complete"])
         self.assertTrue(any("admit" in error for error in metrics["completeness_errors"]))
+
+    def test_requested_token_mismatch_is_reported(self):
+        events = [
+            {"repeat": 0, "request_id": "r0", "event": "submit", "time_ms": 0.0, "requested_tokens": 2},
+            {"repeat": 0, "request_id": "r0", "event": "admit", "time_ms": 0.1},
+            {"repeat": 0, "request_id": "r0", "event": "token", "time_ms": 0.2},
+            {
+                "repeat": 0,
+                "request_id": "r0",
+                "event": "finish",
+                "time_ms": 0.3,
+                "generated_tokens": 1,
+                "finish_reason": "length",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+            metrics = read_event_metrics(path)
+        self.assertFalse(metrics["complete"])
+        self.assertTrue(any("requested_tokens" in error for error in metrics["completeness_errors"]))
 
 
 if __name__ == "__main__":

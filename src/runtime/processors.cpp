@@ -9,6 +9,32 @@
 
 namespace tiny_llm
 {
+namespace
+{
+constexpr char kUtf8ReplacementCharacter[] = "\xEF\xBF\xBD";
+constexpr size_t kUtf8ReplacementCharacterSize = sizeof(kUtf8ReplacementCharacter) - 1;
+
+size_t stable_decoded_prefix_length(const std::string &decoded)
+{
+    size_t stable_size = decoded.size();
+    while (stable_size >= kUtf8ReplacementCharacterSize &&
+           decoded.compare(stable_size - kUtf8ReplacementCharacterSize, kUtf8ReplacementCharacterSize,
+                           kUtf8ReplacementCharacter) == 0)
+    {
+        stable_size -= kUtf8ReplacementCharacterSize;
+    }
+    return stable_size;
+}
+
+std::vector<int32_t> merged_request_tokens(const RequestState &state)
+{
+    std::vector<int32_t> merged_tokens;
+    merged_tokens.reserve(state.prompt_token_ids.size() + state.generated_token_ids.size());
+    merged_tokens.insert(merged_tokens.end(), state.prompt_token_ids.begin(), state.prompt_token_ids.end());
+    merged_tokens.insert(merged_tokens.end(), state.generated_token_ids.begin(), state.generated_token_ids.end());
+    return merged_tokens;
+}
+} // namespace
 
 InputPreprocessor::InputPreprocessor(const EngineArgs &args)
     : tokenizer_(args.tokenizer), default_max_tokens_(args.max_generated_tokens)
@@ -226,6 +252,10 @@ std::vector<UserOutput> OutPreprocessor::process_outputs(const std::vector<Engin
 
         out.delta_text = incremental_decode(state, core.new_token_id);
         check_stop_criteria(state, core.new_token_id);
+        if (state.is_finished)
+        {
+            out.delta_text += finalize_decode(state);
+        }
 
         out.text = state.cached_text;
         out.generated_token_ids = state.generated_token_ids;
@@ -273,15 +303,33 @@ std::string OutPreprocessor::incremental_decode(RequestState &state, int32_t new
 
     state.generated_token_ids.push_back(new_token_id);
 
-    std::vector<int32_t> merged_tokens;
-    merged_tokens.reserve(state.prompt_token_ids.size() + state.generated_token_ids.size());
-    merged_tokens.insert(merged_tokens.end(), state.prompt_token_ids.begin(), state.prompt_token_ids.end());
-    merged_tokens.insert(merged_tokens.end(), state.generated_token_ids.begin(), state.generated_token_ids.end());
-
-    const std::string decoded = tokenizer->decode(merged_tokens);
-    if (state.decoded_prefix_len > decoded.size())
+    const std::string decoded = tokenizer->decode(merged_request_tokens(state));
+    const size_t stable_size = stable_decoded_prefix_length(decoded);
+    if (state.decoded_prefix_len > stable_size ||
+        decoded.compare(0, state.decoded_prefix_len, state.cached_text, 0, state.decoded_prefix_len) != 0)
     {
-        throw std::runtime_error("OutPreprocessor::incremental_decode: decoded prefix length is invalid.");
+        throw std::runtime_error("OutPreprocessor::incremental_decode: decoded stable prefix changed unexpectedly.");
+    }
+
+    const std::string delta = decoded.substr(state.decoded_prefix_len, stable_size - state.decoded_prefix_len);
+    state.cached_text = decoded.substr(0, stable_size);
+    state.decoded_prefix_len = stable_size;
+    return delta;
+}
+
+std::string OutPreprocessor::finalize_decode(RequestState &state)
+{
+    const Tokenizer *tokenizer = tokenizer_;
+    if (tokenizer == nullptr)
+    {
+        throw std::runtime_error("OutPreprocessor::finalize_decode: tokenizer is not available.");
+    }
+
+    const std::string decoded = tokenizer->decode(merged_request_tokens(state));
+    if (state.decoded_prefix_len > decoded.size() ||
+        decoded.compare(0, state.decoded_prefix_len, state.cached_text, 0, state.decoded_prefix_len) != 0)
+    {
+        throw std::runtime_error("OutPreprocessor::finalize_decode: decoded stable prefix changed unexpectedly.");
     }
 
     const std::string delta = decoded.substr(state.decoded_prefix_len);

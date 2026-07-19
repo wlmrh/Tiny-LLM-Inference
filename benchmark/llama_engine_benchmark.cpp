@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -40,6 +41,7 @@ struct Options
     tiny_llm::RuntimeDType compute_dtype = tiny_llm::RuntimeDType::kFloat32;
     tiny_llm::RuntimeDType kv_cache_dtype = tiny_llm::RuntimeDType::kFloat32;
     int32_t warmup = 1;
+    int32_t warmup_request_count = 0;
     int32_t repeat = 3;
     int32_t max_new_tokens = 8;
     bool max_new_tokens_explicit = false;
@@ -50,6 +52,7 @@ struct Options
     std::vector<std::string> prompts;
     std::vector<std::string> request_ids;
     std::vector<double> arrival_ms;
+    std::vector<int32_t> request_max_new_tokens;
     std::string traffic_mode = "offline";
     std::filesystem::path model_dir;
     std::filesystem::path workload_jsonl;
@@ -105,6 +108,7 @@ struct RequestTrace
     double first_token_ms = -1.0;
     double finish_ms = -1.0;
     int64_t prompt_tokens = 0;
+    int64_t requested_tokens = 0;
     int64_t generated_tokens = 0;
     std::string finish_reason;
     std::vector<TokenTraceEvent> tokens;
@@ -503,6 +507,7 @@ void load_workload_jsonl(Options &options)
     options.prompts.clear();
     options.request_ids.clear();
     options.arrival_ms.clear();
+    options.request_max_new_tokens.clear();
     std::string line;
     int64_t line_number = 0;
     int32_t workload_max_new_tokens = -1;
@@ -540,11 +545,15 @@ void load_workload_jsonl(Options &options)
             {
                 throw std::runtime_error("workload max_new_tokens must be positive.");
             }
-            if (workload_max_new_tokens >= 0 && workload_max_new_tokens != max_new_tokens)
+            if (workload_max_new_tokens < 0)
             {
-                throw std::runtime_error("mixed workload max_new_tokens values are not supported by this runner.");
+                workload_max_new_tokens = max_new_tokens;
             }
-            workload_max_new_tokens = max_new_tokens;
+            options.request_max_new_tokens.push_back(max_new_tokens);
+        }
+        else
+        {
+            options.request_max_new_tokens.push_back(options.max_new_tokens);
         }
         if (!options.ignore_eos_explicit)
         {
@@ -613,7 +622,22 @@ void load_workload_jsonl(Options &options)
         options.request_ids.push_back(std::move(request_id));
         options.arrival_ms.push_back(arrival_ms);
     }
-    if (!options.max_new_tokens_explicit && workload_max_new_tokens > 0)
+    const auto max_tokens_it =
+        std::max_element(options.request_max_new_tokens.begin(), options.request_max_new_tokens.end());
+    const auto min_tokens_it =
+        std::min_element(options.request_max_new_tokens.begin(), options.request_max_new_tokens.end());
+    const bool mixed_max_new_tokens = max_tokens_it != options.request_max_new_tokens.end() &&
+                                      min_tokens_it != options.request_max_new_tokens.end() &&
+                                      *max_tokens_it != *min_tokens_it;
+    if (mixed_max_new_tokens && options.traffic_mode != "open-loop")
+    {
+        throw std::runtime_error("mixed workload max_new_tokens values require --traffic-mode open-loop.");
+    }
+    if (max_tokens_it != options.request_max_new_tokens.end())
+    {
+        options.max_new_tokens = *max_tokens_it;
+    }
+    else if (!options.max_new_tokens_explicit && workload_max_new_tokens > 0)
     {
         options.max_new_tokens = workload_max_new_tokens;
     }
@@ -650,18 +674,22 @@ void load_workload_jsonl(Options &options)
     std::vector<std::string> sorted_prompts;
     std::vector<std::string> sorted_request_ids;
     std::vector<double> sorted_arrival_ms;
+    std::vector<int32_t> sorted_request_max_new_tokens;
     sorted_prompts.reserve(order.size());
     sorted_request_ids.reserve(order.size());
     sorted_arrival_ms.reserve(order.size());
+    sorted_request_max_new_tokens.reserve(order.size());
     for (size_t index : order)
     {
         sorted_prompts.push_back(std::move(options.prompts[index]));
         sorted_request_ids.push_back(std::move(options.request_ids[index]));
         sorted_arrival_ms.push_back(options.arrival_ms[index]);
+        sorted_request_max_new_tokens.push_back(options.request_max_new_tokens[index]);
     }
     options.prompts = std::move(sorted_prompts);
     options.request_ids = std::move(sorted_request_ids);
     options.arrival_ms = std::move(sorted_arrival_ms);
+    options.request_max_new_tokens = std::move(sorted_request_max_new_tokens);
 }
 
 bool has_safetensors_weight(const std::filesystem::path &model_dir)
@@ -709,7 +737,7 @@ void validate_model_dir(const std::filesystem::path &model_dir)
 void print_usage(const char *argv0)
 {
     std::cerr << "usage: " << argv0 << " [--device cpu|cuda[:id]] [--dtype fp32|bf16] [--kv-cache-dtype fp32|bf16]"
-              << " [--warmup N] [--repeat N]"
+              << " [--warmup N] [--warmup-request-count N] [--repeat N]"
               << " [--max-new-tokens N] [--kv-num-blocks N]"
               << " [--max-num-batched-tokens N] [--max-num-batched-token-cap N]"
               << " [--temperature F] [--top-p F] [--top-k N]"
@@ -754,6 +782,11 @@ Options parse_args(int argc, char **argv)
         else if (arg == "--repeat")
         {
             options.repeat = parse_positive_int(require_value("--repeat"), "repeat");
+        }
+        else if (arg == "--warmup-request-count")
+        {
+            options.warmup_request_count =
+                parse_non_negative_int(require_value("--warmup-request-count"), "warmup-request-count");
         }
         else if (arg == "--max-new-tokens")
         {
@@ -883,6 +916,14 @@ Options parse_args(int argc, char **argv)
     {
         throw std::runtime_error("arrival_ms and prompts must have the same length.");
     }
+    if (options.request_max_new_tokens.empty())
+    {
+        options.request_max_new_tokens.assign(options.prompts.size(), options.max_new_tokens);
+    }
+    if (options.request_max_new_tokens.size() != options.prompts.size())
+    {
+        throw std::runtime_error("request_max_new_tokens and prompts must have the same length.");
+    }
     options.parallel_config.validate();
 #if !TINYLLM_ENABLE_CUDA
     if (options.parallel_config.is_cuda())
@@ -972,20 +1013,29 @@ PromptTokenStats count_prompt_tokens(const std::filesystem::path &model_dir, con
     return stats;
 }
 
-size_t estimate_kv_num_blocks(const std::vector<int64_t> &prompt_token_counts, int32_t max_new_tokens,
-                              int32_t block_size_tokens, int32_t num_layers)
+size_t estimate_kv_num_blocks(const std::vector<int64_t> &prompt_token_counts,
+                              const std::vector<int32_t> &request_max_new_tokens, int32_t block_size_tokens,
+                              int32_t num_layers, size_t max_active_requests = 16)
 {
     if (block_size_tokens <= 0 || num_layers <= 0)
     {
         throw std::runtime_error("invalid dimensions for KV block estimate.");
     }
-    size_t required = 0;
-    for (int64_t prompt_tokens : prompt_token_counts)
+    if (prompt_token_counts.size() != request_max_new_tokens.size() || max_active_requests == 0)
     {
-        const int64_t total_tokens = prompt_tokens + max_new_tokens;
-        const int64_t blocks_per_layer = (total_tokens + block_size_tokens - 1) / block_size_tokens;
-        required += static_cast<size_t>(blocks_per_layer) * static_cast<size_t>(num_layers);
+        throw std::runtime_error("invalid request dimensions for KV block estimate.");
     }
+    std::vector<size_t> per_request;
+    per_request.reserve(prompt_token_counts.size());
+    for (size_t index = 0; index < prompt_token_counts.size(); ++index)
+    {
+        const int64_t total_tokens = prompt_token_counts[index] + request_max_new_tokens[index];
+        const int64_t blocks_per_layer = (total_tokens + block_size_tokens - 1) / block_size_tokens;
+        per_request.push_back(static_cast<size_t>(blocks_per_layer) * static_cast<size_t>(num_layers));
+    }
+    std::sort(per_request.begin(), per_request.end(), std::greater<size_t>());
+    const size_t active = std::min(max_active_requests, per_request.size());
+    const size_t required = std::accumulate(per_request.begin(), per_request.begin() + active, size_t{0});
     const size_t with_slack = (required * 6 + 4) / 5;
     return std::max<size_t>(256, with_slack);
 }
@@ -1006,6 +1056,7 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
         {
             trace.prompt_tokens = options.prompt_token_counts[i];
         }
+        trace.requested_tokens = options.request_max_new_tokens[i];
         metrics.request_traces.push_back(std::move(trace));
     }
 
@@ -1018,6 +1069,12 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
     sampling_params.max_tokens = options.max_new_tokens;
     sampling_params.ignore_eos = options.ignore_eos;
     sampling_params.stop_token_ids = options.stop_token_ids;
+    auto request_sampling_params = [&](size_t request_index)
+    {
+        tiny_llm::UserSamplingParams request_params = sampling_params;
+        request_params.max_tokens = options.request_max_new_tokens[request_index];
+        return request_params;
+    };
 
     bool saw_first_token = false;
     Clock::time_point first_token_time{};
@@ -1104,7 +1161,8 @@ RepeatMetrics run_once(const Options &options, tiny_llm::LLM &llm, double load_m
             while (next_request < options.prompts.size() &&
                    (measure ? options.arrival_ms[next_request] : 0.0) <= now_ms)
             {
-                const uint64_t internal_id = llm.add_request(options.prompts[next_request], sampling_params);
+                const uint64_t internal_id =
+                    llm.add_request(options.prompts[next_request], request_sampling_params(next_request));
                 request_to_index.emplace(internal_id, next_request);
                 if (measure)
                 {
@@ -1312,6 +1370,7 @@ void print_request_metrics_json(const std::vector<RequestTrace> &traces)
         std::cout << "\"request_id\":\"" << json_escape(trace.request_id) << "\",";
         std::cout << "\"prompt_index\":" << trace.prompt_index << ",";
         std::cout << "\"prompt_tokens\":" << trace.prompt_tokens << ",";
+        std::cout << "\"requested_tokens\":" << trace.requested_tokens << ",";
         std::cout << "\"generated_tokens\":" << trace.generated_tokens << ",";
         std::cout << "\"submit_ms\":" << trace.submit_ms << ",";
         std::cout << "\"admit_ms\":" << trace.admit_ms << ",";
@@ -1343,7 +1402,7 @@ void write_trace_events(const std::filesystem::path &path, int32_t repeat_index,
     {
         out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
             << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"submit\",\"time_ms\":" << trace.submit_ms
-            << "}\n";
+            << ",\"requested_tokens\":" << trace.requested_tokens << "}\n";
         out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
             << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"admit\",\"time_ms\":" << trace.admit_ms
             << "}\n";
@@ -1357,7 +1416,8 @@ void write_trace_events(const std::filesystem::path &path, int32_t repeat_index,
         }
         out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
             << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"finish\",\"time_ms\":" << trace.finish_ms
-            << ",\"generated_tokens\":" << trace.generated_tokens << ",\"finish_reason\":\""
+            << ",\"requested_tokens\":" << trace.requested_tokens << ",\"generated_tokens\":"
+            << trace.generated_tokens << ",\"finish_reason\":\""
             << json_escape(trace.finish_reason) << "\"}\n";
     }
 }
@@ -1669,6 +1729,9 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "\"warmup\":" << options.warmup << ",";
     std::cout << "\"repeat\":" << options.repeat << ",";
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
+    std::cout << "\"requested_generated_tokens\":"
+              << std::accumulate(options.request_max_new_tokens.begin(), options.request_max_new_tokens.end(), int64_t{0})
+              << ",";
     std::cout << "\"temperature\":" << options.temperature << ",";
     std::cout << "\"top_p\":" << options.top_p << ",";
     std::cout << "\"top_k\":" << options.top_k << ",";
@@ -1833,8 +1896,9 @@ int main(int argc, char **argv)
         constexpr int32_t kBlockSizeTokens = 16;
         if (!options.kv_num_blocks_explicit)
         {
-            options.kv_num_blocks = estimate_kv_num_blocks(options.prompt_token_counts, options.max_new_tokens,
-                                                           kBlockSizeTokens, hf_config.num_hidden_layers);
+            options.kv_num_blocks = estimate_kv_num_blocks(options.prompt_token_counts,
+                                                           options.request_max_new_tokens, kBlockSizeTokens,
+                                                           hf_config.num_hidden_layers);
         }
 
         const auto load_start = Clock::now();
@@ -1848,9 +1912,20 @@ int main(int argc, char **argv)
         tiny_llm::LLM llm(llm_options);
         const double load_ms = elapsed_ms(load_start, Clock::now());
 
+        Options warmup_options = options;
+        if (options.warmup_request_count > 0 &&
+            static_cast<size_t>(options.warmup_request_count) < warmup_options.prompts.size())
+        {
+            const size_t count = static_cast<size_t>(options.warmup_request_count);
+            warmup_options.prompts.resize(count);
+            warmup_options.request_ids.resize(count);
+            warmup_options.arrival_ms.resize(count);
+            warmup_options.request_max_new_tokens.resize(count);
+            warmup_options.prompt_token_counts.resize(count);
+        }
         for (int32_t i = 0; i < options.warmup; ++i)
         {
-            (void)run_once(options, llm, load_ms, false);
+            (void)run_once(warmup_options, llm, load_ms, false);
         }
 
         std::vector<RepeatMetrics> repeats;

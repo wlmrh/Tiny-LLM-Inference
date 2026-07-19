@@ -79,6 +79,51 @@ class FakeTokenizer final : public tiny_llm::Tokenizer
     }
 };
 
+class DeferredUtf8Tokenizer final : public tiny_llm::Tokenizer
+{
+  public:
+    std::vector<int32_t> encode(const std::string &) const override
+    {
+        return {10};
+    }
+    std::string decode(const std::vector<int32_t> &ids) const override
+    {
+        if (ids == std::vector<int32_t>{10})
+        {
+            return "prompt";
+        }
+        if (ids == std::vector<int32_t>{10, 20})
+        {
+            return "prompt\xEF\xBF\xBD";
+        }
+        if (ids == std::vector<int32_t>{10, 20, 21})
+        {
+            return "prompt\xC3\xA9";
+        }
+        return "";
+    }
+    int32_t vocab_size() const override
+    {
+        return 64;
+    }
+    int32_t bos_id() const override
+    {
+        return 1;
+    }
+    int32_t eos_id() const override
+    {
+        return 2;
+    }
+    int32_t unk_id() const override
+    {
+        return 3;
+    }
+    bool is_valid_token_id(int32_t id) const override
+    {
+        return id >= 0 && id < vocab_size();
+    }
+};
+
 struct EngineCoreFixture
 {
     static constexpr size_t kBlockBytes = 128;
@@ -211,6 +256,56 @@ TEST(InputPreprocessorTest, RejectsNegativeUserMaxTokens)
     user_params.max_tokens = -1;
 
     EXPECT_THROW(preprocessor.process_inputs("prompt", user_params), std::runtime_error);
+}
+
+TEST(OutPreprocessorTest, DefersIncompleteUtf8ReplacementUntilTokenSequenceStabilizes)
+{
+    DeferredUtf8Tokenizer tokenizer;
+    tiny_llm::EngineArgs args;
+    args.tokenizer = &tokenizer;
+    tiny_llm::OutPreprocessor preprocessor(args);
+
+    tiny_llm::EngineCoreRequest request;
+    request.internal_id = 1;
+    request.prompt_token_ids = {10};
+    request.sampling_params.max_tokens = 2;
+    request.sampling_params.ignore_eos = true;
+    preprocessor.add_request(request);
+
+    const auto first = preprocessor.process_outputs({tiny_llm::EngineCoreOutput{1, 20}});
+    ASSERT_EQ(first.size(), 1u);
+    EXPECT_EQ(first.front().delta_text, "");
+    EXPECT_EQ(first.front().text, "prompt");
+    EXPECT_FALSE(first.front().is_finished);
+
+    const auto second = preprocessor.process_outputs({tiny_llm::EngineCoreOutput{1, 21}});
+    ASSERT_EQ(second.size(), 1u);
+    EXPECT_EQ(second.front().delta_text, "\xC3\xA9");
+    EXPECT_EQ(second.front().text, "prompt\xC3\xA9");
+    EXPECT_TRUE(second.front().is_finished);
+    EXPECT_EQ(second.front().finish_reason, "length");
+}
+
+TEST(OutPreprocessorTest, FlushesDeferredReplacementWhenRequestFinishes)
+{
+    DeferredUtf8Tokenizer tokenizer;
+    tiny_llm::EngineArgs args;
+    args.tokenizer = &tokenizer;
+    tiny_llm::OutPreprocessor preprocessor(args);
+
+    tiny_llm::EngineCoreRequest request;
+    request.internal_id = 1;
+    request.prompt_token_ids = {10};
+    request.sampling_params.max_tokens = 1;
+    request.sampling_params.ignore_eos = true;
+    preprocessor.add_request(request);
+
+    const auto outputs = preprocessor.process_outputs({tiny_llm::EngineCoreOutput{1, 20}});
+    ASSERT_EQ(outputs.size(), 1u);
+    EXPECT_EQ(outputs.front().delta_text, "\xEF\xBF\xBD");
+    EXPECT_EQ(outputs.front().text, "prompt\xEF\xBF\xBD");
+    EXPECT_TRUE(outputs.front().is_finished);
+    EXPECT_EQ(outputs.front().finish_reason, "length");
 }
 
 TEST(EngineCoreTest, EmitsPrefillSampleAsFirstGeneratedTokenThenDecodes)

@@ -14,11 +14,11 @@ The codebase is intentionally layered:
 
 ## Project Architecture Map
 
-The main class relationships are maintained in [architecture.d2](architecture.d2) and rendered to [architecture.svg](architecture.svg). Regenerate the image after editing the source with `d2 docs/architecture.d2 docs/architecture.svg`.
+The main class relationships use a fixed-coordinate SVG layout maintained in [generate_architecture_svg.py](generate_architecture_svg.py) and rendered to [architecture.svg](architecture.svg). Regenerate the image after editing nodes or routes with `python3 docs/generate_architecture_svg.py`; use `python3 docs/generate_architecture_svg.py --check` to verify that the committed SVG is current.
 
 ![Tiny-LLM-Inference architecture](architecture.svg)
 
-This diagram intentionally shows only the major classes and separates ownership from non-owning runtime references. Tiny-LLM-Inference is a single-process offline runtime: `LLMEngine` owns text/token I/O, `EngineCore` owns the scheduling/execution loop, `Scheduler` owns request state and owns or binds the runtime `KVCache`, and `ModelRunner` bridges scheduled token work into the `Model` interface. In the default HuggingFace path, that model is a constructed `LlamaForCausalLM`; in compatibility paths, `ModelRunner` may reference a prebuilt `Model`.
+The diagram uses nested boxes for ownership and selectively expands the request, scheduling, KV-cache, model, and output paths. Rounded rectangles denote executable components, cylinders denote KV-storage views, and request/result types appear as annotations inside their producer or consumer rather than as peer modules. Dashed blue arrows show `EngineCore`-mediated data flow: the bidirectional Scheduling/ModelRunner connection represents `SchedulerOutput` entering the runner and `ModelRunnerOutput` returning through `Scheduler::update_from_output()` before output processing. The repeated `Paged KV cache` cylinders are aliases of one scheduler-owned cache, not separate allocations; the duplicate view avoids a long cross-column connector. It is not a class-complete UML diagram. Tiny-LLM-Inference is a single-process offline runtime: `LLMEngine` owns text/token I/O, `EngineCore` owns the scheduling/execution loop, `Scheduler` owns request state and owns or binds the runtime `KVCache`, and `ModelRunner` bridges scheduled token work into the `Model` interface. In the default HuggingFace path, that model is a constructed `LlamaForCausalLM`; in compatibility paths, `ModelRunner` may reference a prebuilt `Model`.
 
 ## Runtime Flow
 

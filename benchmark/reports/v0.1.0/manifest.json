@@ -16,6 +16,10 @@
   "hardware": {
     "gpu": "NVIDIA GeForce RTX 4080 SUPER",
     "gpu_memory_mib": 32760,
+    "gpu_memory_source": "nvidia-smi runtime query on the benchmark host",
+    "retail_reference_memory_gb": 16,
+    "retail_reference_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/",
+    "gpu_memory_discrepancy_note": "The cloud host exposed an RTX 4080 SUPER device name with 32760 MiB, which does not match NVIDIA's 16 GB retail reference specification. Cloud-platform device presentation or nonstandard provisioning may explain the discrepancy, but the exact cause was not independently verified.",
     "driver": "595.71.05",
     "cuda_toolkit": "12.8",
     "os": "Linux 5.15.0-78-generic x86_64 GNU/Linux"
