@@ -36,6 +36,12 @@ See [Architecture](docs/Architecture.md) for ownership, scheduling, KV cache, te
 
 Release validation used candidate commit `25e2355921b033abb89091d15f768c57c715c63c` with `git_dirty=false`, an NVIDIA GeForce RTX 4080 SUPER, driver 595.71.05, CUDA 12.8, pinned Qwen2.5-1.5B-Instruct revision `989aa798...`, and FP32 compute/KV for headline measurements.
 
+Hardware disclosure: the cloud benchmark host reported the device name `NVIDIA GeForce RTX 4080 SUPER`
+and `32760 MiB` of memory. [NVIDIA's retail reference specification](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/)
+lists 16 GB GDDR6X. The mismatch may reflect cloud-platform device presentation or nonstandard provisioning,
+but its exact cause was not independently verified. These results are tied to the provider-exposed benchmark
+host and should not be treated as measurements of a standard retail 16 GB card solely from the GPU label.
+
 | Validation | Result |
 | --- | --- |
 | TinyLLM / Transformers / vLLM greedy token agreement | Exact pairwise match; 0 mismatches, no backend skips |
@@ -62,6 +68,41 @@ Release validation used candidate commit `25e2355921b033abb89091d15f768c57c715c6
 TinyLLM outperformed the tested Transformers baseline across the three performance workloads, but trailed vLLM in end-to-end and decode throughput. Long-prefill is the clearest limitation: TinyLLM TTFT was 520.538 ms versus vLLM's 62.298 ms. See the [complete v0.1.0 benchmark report](benchmark/reports/v0.1.0/README.md) for workload definitions, all open-loop percentiles, raw JSON, pinned model hashes, and reproduction commands.
 
 Performance results apply only to their recorded environment and workload. A baseline comparison is not a claim of production parity with vLLM, SGLang, or TensorRT-LLM.
+
+## Realistic-v1 Workload Results
+
+The realistic-v1 experiment keeps the engine unchanged and replaces uniform synthetic prompts with three
+non-overlapping 1,000-request BurstGPT timing/length windows plus length-matched OASST1 conversation prompts.
+It uses Qwen2.5-1.5B-Instruct, FP32 compute/KV, greedy decoding, and runtime candidate `272b8f0` on the same
+provider-exposed RTX 4080 SUPER environment described by the hardware disclosure above.
+
+| Validation | Result |
+| --- | --- |
+| Three-backend EOS-aware correctness | 8/8 prompts; exact pairwise token-ID match |
+| Reference-capacity calibrations | 3/3 completed |
+| Trace replays | 12/12 completed; 1,000/1,000 requests each; zero reported errors |
+| Published evidence | Per-request/grouped metrics, source/model hashes, sanitized selection metadata, and raw-artifact checksum |
+
+| Offline cohort | TinyLLM E2E tok/s | Transformers | vLLM | TinyLLM / Transformers | TinyLLM / vLLM |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Short chat | 393.798 | 281.178 | 705.089 | 1.401x | 0.559x |
+| Medium chat | 307.089 | 255.891 | 706.412 | 1.200x | 0.435x |
+| Long prefill | 35.185 | 98.758 | 345.995 | 0.356x | 0.102x |
+| Long decode | 331.814 | 270.578 | 720.053 | 1.226x | 0.461x |
+
+| Replay load | Median TTFT p99 ms | Median E2E p99 ms | Median relative good-request ratio |
+| --- | ---: | ---: | ---: |
+| 0.25C_ref | 18,830.780 | 22,874.800 | 0.998 |
+| 0.50C_ref | 19,645.290 | 35,652.500 | 0.981 |
+| 0.75C_ref | 54,901.300 | 55,878.116 | 0.847 |
+| 0.90C_ref | 57,359.100 | 70,610.760 | 0.716 |
+
+TinyLLM exceeded the tested Transformers path in short-chat, medium-chat, and long-decode median throughput,
+but long-prefill remained a clear weakness and vLLM led all four performance cohorts. The decline in relative
+goodput above 0.50C_ref shows increasing queueing pressure even though every request completed. `C_ref` is an
+experiment-local simultaneous-batch completion rate, not a production saturation capacity or SLA. See the
+[complete realistic-v1 report](benchmark/reports/realistic-v1/README.md) for window composition, min/median/max
+trace statistics, per-window results, methodology, limitations, JSON artifacts, and reproduction evidence.
 
 ## Three-Step Reproduction
 
@@ -198,10 +239,8 @@ python3 benchmark/industrial_benchmark.py --preset regression
 ```
 
 See [Tools, Tests, and Benchmarks](docs/modules/Tools_Tests_and_Benchmarks.md) for workload and reporting details.
-The [realistic-v1 benchmark report](benchmark/reports/realistic-v1/README.md) combines three fixed
-BurstGPT arrival/length windows with length-matched OASST1 prompts, per-window capacity calibration,
-12 trace replays, and three-backend offline cohorts. It complements rather than replaces the verified
-v0.1.0 headline results above.
+The [realistic-v1 benchmark report](benchmark/reports/realistic-v1/README.md) complements rather than replaces
+the verified v0.1.0 release baseline above.
 
 ## Tests
 

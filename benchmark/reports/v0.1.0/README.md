@@ -28,6 +28,14 @@ The comparison answers a narrow question: how this release candidate behaves on 
 | PyTorch / Transformers / safetensors | 2.8.0+cu128 / 4.55.2 / 0.8.0 |
 | vLLM environment | vLLM 0.25.1, PyTorch 2.11.0+cu130, Transformers 5.14.1 |
 
+**GPU memory disclosure.** The `32760 MiB` entry is the literal value reported by the benchmark
+host's runtime query; it is not presented as the standard specification of a retail RTX 4080 SUPER.
+[NVIDIA's reference specification](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/)
+lists 16 GB GDDR6X. The discrepancy may reflect how the cloud platform presents or provisions the device,
+but the exact cause was not independently verified. The GPU name and memory capacity should therefore be
+read as provider-exposed properties of this particular benchmark host, and the results should not be
+generalized to a standard retail 16 GB card solely from the device label.
+
 Release validation completed with 12/12 Python benchmark unit tests, 65/65 CPU model-independent CTests, 7/7 model-backed CPU CTests, and 78/78 CUDA CTests with the real-model path enabled. Qwen2.5 FP32 generation, BF16 compute/KV smoke generation, and two-prompt Transformers token alignment also passed.
 
 ## 4. Model, Dtype, and Sampling Configuration

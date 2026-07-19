@@ -103,8 +103,8 @@ raw BurstGPT session IDs.
 
 `run_realistic_benchmark.py` supports:
 
-- per-window simultaneous capacity calibration;
-- linearly scaled 0.25C, 0.50C, 0.75C, and 0.90C trace replay;
+- per-window simultaneous reference-rate calibration (`C_ref`);
+- linearly scaled 0.25C_ref, 0.50C_ref, 0.75C_ref, and 0.90C_ref trace replay;
 - per-request fixed output lengths in TinyLLM open-loop runs;
 - three-backend correctness and uniform-OSL offline cohorts;
 - grouped request metrics by log type, ISL bucket, and OSL bucket;
@@ -115,9 +115,11 @@ each request's own `max_new_tokens`, records requested/generated token counts, l
 `--warmup-request-count`, and estimates KV capacity from at most 16 active requests plus 20% slack.
 
 The completed fixed-data run and its validation evidence are published in the
-[realistic-v1 benchmark report](../../benchmark/reports/realistic-v1/README.md). All three capacity
-calibrations and twelve 1,000-request trace replays completed with full request-event streams; the
-report retains the single-process, single-device and non-production-SLA claim boundary.
+[realistic-v1 benchmark report](../../benchmark/reports/realistic-v1/README.md). All three experiment-local
+`C_ref` calibrations and twelve 1,000-request trace replays completed with full request-event streams and zero
+reported errors. The report now includes trace-window length composition, cross-window min/median/max statistics,
+three-backend cohort ratios, interpretation, and explicit limitations. `C_ref` is the completion rate of a
+simultaneous 1,000-request calibration, not a steady-state production capacity estimate.
 
 Benchmark policy:
 
