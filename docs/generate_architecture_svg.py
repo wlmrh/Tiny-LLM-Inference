@@ -92,22 +92,22 @@ NODES = (
     ),
     Node(
         "sampler",
-        815,
+        955,
         485,
-        270,
-        68,
+        145,
+        90,
         "Sampler",
-        "greedy · top-k · top-p",
+        "greedy · top-k/p",
         "execution-node",
     ),
     Node(
         "paged-kv-cache-attention-view",
-        815,
-        575,
-        270,
-        60,
+        800,
+        485,
+        145,
+        90,
         "Paged KV cache",
-        "same storage · attention view",
+        "attention K/V",
         "storage-node",
         "cylinder",
     ),
@@ -212,6 +212,29 @@ def line(
     )
 
 
+def orthogonal_path(
+    points: tuple[tuple[int, int], ...],
+    css_class: str,
+    marker: str,
+    *,
+    bidirectional: bool = False,
+) -> str:
+    if len(points) < 2:
+        raise ValueError("an orthogonal path requires at least two points")
+
+    commands = [f"M {points[0][0]} {points[0][1]}"]
+    for (x1, y1), (x2, y2) in zip(points, points[1:]):
+        if x1 != x2 and y1 != y2:
+            raise ValueError(f"non-orthogonal connector: ({x1}, {y1}) -> ({x2}, {y2})")
+        commands.append(f"H {x2}" if y1 == y2 else f"V {y2}")
+
+    marker_start = f' marker-start="url(#{marker})"' if bidirectional else ""
+    return (
+        f'<path d="{" ".join(commands)}" class="{css_class}"'
+        f'{marker_start} marker-end="url(#{marker})"/>'
+    )
+
+
 def render_svg() -> str:
     parts = [
         (
@@ -229,6 +252,7 @@ def render_svg() -> str:
         "    <marker id=\"arrow-storage\" viewBox=\"0 0 10 10\" refX=\"8\" refY=\"5\" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 Z\" fill=\"#16A34A\"/></marker>",
         "  </defs>",
         "  <style>",
+        "    .canvas-background { fill: #FFFFFF; }",
         "    text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #0F172A; }",
         "    .engine-group { fill: #F8FBFF; stroke: #60A5FA; stroke-width: 2; }",
         "    .core-group { fill: #FAF5FF; stroke: #A78BFA; stroke-width: 2; }",
@@ -250,6 +274,9 @@ def render_svg() -> str:
         "    .data-flow { stroke: #2563EB; stroke-dasharray: 7 6; }",
         "    .storage-flow { stroke: #16A34A; }",
         "  </style>",
+        "",
+        "  <!-- Keep the diagram readable when embedded on dark or colored pages. -->",
+        f"  <rect width=\"{WIDTH}\" height=\"{HEIGHT}\" class=\"canvas-background\"/>",
         "",
         "  <!-- Ownership groups use fixed coordinates so edge changes never relayout the diagram. -->",
         "  <rect x=\"30\" y=\"125\" width=\"1460\" height=\"600\" rx=\"16\" class=\"engine-group\"/>",
@@ -273,7 +300,23 @@ def render_svg() -> str:
         f"  {line(570, 353, 570, 385, 'call-flow', 'arrow-call')}",
         f"  {line(570, 453, 570, 500, 'storage-flow', 'arrow-storage')}",
         f"  {line(950, 353, 950, 385, 'call-flow', 'arrow-call')}",
-        f"  {line(950, 453, 950, 485, 'data-flow', 'arrow-data')}",
+        (
+            "  "
+            + orthogonal_path(
+                ((900, 453), (900, 469), (872, 469), (872, 485)),
+                "storage-flow",
+                "arrow-storage",
+                bidirectional=True,
+            )
+        ),
+        (
+            "  "
+            + orthogonal_path(
+                ((1000, 453), (1000, 469), (1028, 469), (1028, 485)),
+                "data-flow",
+                "arrow-data",
+            )
+        ),
         "",
         "  <!-- Executable components and the two views of one scheduler-owned KV cache. -->",
     ]

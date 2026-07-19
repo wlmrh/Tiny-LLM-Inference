@@ -7,6 +7,7 @@
     <marker id="arrow-storage" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#16A34A"/></marker>
   </defs>
   <style>
+    .canvas-background { fill: #FFFFFF; }
     text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #0F172A; }
     .engine-group { fill: #F8FBFF; stroke: #60A5FA; stroke-width: 2; }
     .core-group { fill: #FAF5FF; stroke: #A78BFA; stroke-width: 2; }
@@ -28,6 +29,9 @@
     .data-flow { stroke: #2563EB; stroke-dasharray: 7 6; }
     .storage-flow { stroke: #16A34A; }
   </style>
+
+  <!-- Keep the diagram readable when embedded on dark or colored pages. -->
+  <rect width="1520" height="760" class="canvas-background"/>
 
   <!-- Ownership groups use fixed coordinates so edge changes never relayout the diagram. -->
   <rect x="30" y="125" width="1460" height="600" rx="16" class="engine-group"/>
@@ -51,7 +55,8 @@
   <line x1="570" y1="353" x2="570" y2="385" class="call-flow" marker-end="url(#arrow-call)"/>
   <line x1="570" y1="453" x2="570" y2="500" class="storage-flow" marker-end="url(#arrow-storage)"/>
   <line x1="950" y1="353" x2="950" y2="385" class="call-flow" marker-end="url(#arrow-call)"/>
-  <line x1="950" y1="453" x2="950" y2="485" class="data-flow" marker-end="url(#arrow-data)"/>
+  <path d="M 900 453 V 469 H 872 V 485" class="storage-flow" marker-start="url(#arrow-storage)" marker-end="url(#arrow-storage)"/>
+  <path d="M 1000 453 V 469 H 1028 V 485" class="data-flow" marker-end="url(#arrow-data)"/>
 
   <!-- Executable components and the two views of one scheduler-owned KV cache. -->
   <g id="llm">
@@ -91,15 +96,15 @@
     <text x="950" y="436" class="node-subtitle" text-anchor="middle">decoder layers · PagedAttention</text>
   </g>
   <g id="sampler">
-    <rect x="815" y="485" width="270" height="68" rx="10" class="execution-node"/>
-    <text x="950" y="513" class="node-title" text-anchor="middle">Sampler</text>
-    <text x="950" y="536" class="node-subtitle" text-anchor="middle">greedy · top-k · top-p</text>
+    <rect x="955" y="485" width="145" height="90" rx="10" class="execution-node"/>
+    <text x="1027.5" y="524" class="node-title" text-anchor="middle">Sampler</text>
+    <text x="1027.5" y="547" class="node-subtitle" text-anchor="middle">greedy · top-k/p</text>
   </g>
   <g id="paged-kv-cache-attention-view">
-    <path d="M 815 586 C 815 571 1085 571 1085 586 L 1085 624 C 1085 639 815 639 815 624 Z" class="storage-node"/>
-    <ellipse cx="950" cy="586" rx="135" ry="11" class="storage-node"/>
-    <text x="950" y="599" class="node-title" text-anchor="middle">Paged KV cache</text>
-    <text x="950" y="622" class="node-subtitle" text-anchor="middle">same storage · attention view</text>
+    <path d="M 800 496 C 800 481 945 481 945 496 L 945 564 C 945 579 800 579 800 564 Z" class="storage-node"/>
+    <ellipse cx="872.5" cy="496" rx="72.5" ry="11" class="storage-node"/>
+    <text x="872.5" y="524" class="node-title" text-anchor="middle">Paged KV cache</text>
+    <text x="872.5" y="547" class="node-subtitle" text-anchor="middle">attention K/V</text>
   </g>
   <g id="output-preprocessor">
     <rect x="1205" y="370" width="250" height="72" rx="10" class="frontend-node"/>
