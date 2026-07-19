@@ -12,8 +12,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -1416,9 +1416,8 @@ void write_trace_events(const std::filesystem::path &path, int32_t repeat_index,
         }
         out << "{\"repeat\":" << repeat_index << ",\"request_id\":\"" << json_escape(trace.request_id)
             << "\",\"prompt_index\":" << trace.prompt_index << ",\"event\":\"finish\",\"time_ms\":" << trace.finish_ms
-            << ",\"requested_tokens\":" << trace.requested_tokens << ",\"generated_tokens\":"
-            << trace.generated_tokens << ",\"finish_reason\":\""
-            << json_escape(trace.finish_reason) << "\"}\n";
+            << ",\"requested_tokens\":" << trace.requested_tokens << ",\"generated_tokens\":" << trace.generated_tokens
+            << ",\"finish_reason\":\"" << json_escape(trace.finish_reason) << "\"}\n";
     }
 }
 
@@ -1730,7 +1729,8 @@ void print_summary(const Options &options, const std::vector<RepeatMetrics> &rep
     std::cout << "\"repeat\":" << options.repeat << ",";
     std::cout << "\"max_new_tokens\":" << options.max_new_tokens << ",";
     std::cout << "\"requested_generated_tokens\":"
-              << std::accumulate(options.request_max_new_tokens.begin(), options.request_max_new_tokens.end(), int64_t{0})
+              << std::accumulate(options.request_max_new_tokens.begin(), options.request_max_new_tokens.end(),
+                                 int64_t{0})
               << ",";
     std::cout << "\"temperature\":" << options.temperature << ",";
     std::cout << "\"top_p\":" << options.top_p << ",";
@@ -1896,9 +1896,8 @@ int main(int argc, char **argv)
         constexpr int32_t kBlockSizeTokens = 16;
         if (!options.kv_num_blocks_explicit)
         {
-            options.kv_num_blocks = estimate_kv_num_blocks(options.prompt_token_counts,
-                                                           options.request_max_new_tokens, kBlockSizeTokens,
-                                                           hf_config.num_hidden_layers);
+            options.kv_num_blocks = estimate_kv_num_blocks(options.prompt_token_counts, options.request_max_new_tokens,
+                                                           kBlockSizeTokens, hf_config.num_hidden_layers);
         }
 
         const auto load_start = Clock::now();
