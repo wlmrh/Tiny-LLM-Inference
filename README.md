@@ -1,6 +1,6 @@
 # Tiny-LLM-Inference
 
-[![CI](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml/badge.svg)](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml)
+[![CI](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml?query=event%3Apull_request)
 [![Release v0.1.0](docs/release-badge.svg)](https://github.com/wlmrh/Tiny-LLM-Inference/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
