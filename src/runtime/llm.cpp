@@ -72,8 +72,8 @@ size_t llama_kv_block_bytes(const LlamaConfig &config, int32_t block_size_tokens
         throw std::runtime_error("LLM: hidden_size must be divisible by num_attention_heads.");
     }
 
-    const int32_t head_dim = config.hidden_size / config.num_attention_heads;
-    const size_t kv_hidden_size =
+    const int32_t head_dim = config.hidden_size / config.num_attention_heads; // dimension of each head
+    const size_t kv_hidden_size = // hidden dimension of K/V cache for each token
         checked_mul(static_cast<size_t>(config.num_key_value_heads), static_cast<size_t>(head_dim), "kv_hidden_size");
     const size_t tokens = static_cast<size_t>(block_size_tokens);
     return checked_mul(checked_mul(2, tokens, "kv block tokens"),
@@ -259,13 +259,17 @@ void LLM::initialize()
     validate_model_dir(model_dir, options_.weight_file);
 
     const LlamaConfig config = HFLlamaConfigLoader::load_from_dir(options_.model);
+    // bytes of one physical KV block
     const size_t kv_block_bytes = llama_kv_block_bytes(config, options_.block_size_tokens, options_.kv_cache_dtype);
+    // bytes in the complete KV-cache memory pool
     const size_t kv_pool_bytes = checked_mul(options_.kv_num_blocks, kv_block_bytes, "KV pool bytes");
 
     try
     {
         tokenizer_ = std::make_unique<HFLlamaTokenizer>(HFLlamaTokenizer::from_model_dir(options_.model));
+        // space allocated for one inference step
         workspace_ = std::make_unique<StackAllocator>(options_.workspace_pool_size, options_.parallel_config);
+        // space allocated for KV cache
         kv_pool_ = allocate_kv_pool(kv_pool_bytes, options_.parallel_config);
 
         SchedulerConfig scheduler_config = options_.scheduler_config;

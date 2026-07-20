@@ -43,7 +43,7 @@ struct LLMOptions
     int32_t max_tokens = 32;
 
     int32_t block_size_tokens = 16;
-    size_t kv_num_blocks = 256;
+    size_t kv_num_blocks = 256; // total physical block count
     size_t workspace_pool_size = 16 * 1024 * 1024;
 
     SchedulerConfig scheduler_config = SchedulerConfig{};
