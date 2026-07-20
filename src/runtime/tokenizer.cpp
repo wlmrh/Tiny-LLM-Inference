@@ -208,7 +208,7 @@ HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string &hf_model_di
     constexpr const char *kErr = "HFLlamaTokenizer::from_model_dir";
     if (hf_model_dir.empty())
     {
-        throw std::runtime_error(std::string(kErr) + ": hf_model_dir must be non-empty.");
+        throw std::runtime_error(std::string(kErr) + ": hf_model_dir is empty.");
     }
     const std::filesystem::path model_dir(hf_model_dir);
     const std::filesystem::path tokenizer_json_path = model_dir / "tokenizer.json";
