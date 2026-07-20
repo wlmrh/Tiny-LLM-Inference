@@ -58,9 +58,6 @@ class HFLlamaTokenizer final : public Tokenizer
     explicit HFLlamaTokenizer(std::unique_ptr<Impl> impl);
 
     std::unique_ptr<Impl> impl_;
-    int32_t bos_id_ = -1;
-    int32_t eos_id_ = -1;
-    int32_t unk_id_ = -1;
 };
 
 } // namespace tiny_llm
