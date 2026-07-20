@@ -253,9 +253,9 @@ HFLlamaTokenizer HFLlamaTokenizer::from_model_dir(const std::string &hf_model_di
 std::vector<int32_t> HFLlamaTokenizer::encode(const std::string &text) const
 {
     std::vector<int32_t> ids = impl_->tokenizer->Encode(text);
-    if (ids.empty() && bos_id_ >= 0)
+    if (ids.empty() && impl_->bos_id >= 0)
     {
-        ids.push_back(bos_id_);
+        ids.push_back(impl_->bos_id);
     }
     return ids;
 }
@@ -272,17 +272,17 @@ int32_t HFLlamaTokenizer::vocab_size() const
 
 int32_t HFLlamaTokenizer::bos_id() const
 {
-    return bos_id_;
+    return impl_->bos_id;
 }
 
 int32_t HFLlamaTokenizer::eos_id() const
 {
-    return eos_id_;
+    return impl_->eos_id;
 }
 
 int32_t HFLlamaTokenizer::unk_id() const
 {
-    return unk_id_;
+    return impl_->unk_id;
 }
 
 bool HFLlamaTokenizer::is_valid_token_id(int32_t id) const
@@ -296,9 +296,6 @@ HFLlamaTokenizer::HFLlamaTokenizer(std::unique_ptr<Impl> impl) : impl_(std::move
     {
         throw std::runtime_error("HFLlamaTokenizer: impl must be non-null.");
     }
-    bos_id_ = impl_->bos_id;
-    eos_id_ = impl_->eos_id;
-    unk_id_ = impl_->unk_id;
 }
 
 HFLlamaTokenizer::~HFLlamaTokenizer() = default;
