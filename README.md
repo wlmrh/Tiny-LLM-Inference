@@ -117,7 +117,7 @@ TinyLLM delivered higher end-to-end and decode throughput than the tested Transf
 
 ### Realistic-v1 workloads
 
-This experiment used three non-overlapping 1,000-request BurstGPT timing/length windows, length-matched OASST1 prompts, Qwen2.5-1.5B-Instruct, FP32 compute/KV, greedy decoding, and runtime candidate `272b8f0`.
+This experiment used three non-overlapping 1,000-request BurstGPT timing/length windows, length-matched OASST1 prompts, Qwen2.5-1.5B-Instruct, FP32 compute/KV, greedy decoding, and runtime candidate `c353eb4`.
 
 | Validation | Result |
 | --- | --- |
@@ -127,19 +127,19 @@ This experiment used three non-overlapping 1,000-request BurstGPT timing/length 
 
 | Offline cohort | TinyLLM E2E tok/s | Transformers | vLLM | TinyLLM / Transformers | TinyLLM / vLLM |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Short chat | 393.798 | 281.178 | 705.089 | 1.401x | 0.559x |
-| Medium chat | 307.089 | 255.891 | 706.412 | 1.200x | 0.435x |
-| Long prefill | 35.185 | 98.758 | 345.995 | 0.356x | 0.102x |
-| Long decode | 331.814 | 270.578 | 720.053 | 1.226x | 0.461x |
+| Short chat | 396.460 | 287.101 | 704.593 | 1.381x | 0.563x |
+| Medium chat | 311.123 | 207.058 | 709.644 | 1.503x | 0.438x |
+| Long prefill | 94.711 | 96.638 | 346.799 | 0.980x | 0.273x |
+| Long decode | 324.153 | 242.411 | 720.375 | 1.337x | 0.450x |
 
 | Replay load | Median TTFT p99 ms | Median E2E p99 ms | Median relative good-request ratio |
 | --- | ---: | ---: | ---: |
-| 0.25C_ref | 18,830.780 | 22,874.800 | 0.998 |
-| 0.50C_ref | 19,645.290 | 35,652.500 | 0.981 |
-| 0.75C_ref | 54,901.300 | 55,878.116 | 0.847 |
-| 0.90C_ref | 57,359.100 | 70,610.760 | 0.716 |
+| 0.25C_ref | 6,402.406 | 7,925.981 | 1.000 |
+| 0.50C_ref | 6,634.000 | 21,967.294 | 1.000 |
+| 0.75C_ref | 20,436.000 | 26,922.146 | 0.693 |
+| 0.90C_ref | 26,008.320 | 35,076.000 | 0.617 |
 
-TinyLLM delivered higher throughput than the tested Transformers path for short chat, medium chat, and long decode, while long prefill remained weak and vLLM led all four cohorts. `C_ref` is an experiment-local simultaneous-batch completion rate, not production capacity or an SLA. See the [complete realistic-v1 report](benchmark/reports/realistic-v1/README.md) for trace composition, per-window results, artifacts, and limitations.
+TinyLLM delivered higher throughput than the tested Transformers path for short chat, medium chat, and long decode, while long prefill was approximately on par and vLLM led all four cohorts. `C_ref` is an experiment-local simultaneous-batch completion rate, not production capacity or an SLA. See the [complete realistic-v1 report](benchmark/reports/realistic-v1/README.md) for trace composition, per-window results, artifacts, and limitations.
 
 All measurements apply only to their recorded environment and workload. The cloud host reported `32760 MiB` for a GPU identified as RTX 4080 SUPER, which differs from [NVIDIA's retail 16 GB specification](https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/); the cause was not independently verified. These comparisons are not claims of production parity.
 

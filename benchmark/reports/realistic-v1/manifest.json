@@ -41,7 +41,7 @@
   "model": {
     "repo_id": "Qwen/Qwen2.5-1.5B-Instruct",
     "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
-    "local_path": "/models/Qwen2.5-1.5B-Instruct",
+    "local_path": "/root/autodl-tmp/models/Qwen2.5-1.5B-Instruct",
     "files": [
       {
         "filename": "config.json",
@@ -71,19 +71,12 @@
     ]
   },
   "environment": {
-    "git_commit": "272b8f0428abe0642ff72a79b5d9141a04964c53",
+    "git_commit": "c353eb43d54143c9eb29af2843a0a68d7d98c9f7",
     "git_dirty": false,
     "git_status": [],
     "gpu_driver": [
       "NVIDIA GeForce RTX 4080 SUPER, 595.71.05, 32760"
     ],
-    "gpu_memory_observation": {
-      "measurement_source": "nvidia-smi runtime query on the benchmark host",
-      "reported_memory_mib": 32760,
-      "retail_reference_memory_gb": 16,
-      "retail_reference_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/",
-      "interpretation": "The cloud host exposed an RTX 4080 SUPER device name with 32760 MiB, which does not match NVIDIA's 16 GB retail reference specification. Cloud-platform device presentation or nonstandard provisioning may explain the discrepancy, but the exact cause was not independently verified."
-    },
     "python": {
       "suite": {
         "executable": "/root/miniconda3/bin/python3",
@@ -102,10 +95,17 @@
           "vllm": "0.25.1"
         }
       }
+    },
+    "gpu_memory_observation": {
+      "measurement_source": "nvidia-smi runtime query on the benchmark host",
+      "reported_memory_mib": 32760,
+      "retail_reference_memory_gb": 16,
+      "retail_reference_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4080-family/",
+      "interpretation": "The cloud host exposed an RTX 4080 SUPER device name with 32760 MiB, which does not match NVIDIA's 16 GB retail reference specification. Cloud-platform device presentation or nonstandard provisioning may explain the discrepancy, but the exact cause was not independently verified."
     }
   },
   "cuda_toolkit": "Build cuda_12.8.r12.8/compiler.35583870_0",
-  "report_generated_by_commit": "272b8f0428abe0642ff72a79b5d9141a04964c53",
+  "report_generated_by_commit": "c353eb43d54143c9eb29af2843a0a68d7d98c9f7",
   "configuration": {
     "label": "qwen25_realistic_v1",
     "sources": {
@@ -164,25 +164,25 @@
     "run": "python3 benchmark/run_realistic_benchmark.py --prepared-dir <dataset-root>/generated --config benchmark/configs/qwen25_realistic_v1.json --model-dir /models/Qwen2.5-1.5B-Instruct --tinyllm-binary build/cuda-release/benchmark/llama_engine_benchmark --vllm-python /root/autodl-tmp/venvs/vllm/bin/python --output-dir <artifact-root>/run --publish-dir benchmark/reports/realistic-v1 --phase all --resume"
   },
   "raw_artifact": {
-    "filename": "tinyllm-realistic-v1-artifacts-272b8f0.tar.gz",
-    "sha256": "3492e48f40961ed62f796123f5c0fbb8e25cf643e40a67d1e18da1c30fc7ccdb"
+    "filename": "tinyllm-realistic-v1-artifacts-c353eb4.tar.gz",
+    "sha256": "28272e6e037dc46f264de0d919611456b0196ceffea68d94f7c3bac04a30ad3d"
   },
   "published_files": {
     "README.md": {
-      "bytes": 11592,
-      "sha256": "522dc2f5941525a94c6808bee42defc586bea776e5945bc81e5c8582a6a329d9"
+      "bytes": 11594,
+      "sha256": "5f1d1ff57fe7c31b047e539f658f5e36d7f509e4bfc7aea20e92cbd3cbc61c0d"
     },
     "selection.json": {
       "bytes": 2408082,
       "sha256": "ea5a8bd6a9b3bf01261e97de7a426c974e15a4b67624e60359ce3f30afe418f2"
     },
     "trace_replay.json": {
-      "bytes": 11332564,
-      "sha256": "7206beaeb67725d3a9b3fd442c14081ca1e3803ca1201f40451fb462d53d66d8"
+      "bytes": 11360614,
+      "sha256": "9c429f9326c6c9b1014e2554c0650056c0c22601e2b87e4a673b40e74aaad0df"
     },
     "offline.json": {
-      "bytes": 206383,
-      "sha256": "6c5e02b61e3e946f81b9b4c4b8dc5a998a8417b3159f921e44af07bfac60c0cb"
+      "bytes": 207375,
+      "sha256": "ddf2e6f87ddd3630df82d24b7ca28be4a22dee1150cdac89350ce2a74e91574b"
     }
   }
 }
