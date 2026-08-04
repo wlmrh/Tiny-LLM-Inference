@@ -106,14 +106,13 @@ bool has_bulk_query(const std::vector<PagedAttentionQuerySegment> &segments)
 void ensure_contiguous_kv_scratch(PagedAttentionRuntimeScratch &scratch, const Tensor &like, int64_t tokens,
                                   int64_t kv_size)
 {
-    const bool needs_allocation = !scratch.contiguous_k.defined() || !scratch.contiguous_v.defined() ||
-                                  scratch.contiguous_k.dim() != 2 || scratch.contiguous_v.dim() != 2 ||
-                                  scratch.contiguous_k.size(0) < tokens || scratch.contiguous_v.size(0) < tokens ||
-                                  scratch.contiguous_k.size(1) != kv_size || scratch.contiguous_v.size(1) != kv_size ||
-                                  scratch.contiguous_k.device() != like.device() ||
-                                  scratch.contiguous_v.device() != like.device() ||
-                                  scratch.contiguous_k.scalar_type() != like.scalar_type() ||
-                                  scratch.contiguous_v.scalar_type() != like.scalar_type();
+    const bool needs_allocation =
+        !scratch.contiguous_k.defined() || !scratch.contiguous_v.defined() || scratch.contiguous_k.dim() != 2 ||
+        scratch.contiguous_v.dim() != 2 || scratch.contiguous_k.size(0) < tokens ||
+        scratch.contiguous_v.size(0) < tokens || scratch.contiguous_k.size(1) != kv_size ||
+        scratch.contiguous_v.size(1) != kv_size || scratch.contiguous_k.device() != like.device() ||
+        scratch.contiguous_v.device() != like.device() || scratch.contiguous_k.scalar_type() != like.scalar_type() ||
+        scratch.contiguous_v.scalar_type() != like.scalar_type();
     if (needs_allocation)
     {
         scratch.contiguous_k = torch::empty({tokens, kv_size}, like.options());
@@ -122,9 +121,8 @@ void ensure_contiguous_kv_scratch(PagedAttentionRuntimeScratch &scratch, const T
 }
 
 void gather_paged_kv_context(const LlamaAttentionParams &params, KVCache &kv_cache,
-                             const PagedAttentionQuerySegment &segment, int64_t num_seqs,
-                             int64_t max_blocks_per_seq, PagedAttentionRuntimeScratch &scratch, Tensor &k_context,
-                             Tensor &v_context)
+                             const PagedAttentionQuerySegment &segment, int64_t num_seqs, int64_t max_blocks_per_seq,
+                             PagedAttentionRuntimeScratch &scratch, Tensor &k_context, Tensor &v_context)
 {
     const PagedAttentionRuntimeMetadata &metadata = *params.metadata;
     const int64_t context_len =
@@ -166,8 +164,7 @@ void gather_paged_kv_context(const LlamaAttentionParams &params, KVCache &kv_cac
     v_context = value_out.narrow(0, 0, context_len);
 }
 
-Tensor query_as_sdpa(const Tensor &query, int64_t row_start, int64_t query_length, int32_t num_heads,
-                     int32_t head_dim)
+Tensor query_as_sdpa(const Tensor &query, int64_t row_start, int64_t query_length, int32_t num_heads, int32_t head_dim)
 {
     return query.narrow(0, row_start, query_length)
         .view({query_length, num_heads, head_dim})
@@ -236,8 +233,8 @@ void run_sdpa_prefill_segment(const LlamaAttentionParams &params, KVCache &kv_ca
     for (int64_t tile_start = 0; tile_start < query_length; tile_start += kSdpaQueryTileTokens)
     {
         const int64_t tile_length = std::min(kSdpaQueryTileTokens, query_length - tile_start);
-        Tensor query = query_as_sdpa(*params.q, segment.row_start + tile_start, tile_length,
-                                     params.num_attention_heads, params.head_dim);
+        Tensor query = query_as_sdpa(*params.q, segment.row_start + tile_start, tile_length, params.num_attention_heads,
+                                     params.head_dim);
         std::optional<Tensor> tile_mask = std::nullopt;
         if (mask.defined())
         {
@@ -255,10 +252,10 @@ void run_paged_decode_segment(const LlamaAttentionParams &params, const PagedAtt
                               int64_t num_blocks, int64_t block_size_bytes)
 {
     const int64_t attention_hidden = attention_hidden_size(params.num_attention_heads, params.head_dim);
-    const auto *query = static_cast<const float *>(tensor_data(*params.q)) +
-                        segment.row_start * static_cast<int64_t>(attention_hidden);
-    auto *out = static_cast<float *>(tensor_data(*params.out)) +
-                segment.row_start * static_cast<int64_t>(attention_hidden);
+    const auto *query =
+        static_cast<const float *>(tensor_data(*params.q)) + segment.row_start * static_cast<int64_t>(attention_hidden);
+    auto *out =
+        static_cast<float *>(tensor_data(*params.out)) + segment.row_start * static_cast<int64_t>(attention_hidden);
     cuda::launch_paged_attention_query_f32(
         query, out, params.positions->data_ptr<int32_t>() + segment.row_start,
         params.metadata->seq_indices->data_ptr<int32_t>() + segment.row_start,
@@ -268,9 +265,8 @@ void run_paged_decode_segment(const LlamaAttentionParams &params, const PagedAtt
         params.head_dim, params.ctx->stream());
 }
 
-bool try_run_segmented_sdpa_cuda(const LlamaAttentionParams &params, KVCache &kv_cache, int64_t rows,
-                                 int64_t num_seqs, int64_t max_blocks_per_seq, int64_t num_blocks,
-                                 int64_t block_size_bytes)
+bool try_run_segmented_sdpa_cuda(const LlamaAttentionParams &params, KVCache &kv_cache, int64_t rows, int64_t num_seqs,
+                                 int64_t max_blocks_per_seq, int64_t num_blocks, int64_t block_size_bytes)
 {
     std::vector<PagedAttentionQuerySegment> segments;
     if (!collect_query_segments(params, rows, num_seqs, segments) || !has_bulk_query(segments))
@@ -282,12 +278,10 @@ bool try_run_segmented_sdpa_cuda(const LlamaAttentionParams &params, KVCache &kv
     for (const PagedAttentionQuerySegment &segment : segments)
     {
         needs_host_block_table =
-            needs_host_block_table ||
-            (segment.query_length >= kSdpaMinQueryTokens && segment.query_start_position > 0);
+            needs_host_block_table || (segment.query_length >= kSdpaMinQueryTokens && segment.query_start_position > 0);
     }
-    if (needs_host_block_table &&
-        (params.metadata->host_block_tables == nullptr ||
-         params.metadata->host_block_table_count != params.metadata->block_tables->numel()))
+    if (needs_host_block_table && (params.metadata->host_block_tables == nullptr ||
+                                   params.metadata->host_block_table_count != params.metadata->block_tables->numel()))
     {
         return false;
     }
@@ -317,13 +311,11 @@ bool try_run_segmented_sdpa_cuda(const LlamaAttentionParams &params, KVCache &kv
     const int64_t first_len = can_run_batched_prefill ? segments.front().query_length : 0;
     const int64_t estimated_score_elements =
         segment_count * static_cast<int64_t>(params.num_attention_heads) * first_len * first_len;
-    can_run_batched_prefill =
-        can_run_batched_prefill && estimated_score_elements <= kMaxBatchedSdpaScoreElements;
+    can_run_batched_prefill = can_run_batched_prefill && estimated_score_elements <= kMaxBatchedSdpaScoreElements;
     for (int64_t index = 0; can_run_batched_prefill && index < segment_count; ++index)
     {
         const PagedAttentionQuerySegment &segment = segments[static_cast<size_t>(index)];
-        can_run_batched_prefill = segment.query_start_position == 0 &&
-                                  segment.query_length >= kSdpaMinQueryTokens &&
+        can_run_batched_prefill = segment.query_start_position == 0 && segment.query_length >= kSdpaMinQueryTokens &&
                                   static_cast<int64_t>(segment.query_length) == first_len &&
                                   segment.row_start == index * first_len;
     }
@@ -339,9 +331,8 @@ bool try_run_segmented_sdpa_cuda(const LlamaAttentionParams &params, KVCache &kv
         Tensor value = params.v->view({segment_count, first_len, params.num_key_value_heads, params.head_dim})
                            .permute({0, 2, 1, 3})
                            .contiguous();
-        Tensor attended =
-            at::scaled_dot_product_attention(query, key, value, std::nullopt, 0.0, true, std::nullopt,
-                                             params.num_attention_heads != params.num_key_value_heads);
+        Tensor attended = at::scaled_dot_product_attention(query, key, value, std::nullopt, 0.0, true, std::nullopt,
+                                                           params.num_attention_heads != params.num_key_value_heads);
         params.out->copy_(attended.permute({0, 2, 1, 3}).contiguous().view({rows, attention_hidden}));
         return true;
     }

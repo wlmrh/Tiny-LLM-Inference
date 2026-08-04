@@ -159,8 +159,8 @@ void populate_query_segments(const std::vector<PreparedRequestInfo> &request_inf
     for (const PreparedRequestInfo &info : request_infos)
     {
         const RequestData &req_data = *info.req_data;
-        prepared.query_segments.push_back(ops::PagedAttentionQuerySegment{
-            row_start, seq_index, req_data.num_computed_tokens, info.scheduled_tokens});
+        prepared.query_segments.push_back(
+            ops::PagedAttentionQuerySegment{row_start, seq_index, req_data.num_computed_tokens, info.scheduled_tokens});
         row_start += info.scheduled_tokens;
         ++seq_index;
     }
