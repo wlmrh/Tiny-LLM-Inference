@@ -329,6 +329,29 @@ void launch_write_paged_kv_cache_f32(const float *k, const float *v, const int32
                                      int64_t block_size_bytes, int32_t block_size_tokens, int32_t layer_id,
                                      int32_t kv_size, cudaStream_t stream);
 
+void launch_paged_attention_query_f32(const float *q, float *out, const int32_t *positions,
+                                      const int32_t *seq_indices, const int32_t *context_lens,
+                                      const int32_t *block_tables, const float *kv_pool_base, int64_t rows,
+                                      int64_t num_seqs, int64_t max_blocks_per_seq, int64_t num_blocks,
+                                      int64_t block_size_bytes, int32_t block_size_tokens, int32_t layer_id,
+                                      int32_t num_attention_heads, int32_t num_key_value_heads, int32_t head_dim,
+                                      cudaStream_t stream)
+{
+    if (rows <= 0 || num_attention_heads <= 0 || num_key_value_heads <= 0 || head_dim <= 0)
+    {
+        return;
+    }
+    const dim3 grid(static_cast<unsigned int>(rows), static_cast<unsigned int>(num_attention_heads));
+    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kFastAttentionMaxContextTokens)
+                                  ? static_cast<size_t>(head_dim)
+                                  : static_cast<size_t>(kFastAttentionMaxContextTokens);
+    const size_t shared_bytes = (static_cast<size_t>(kAttentionThreadsPerBlock) + aux_floats) * sizeof(float);
+    paged_attention_kernel<float><<<grid, kAttentionThreadsPerBlock, shared_bytes, stream>>>(
+        q, out, positions, seq_indices, context_lens, block_tables, kv_pool_base, rows, num_seqs, max_blocks_per_seq,
+        num_blocks, block_size_bytes, block_size_tokens, layer_id, num_attention_heads, num_key_value_heads, head_dim);
+    CHECK_CUDA(cudaGetLastError());
+}
+
 void launch_paged_attention_f32(const float *q, const float *k, const float *v, float *out, const int32_t *positions,
                                 const int32_t *seq_indices, const int32_t *context_lens, const int32_t *block_tables,
                                 float *kv_pool_base, int64_t rows, int64_t num_seqs, int64_t max_blocks_per_seq,
@@ -344,16 +367,9 @@ void launch_paged_attention_f32(const float *q, const float *k, const float *v, 
     launch_write_paged_kv_cache_f32(k, v, positions, seq_indices, block_tables, kv_pool_base, rows, num_seqs,
                                     max_blocks_per_seq, num_blocks, block_size_bytes, block_size_tokens, layer_id,
                                     kv_size, stream);
-
-    const dim3 grid(static_cast<unsigned int>(rows), static_cast<unsigned int>(num_attention_heads));
-    const size_t aux_floats = static_cast<size_t>(head_dim) > static_cast<size_t>(kFastAttentionMaxContextTokens)
-                                  ? static_cast<size_t>(head_dim)
-                                  : static_cast<size_t>(kFastAttentionMaxContextTokens);
-    const size_t shared_bytes = (static_cast<size_t>(kAttentionThreadsPerBlock) + aux_floats) * sizeof(float);
-    paged_attention_kernel<float><<<grid, kAttentionThreadsPerBlock, shared_bytes, stream>>>(
-        q, out, positions, seq_indices, context_lens, block_tables, kv_pool_base, rows, num_seqs, max_blocks_per_seq,
-        num_blocks, block_size_bytes, block_size_tokens, layer_id, num_attention_heads, num_key_value_heads, head_dim);
-    CHECK_CUDA(cudaGetLastError());
+    launch_paged_attention_query_f32(q, out, positions, seq_indices, context_lens, block_tables, kv_pool_base, rows,
+                                     num_seqs, max_blocks_per_seq, num_blocks, block_size_bytes, block_size_tokens,
+                                     layer_id, num_attention_heads, num_key_value_heads, head_dim, stream);
 }
 
 void launch_write_paged_kv_cache_f32(const float *k, const float *v, const int32_t *positions,

@@ -27,9 +27,9 @@ struct PreparedInputs
     // Rows whose logits should be sampled, usually the final row of each request.
     std::vector<int32_t> sample_row_offsets;
 
-    // Precomputed once per scheduler step to avoid per-layer CUDA metadata CPU reads.
-    std::vector<ops::PagedAttentionPrefillSegment> prefill_segments; // contiuous token interval for each request
-    bool prefill_segments_valid = false;
+    std::vector<int32_t> host_block_tables;
+    std::vector<ops::PagedAttentionQuerySegment> query_segments;
+    bool query_segments_valid = false;
 };
 
 } // namespace tiny_llm

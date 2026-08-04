@@ -39,6 +39,7 @@ class FakeModel final : public tiny_llm::Model
     tiny_llm::Tensor forward(const tiny_llm::PreparedInputs &inputs, tiny_llm::RuntimeContext &ctx) override
     {
         capture_inputs(inputs);
+        last_runtime_scratch_present = ctx.attention_metadata().scratch != nullptr;
         tiny_llm::Tensor input_cpu = inputs.input_ids.cpu().contiguous();
         tiny_llm::Tensor logits = torch::full({inputs.input_ids.size(0), vocab_size()}, -1000.0f,
                                               torch::TensorOptions().dtype(torch::kFloat32).device(ctx.device()));
@@ -59,7 +60,14 @@ class FakeModel final : public tiny_llm::Model
     std::vector<int32_t> last_seq_indices;
     std::vector<int32_t> last_context_lens;
     std::vector<int64_t> last_block_tables_shape;
+    std::vector<int32_t> last_host_block_tables;
+    std::vector<int64_t> last_query_row_starts;
+    std::vector<int32_t> last_query_seq_indices;
+    std::vector<int32_t> last_query_start_positions;
+    std::vector<int32_t> last_query_lengths;
     std::vector<int32_t> last_sample_row_offsets;
+    bool last_query_segments_valid = false;
+    bool last_runtime_scratch_present = false;
 
   private:
     void capture_inputs(const tiny_llm::PreparedInputs &inputs)
@@ -71,6 +79,19 @@ class FakeModel final : public tiny_llm::Model
         last_seq_indices = copy_int32_tensor(inputs.seq_indices);
         last_context_lens = copy_int32_tensor(inputs.context_lens);
         last_block_tables_shape = tiny_llm::tensor_shape(inputs.block_tables);
+        last_host_block_tables = inputs.host_block_tables;
+        last_query_row_starts.clear();
+        last_query_seq_indices.clear();
+        last_query_start_positions.clear();
+        last_query_lengths.clear();
+        for (const tiny_llm::ops::PagedAttentionQuerySegment &segment : inputs.query_segments)
+        {
+            last_query_row_starts.push_back(segment.row_start);
+            last_query_seq_indices.push_back(segment.seq_index);
+            last_query_start_positions.push_back(segment.query_start_position);
+            last_query_lengths.push_back(segment.query_length);
+        }
+        last_query_segments_valid = inputs.query_segments_valid;
         last_sample_row_offsets = inputs.sample_row_offsets;
     }
 };
@@ -153,6 +174,13 @@ TEST(ModelRunnerPreparedInputsTest, FlattensSchedulerOutputIntoRuntimeTensors)
     EXPECT_EQ(model.last_seq_indices, std::vector<int32_t>({0, 0, 0, 1}));
     EXPECT_EQ(model.last_context_lens, std::vector<int32_t>({8, 17}));
     EXPECT_EQ(model.last_block_tables_shape, std::vector<int64_t>({2, 2, 2}));
+    EXPECT_EQ(model.last_host_block_tables, std::vector<int32_t>({3, -1, 5, 6, 4, -1, 7, 8}));
+    EXPECT_EQ(model.last_query_row_starts, std::vector<int64_t>({0, 3}));
+    EXPECT_EQ(model.last_query_seq_indices, std::vector<int32_t>({0, 1}));
+    EXPECT_EQ(model.last_query_start_positions, std::vector<int32_t>({5, 16}));
+    EXPECT_EQ(model.last_query_lengths, std::vector<int32_t>({3, 1}));
+    EXPECT_TRUE(model.last_query_segments_valid);
+    EXPECT_TRUE(model.last_runtime_scratch_present);
 }
 
 TEST(ModelRunnerPreparedInputsTest, SamplesOnlyFinalRowForEachRequest)

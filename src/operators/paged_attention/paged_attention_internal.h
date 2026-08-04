@@ -43,6 +43,13 @@ void launch_write_paged_kv_cache_f32(const float *k, const float *v, const int32
                                      int64_t rows, int64_t num_seqs, int64_t max_blocks_per_seq, int64_t num_blocks,
                                      int64_t block_size_bytes, int32_t block_size_tokens, int32_t layer_id,
                                      int32_t kv_size, cudaStream_t stream);
+void launch_paged_attention_query_f32(const float *q, float *out, const int32_t *positions,
+                                      const int32_t *seq_indices, const int32_t *context_lens,
+                                      const int32_t *block_tables, const float *kv_pool_base, int64_t rows,
+                                      int64_t num_seqs, int64_t max_blocks_per_seq, int64_t num_blocks,
+                                      int64_t block_size_bytes, int32_t block_size_tokens, int32_t layer_id,
+                                      int32_t num_attention_heads, int32_t num_key_value_heads, int32_t head_dim,
+                                      cudaStream_t stream);
 void launch_paged_attention_f32(const float *q, const float *k, const float *v, float *out, const int32_t *positions,
                                 const int32_t *seq_indices, const int32_t *context_lens, const int32_t *block_tables,
                                 float *kv_pool_base, int64_t rows, int64_t num_seqs, int64_t max_blocks_per_seq,

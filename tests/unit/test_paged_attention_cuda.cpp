@@ -120,19 +120,19 @@ CaseResult run_prefill_then_decode(bool optimized, int32_t num_attention_heads, 
     tiny_llm::Tensor seq_indices_prefill = int_cuda(repeated(0, prefill_tokens), {prefill_tokens});
     tiny_llm::Tensor context_prefill = int_cuda({prefill_tokens}, {1});
     tiny_llm::Tensor blocks_prefill = int_cuda(block_table(block_count), {1, 1, block_count});
-    std::vector<tiny_llm::ops::PagedAttentionPrefillSegment> prefill_segments;
+    std::vector<tiny_llm::ops::PagedAttentionQuerySegment> prefill_segments;
     if (optimized)
     {
-        prefill_segments.push_back({0, 0, prefill_tokens});
+        prefill_segments.push_back({0, 0, 0, prefill_tokens});
     }
     tiny_llm::ops::PagedAttentionRuntimeMetadata prefill_metadata;
     prefill_metadata.seq_indices = &seq_indices_prefill;
     prefill_metadata.context_lens = &context_prefill;
     prefill_metadata.block_tables = &blocks_prefill;
-    prefill_metadata.prefill_segments = prefill_segments.empty() ? nullptr : prefill_segments.data();
-    prefill_metadata.prefill_segment_count = static_cast<int64_t>(prefill_segments.size());
+    prefill_metadata.query_segments = prefill_segments.empty() ? nullptr : prefill_segments.data();
+    prefill_metadata.query_segment_count = static_cast<int64_t>(prefill_segments.size());
     prefill_metadata.block_size_tokens = block_size_tokens;
-    prefill_metadata.prefill_segments_valid = !prefill_segments.empty();
+    prefill_metadata.query_segments_valid = !prefill_segments.empty();
     prefill_metadata.enabled = true;
     tiny_llm::ops::LlamaAttentionParams prefill;
     prefill.positions = &positions_prefill;
@@ -238,20 +238,20 @@ tiny_llm::Tensor run_two_sequence_prefill_then_decode(bool optimized)
     tiny_llm::Tensor seq_indices_prefill = int_cuda(prefill_seq_indices, {prefill_rows});
     tiny_llm::Tensor context_prefill = int_cuda({prefill_tokens_per_seq, prefill_tokens_per_seq}, {num_seqs});
     tiny_llm::Tensor blocks_prefill = int_cuda(block_table_values, {1, num_seqs, blocks_per_seq});
-    std::vector<tiny_llm::ops::PagedAttentionPrefillSegment> prefill_segments;
+    std::vector<tiny_llm::ops::PagedAttentionQuerySegment> prefill_segments;
     if (optimized)
     {
-        prefill_segments.push_back({0, 0, prefill_tokens_per_seq});
-        prefill_segments.push_back({prefill_tokens_per_seq, 1, prefill_tokens_per_seq});
+        prefill_segments.push_back({0, 0, 0, prefill_tokens_per_seq});
+        prefill_segments.push_back({prefill_tokens_per_seq, 1, 0, prefill_tokens_per_seq});
     }
     tiny_llm::ops::PagedAttentionRuntimeMetadata prefill_metadata;
     prefill_metadata.seq_indices = &seq_indices_prefill;
     prefill_metadata.context_lens = &context_prefill;
     prefill_metadata.block_tables = &blocks_prefill;
-    prefill_metadata.prefill_segments = prefill_segments.empty() ? nullptr : prefill_segments.data();
-    prefill_metadata.prefill_segment_count = static_cast<int64_t>(prefill_segments.size());
+    prefill_metadata.query_segments = prefill_segments.empty() ? nullptr : prefill_segments.data();
+    prefill_metadata.query_segment_count = static_cast<int64_t>(prefill_segments.size());
     prefill_metadata.block_size_tokens = block_size_tokens;
-    prefill_metadata.prefill_segments_valid = !prefill_segments.empty();
+    prefill_metadata.query_segments_valid = !prefill_segments.empty();
     prefill_metadata.enabled = true;
     tiny_llm::ops::LlamaAttentionParams prefill;
     prefill.positions = &positions_prefill;
@@ -294,6 +294,219 @@ tiny_llm::Tensor run_two_sequence_prefill_then_decode(bool optimized)
 
     unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
     return out_decode.detach().cpu();
+}
+
+struct ChunkedCaseResult
+{
+    tiny_llm::Tensor first;
+    tiny_llm::Tensor second;
+    tiny_llm::Tensor third;
+    tiny_llm::Tensor decode;
+};
+
+ChunkedCaseResult run_three_chunks_then_decode(bool optimized)
+{
+    setenv("TINYLLM_PAGED_ATTENTION_BACKEND", optimized ? "cuda" : "torch", 1);
+
+    constexpr int32_t num_attention_heads = 12;
+    constexpr int32_t num_key_value_heads = 2;
+    constexpr int32_t head_dim = 128;
+    constexpr int32_t block_size_tokens = 16;
+    constexpr int32_t chunk_tokens = 64;
+    constexpr int32_t prompt_tokens = 3 * chunk_tokens;
+    const int32_t kv_size = num_key_value_heads * head_dim;
+    const int32_t hidden_size = num_attention_heads * head_dim;
+    const int32_t block_count = (prompt_tokens + 1 + block_size_tokens - 1) / block_size_tokens;
+    const size_t block_floats = 2 * static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
+    tiny_llm::Tensor pool = torch::zeros({static_cast<int64_t>(block_count * block_floats)},
+                                         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    tiny_llm::BlockAllocator blocks(block_count, block_floats * sizeof(float), pool.data_ptr<float>(),
+                                    tiny_llm::ParallelConfig::cuda(0));
+    tiny_llm::KVCache::Config kv_cfg;
+    kv_cfg.num_layers = 1;
+    kv_cfg.block_size_tokens = block_size_tokens;
+    tiny_llm::KVCache kv_cache(kv_cfg, &blocks);
+    tiny_llm::ExecutionContext ctx(nullptr, nullptr, &kv_cache, tiny_llm::ParallelConfig::cuda(0));
+    const std::vector<int32_t> host_blocks = block_table(block_count);
+    tiny_llm::Tensor device_blocks = int_cuda(host_blocks, {1, 1, block_count});
+
+    auto run_chunk = [&](int32_t start, float offset) -> tiny_llm::Tensor
+    {
+        tiny_llm::Tensor query = make_values(chunk_tokens, hidden_size, offset);
+        tiny_llm::Tensor key = make_values(chunk_tokens, kv_size, offset + 10.0f);
+        tiny_llm::Tensor value = make_values(chunk_tokens, kv_size, offset + 20.0f);
+        tiny_llm::Tensor out = torch::empty_like(query);
+        tiny_llm::Tensor chunk_positions = int_cuda(positions(start, chunk_tokens), {chunk_tokens});
+        tiny_llm::Tensor seq_indices = int_cuda(repeated(0, chunk_tokens), {chunk_tokens});
+        tiny_llm::Tensor context_lens = int_cuda({start + chunk_tokens}, {1});
+        std::vector<tiny_llm::ops::PagedAttentionQuerySegment> segments;
+        if (optimized)
+        {
+            segments.push_back({0, 0, start, chunk_tokens});
+        }
+        tiny_llm::ops::PagedAttentionRuntimeScratch scratch;
+        tiny_llm::ops::PagedAttentionRuntimeMetadata metadata;
+        metadata.seq_indices = &seq_indices;
+        metadata.context_lens = &context_lens;
+        metadata.block_tables = &device_blocks;
+        metadata.host_block_tables = host_blocks.data();
+        metadata.host_block_table_count = static_cast<int64_t>(host_blocks.size());
+        metadata.query_segments = segments.empty() ? nullptr : segments.data();
+        metadata.query_segment_count = static_cast<int64_t>(segments.size());
+        metadata.scratch = &scratch;
+        metadata.block_size_tokens = block_size_tokens;
+        metadata.query_segments_valid = !segments.empty();
+        metadata.enabled = true;
+
+        tiny_llm::ops::LlamaAttentionParams params;
+        params.positions = &chunk_positions;
+        params.q = &query;
+        params.k = &key;
+        params.v = &value;
+        params.out = &out;
+        params.ctx = &ctx;
+        params.metadata = &metadata;
+        params.layer_id = 0;
+        params.num_attention_heads = num_attention_heads;
+        params.num_key_value_heads = num_key_value_heads;
+        params.head_dim = head_dim;
+        tiny_llm::ops::llama_attention_forward(params);
+        check_cuda(cudaDeviceSynchronize(), "chunked prefill synchronize");
+        return out.detach().cpu();
+    };
+
+    ChunkedCaseResult result;
+    result.first = run_chunk(0, 201.0f);
+    result.second = run_chunk(chunk_tokens, 301.0f);
+    result.third = run_chunk(2 * chunk_tokens, 401.0f);
+
+    tiny_llm::Tensor query = make_values(1, hidden_size, 501.0f);
+    tiny_llm::Tensor key = make_values(1, kv_size, 511.0f);
+    tiny_llm::Tensor value = make_values(1, kv_size, 521.0f);
+    tiny_llm::Tensor out = torch::empty_like(query);
+    tiny_llm::Tensor decode_position = int_cuda({prompt_tokens}, {1});
+    tiny_llm::Tensor seq_index = int_cuda({0}, {1});
+    tiny_llm::Tensor context_len = int_cuda({prompt_tokens + 1}, {1});
+    tiny_llm::ops::PagedAttentionRuntimeMetadata decode_metadata;
+    decode_metadata.seq_indices = &seq_index;
+    decode_metadata.context_lens = &context_len;
+    decode_metadata.block_tables = &device_blocks;
+    decode_metadata.block_size_tokens = block_size_tokens;
+    decode_metadata.enabled = true;
+    tiny_llm::ops::LlamaAttentionParams decode;
+    decode.positions = &decode_position;
+    decode.q = &query;
+    decode.k = &key;
+    decode.v = &value;
+    decode.out = &out;
+    decode.ctx = &ctx;
+    decode.metadata = &decode_metadata;
+    decode.layer_id = 0;
+    decode.num_attention_heads = num_attention_heads;
+    decode.num_key_value_heads = num_key_value_heads;
+    decode.head_dim = head_dim;
+    tiny_llm::ops::llama_attention_forward(decode);
+    check_cuda(cudaDeviceSynchronize(), "chunked decode synchronize");
+    result.decode = out.detach().cpu();
+
+    unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
+    return result;
+}
+
+tiny_llm::Tensor run_mixed_chunked_prefill_and_decode(bool optimized)
+{
+    setenv("TINYLLM_PAGED_ATTENTION_BACKEND", optimized ? "cuda" : "torch", 1);
+
+    constexpr int32_t num_attention_heads = 12;
+    constexpr int32_t num_key_value_heads = 2;
+    constexpr int32_t head_dim = 128;
+    constexpr int32_t block_size_tokens = 16;
+    constexpr int32_t max_blocks_per_seq = 8;
+    constexpr int32_t num_seqs = 2;
+    constexpr int32_t total_blocks = 9;
+    const int32_t kv_size = num_key_value_heads * head_dim;
+    const int32_t hidden_size = num_attention_heads * head_dim;
+    const size_t block_floats = 2 * static_cast<size_t>(block_size_tokens) * static_cast<size_t>(kv_size);
+    tiny_llm::Tensor pool = torch::zeros({static_cast<int64_t>(total_blocks * block_floats)},
+                                         torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    tiny_llm::BlockAllocator blocks(total_blocks, block_floats * sizeof(float), pool.data_ptr<float>(),
+                                    tiny_llm::ParallelConfig::cuda(0));
+    tiny_llm::KVCache::Config kv_cfg;
+    kv_cfg.num_layers = 1;
+    kv_cfg.block_size_tokens = block_size_tokens;
+    tiny_llm::KVCache kv_cache(kv_cfg, &blocks);
+    tiny_llm::ExecutionContext ctx(nullptr, nullptr, &kv_cache, tiny_llm::ParallelConfig::cuda(0));
+
+    std::vector<int32_t> host_blocks;
+    for (int32_t block = 0; block < max_blocks_per_seq; ++block)
+    {
+        host_blocks.push_back(block);
+    }
+    host_blocks.push_back(8);
+    for (int32_t block = 1; block < max_blocks_per_seq; ++block)
+    {
+        host_blocks.push_back(-1);
+    }
+    tiny_llm::Tensor device_blocks = int_cuda(host_blocks, {1, num_seqs, max_blocks_per_seq});
+
+    auto run_step = [&](const std::vector<int32_t> &step_positions, const std::vector<int32_t> &step_seq_indices,
+                        const std::vector<int32_t> &step_context_lens,
+                        std::vector<tiny_llm::ops::PagedAttentionQuerySegment> segments,
+                        float offset) -> tiny_llm::Tensor
+    {
+        const int64_t rows = static_cast<int64_t>(step_positions.size());
+        tiny_llm::Tensor query = make_values(rows, hidden_size, offset);
+        tiny_llm::Tensor key = make_values(rows, kv_size, offset + 10.0f);
+        tiny_llm::Tensor value = make_values(rows, kv_size, offset + 20.0f);
+        tiny_llm::Tensor out = torch::empty_like(query);
+        tiny_llm::Tensor positions_tensor = int_cuda(step_positions, {rows});
+        tiny_llm::Tensor seq_indices_tensor = int_cuda(step_seq_indices, {rows});
+        tiny_llm::Tensor context_lens_tensor = int_cuda(step_context_lens, {num_seqs});
+        tiny_llm::ops::PagedAttentionRuntimeScratch scratch;
+        tiny_llm::ops::PagedAttentionRuntimeMetadata metadata;
+        metadata.seq_indices = &seq_indices_tensor;
+        metadata.context_lens = &context_lens_tensor;
+        metadata.block_tables = &device_blocks;
+        metadata.host_block_tables = host_blocks.data();
+        metadata.host_block_table_count = static_cast<int64_t>(host_blocks.size());
+        metadata.query_segments = optimized && !segments.empty() ? segments.data() : nullptr;
+        metadata.query_segment_count = optimized ? static_cast<int64_t>(segments.size()) : 0;
+        metadata.scratch = &scratch;
+        metadata.block_size_tokens = block_size_tokens;
+        metadata.query_segments_valid = optimized && !segments.empty();
+        metadata.enabled = true;
+
+        tiny_llm::ops::LlamaAttentionParams params;
+        params.positions = &positions_tensor;
+        params.q = &query;
+        params.k = &key;
+        params.v = &value;
+        params.out = &out;
+        params.ctx = &ctx;
+        params.metadata = &metadata;
+        params.layer_id = 0;
+        params.num_attention_heads = num_attention_heads;
+        params.num_key_value_heads = num_key_value_heads;
+        params.head_dim = head_dim;
+        tiny_llm::ops::llama_attention_forward(params);
+        check_cuda(cudaDeviceSynchronize(), "mixed attention synchronize");
+        return out.detach().cpu();
+    };
+
+    run_step(positions(0, 64), repeated(0, 64), {64, 0}, {{0, 0, 0, 64}}, 601.0f);
+    run_step(positions(0, 8), repeated(1, 8), {64, 8}, {{0, 1, 0, 8}}, 701.0f);
+
+    std::vector<int32_t> mixed_positions = positions(64, 64);
+    mixed_positions.push_back(8);
+    std::vector<int32_t> mixed_seq_indices = repeated(0, 64);
+    mixed_seq_indices.push_back(1);
+    tiny_llm::Tensor result =
+        run_step(mixed_positions, mixed_seq_indices, {128, 9}, {{0, 0, 64, 64}, {64, 1, 8, 1}}, 801.0f);
+
+    unsetenv("TINYLLM_PAGED_ATTENTION_BACKEND");
+    return result;
 }
 
 void expect_optimized_matches_reference(int32_t num_attention_heads, int32_t num_key_value_heads, int32_t head_dim,
@@ -346,6 +559,35 @@ TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceForQwenShapeLongPre
         SCOPED_TRACE(testing::Message() << "prefill_tokens=" << prefill_tokens);
         expect_optimized_matches_reference(12, 2, 128, 16, prefill_tokens, 2e-4f);
     }
+}
+
+TEST(PagedAttentionCudaTest, ChunkedPrefillWithCachedPrefixMatchesReference)
+{
+    check_cuda(cudaSetDevice(0), "set CUDA device");
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    const ChunkedCaseResult reference = run_three_chunks_then_decode(false);
+    const ChunkedCaseResult optimized = run_three_chunks_then_decode(true);
+    expect_close(optimized.first, reference.first, 3e-4f);
+    expect_close(optimized.second, reference.second, 3e-4f);
+    expect_close(optimized.third, reference.third, 3e-4f);
+    expect_close(optimized.decode, reference.decode, 3e-4f);
+}
+
+TEST(PagedAttentionCudaTest, MixedChunkedPrefillAndDecodeMatchesReference)
+{
+    check_cuda(cudaSetDevice(0), "set CUDA device");
+    if (!torch::cuda::is_available())
+    {
+        GTEST_SKIP() << "CUDA is not available.";
+    }
+
+    const tiny_llm::Tensor reference = run_mixed_chunked_prefill_and_decode(false);
+    const tiny_llm::Tensor optimized = run_mixed_chunked_prefill_and_decode(true);
+    expect_close(optimized, reference, 3e-4f);
 }
 
 TEST(PagedAttentionCudaTest, OptimizedBackendMatchesReferenceAboveSingleBlockThreadLimit)

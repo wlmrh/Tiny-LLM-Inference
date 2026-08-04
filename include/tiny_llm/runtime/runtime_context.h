@@ -23,6 +23,7 @@ class RuntimeContext
         : execution_(execution), attention_metadata_(attention_metadata), profiling_stats_(profiling_stats),
           profile_detail_enabled_(profile_detail_enabled)
     {
+        attention_metadata_.scratch = &attention_scratch_;
     }
 
     ExecutionContext &execution() const
@@ -50,6 +51,7 @@ class RuntimeContext
 
   private:
     ExecutionContext &execution_;
+    ops::PagedAttentionRuntimeScratch attention_scratch_{};
     ops::PagedAttentionRuntimeMetadata attention_metadata_{};
     RuntimeProfilingStats *profiling_stats_ = nullptr;
     bool profile_detail_enabled_ = false;

@@ -139,42 +139,35 @@ struct PreparedRequestInfo
     int32_t required_blocks = 0;
 };
 
-void populate_prefill_segments(const std::vector<PreparedRequestInfo> &request_infos, int64_t total_tokens,
-                               PreparedInputs &prepared)
+void populate_query_segments(const std::vector<PreparedRequestInfo> &request_infos, int64_t total_tokens,
+                             PreparedInputs &prepared)
 {
-    prepared.prefill_segments.clear();
-    prepared.prefill_segments_valid = false;
-    if (total_tokens < 64 || request_infos.empty())
+    prepared.query_segments.clear();
+    prepared.query_segments_valid = false;
+    if (request_infos.empty())
     {
         return;
     }
 
     int64_t row_start = 0;
     int32_t seq_index = 0;
-    prepared.prefill_segments.reserve(request_infos.size());
+    prepared.query_segments.reserve(request_infos.size());
     for (const PreparedRequestInfo &info : request_infos)
     {
         const RequestData &req_data = *info.req_data;
-        const bool full_prompt_prefill =
-            req_data.num_computed_tokens == 0 && info.scheduled_tokens == req_data.prompt_token_count;
-        if (!full_prompt_prefill)
-        {
-            prepared.prefill_segments.clear();
-            return;
-        }
-        prepared.prefill_segments.push_back(
-            ops::PagedAttentionPrefillSegment{row_start, seq_index, info.scheduled_tokens});
+        prepared.query_segments.push_back(ops::PagedAttentionQuerySegment{
+            row_start, seq_index, req_data.num_computed_tokens, info.scheduled_tokens});
         row_start += info.scheduled_tokens;
         ++seq_index;
     }
 
     if (row_start == total_tokens)
     {
-        prepared.prefill_segments_valid = !prepared.prefill_segments.empty();
+        prepared.query_segments_valid = !prepared.query_segments.empty();
         return;
     }
 
-    prepared.prefill_segments.clear();
+    prepared.query_segments.clear();
 }
 
 int32_t required_block_count(int32_t context_len, int32_t block_size_tokens)
@@ -667,7 +660,8 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput &out
     prepared.context_lens = make_int32_tensor_from_host(context_values, {request_count}, runtime_device, kCaller);
     prepared.block_tables = make_int32_tensor_from_host(
         block_table_values, {num_layers, request_count, max_blocks_per_seq}, runtime_device, kCaller);
-    populate_prefill_segments(request_infos, total_tokens, prepared);
+    prepared.host_block_tables = std::move(block_table_values);
+    populate_query_segments(request_infos, total_tokens, prepared);
     return batch;
 }
 
@@ -687,10 +681,12 @@ Tensor ModelRunner::run_model(const PreparedInputs &inputs, ExecutionContext &ex
     metadata.seq_indices = &inputs.seq_indices;
     metadata.context_lens = &inputs.context_lens;
     metadata.block_tables = &inputs.block_tables;
-    metadata.prefill_segments = inputs.prefill_segments.empty() ? nullptr : inputs.prefill_segments.data();
-    metadata.prefill_segment_count = static_cast<int64_t>(inputs.prefill_segments.size());
+    metadata.host_block_tables = inputs.host_block_tables.empty() ? nullptr : inputs.host_block_tables.data();
+    metadata.host_block_table_count = static_cast<int64_t>(inputs.host_block_tables.size());
+    metadata.query_segments = inputs.query_segments.empty() ? nullptr : inputs.query_segments.data();
+    metadata.query_segment_count = static_cast<int64_t>(inputs.query_segments.size());
     metadata.block_size_tokens = kv_block_size_tokens_;
-    metadata.prefill_segments_valid = inputs.prefill_segments_valid;
+    metadata.query_segments_valid = inputs.query_segments_valid;
     metadata.enabled = true;
 
     RuntimeContext runtime_ctx(exec_ctx, metadata, profiling, runtime_detail_profile_enabled());

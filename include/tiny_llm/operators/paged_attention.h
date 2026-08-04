@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "tiny_llm/core/tensor.h"
 
@@ -11,11 +12,19 @@ class ExecutionContext;
 namespace ops
 {
 
-struct PagedAttentionPrefillSegment
+struct PagedAttentionQuerySegment
 {
     int64_t row_start = 0;
     int32_t seq_index = 0;
-    int32_t length = 0;
+    int32_t query_start_position = 0;
+    int32_t query_length = 0;
+};
+
+struct PagedAttentionRuntimeScratch
+{
+    Tensor contiguous_k;
+    Tensor contiguous_v;
+    std::vector<Tensor> offset_causal_masks;
 };
 
 struct PagedAttentionRuntimeMetadata
@@ -24,10 +33,13 @@ struct PagedAttentionRuntimeMetadata
     const Tensor *seq_indices = nullptr;
     const Tensor *context_lens = nullptr;
     const Tensor *block_tables = nullptr;
-    const PagedAttentionPrefillSegment *prefill_segments = nullptr;
-    int64_t prefill_segment_count = 0;
+    const int32_t *host_block_tables = nullptr;
+    int64_t host_block_table_count = 0;
+    const PagedAttentionQuerySegment *query_segments = nullptr;
+    int64_t query_segment_count = 0;
+    PagedAttentionRuntimeScratch *scratch = nullptr;
     int32_t block_size_tokens = 0;
-    bool prefill_segments_valid = false;
+    bool query_segments_valid = false;
     bool enabled = false;
 };
 
