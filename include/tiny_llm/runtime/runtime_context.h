@@ -50,8 +50,11 @@ class RuntimeContext
     }
 
   private:
+    // Non-owning execution state containing the device, CUDA stream, and persistent KV cache.
     ExecutionContext &execution_;
+    // Temporary SDPA storage shared across layers and released when this model step ends.
     ops::PagedAttentionRuntimeScratch attention_scratch_{};
+    // Non-owning scheduler metadata copied into the step context for all attention layers.
     ops::PagedAttentionRuntimeMetadata attention_metadata_{};
     RuntimeProfilingStats *profiling_stats_ = nullptr;
     bool profile_detail_enabled_ = false;

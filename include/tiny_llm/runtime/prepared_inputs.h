@@ -17,18 +17,27 @@ namespace tiny_llm
  */
 struct PreparedInputs
 {
-    Tensor input_ids;    // [num_total_tokens], int32, current token id
-    Tensor positions;    // [num_total_tokens], int32, offset of current token in the request
-    Tensor slot_mapping; // [num_total_tokens], int32, global KVCache index in global KV slot
-    Tensor seq_indices;  // [num_total_tokens], int32
-    Tensor context_lens; // [num_seqs], int32, total caluculated token after this step
-    Tensor block_tables; // [num_layers, num_seqs, max_blocks_per_seq], int32, logical page number projection
+    // Scheduler-selected tokens flattened request by request for the current model step.
+    Tensor input_ids; // [num_total_tokens], int32
+    // Absolute sequence position corresponding to each flattened token.
+    Tensor positions; // [num_total_tokens], int32
+    // Physical KV-cache slot assigned to each flattened token.
+    Tensor slot_mapping; // [num_total_tokens], int32
+    // Batch-local request index corresponding to each flattened token.
+    Tensor seq_indices; // [num_total_tokens], int32
+    // Valid context length of each request after this step finishes writing K/V.
+    Tensor context_lens; // [num_seqs], int32
+    // Per-layer mapping from logical sequence blocks to physical KV-cache blocks.
+    Tensor block_tables; // [num_layers, num_seqs, max_blocks_per_seq], int32
 
     // Rows whose logits should be sampled, usually the final row of each request.
     std::vector<int32_t> sample_row_offsets;
 
+    // CPU mirror retained once per scheduler step so attention layers do not copy block tables back from CUDA.
     std::vector<int32_t> host_block_tables;
+    // Describes the flattened query interval and absolute start position of every scheduled request.
     std::vector<ops::PagedAttentionQuerySegment> query_segments;
+    // True when query_segments form a complete, gap-free description of input_ids.
     bool query_segments_valid = false;
 };
 

@@ -352,7 +352,9 @@ std::vector<CompletionOutput> LLM::generate(const std::vector<std::string> &prom
 
     last_generation_profile_ = RuntimeProfilingStats{};
 
+    // Final output slot for each prompt in caller-provided order.
     std::vector<CompletionOutput> results(prompts.size());
+    // Maps internal request IDs back to their caller-visible output slots.
     std::unordered_map<uint64_t, size_t> request_to_index;
     request_to_index.reserve(prompts.size());
 

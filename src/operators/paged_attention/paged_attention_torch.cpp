@@ -52,6 +52,7 @@ Tensor kv_block_tensor(KVCache &kv_cache, int32_t block_id, int32_t block_size_t
 
 #if TINYLLM_ENABLE_CUDA
 constexpr int64_t kSdpaMinQueryTokens = 64;
+// Keep batched/math SDPA intermediates within the per-step memory budget.
 constexpr int64_t kMaxBatchedSdpaScoreElements = 16 * 1024 * 1024;
 constexpr int64_t kSdpaQueryTileTokens = 512;
 
@@ -152,9 +153,9 @@ void gather_paged_kv_context(const LlamaAttentionParams &params, KVCache &kv_cac
             throw std::runtime_error("llama_attention: invalid physical block id in host block table.");
         }
         key_blocks.push_back(
-            kv_block_tensor(kv_cache, block_id, metadata.block_size_tokens, kv_size, false));
+            kv_block_tensor(kv_cache, block_id, metadata.block_size_tokens, kv_size, /*value_block=*/false));
         value_blocks.push_back(
-            kv_block_tensor(kv_cache, block_id, metadata.block_size_tokens, kv_size, true));
+            kv_block_tensor(kv_cache, block_id, metadata.block_size_tokens, kv_size, /*value_block=*/true));
     }
 
     Tensor key_out = scratch.contiguous_k.narrow(0, 0, padded_tokens);

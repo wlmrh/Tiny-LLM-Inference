@@ -133,9 +133,13 @@ Tensor make_int32_tensor_from_host(const std::vector<int32_t> &values, const std
 
 struct PreparedRequestInfo
 {
+    // Non-owning scheduler record for this request; valid for the duration of prepare_batch().
     const RequestData *req_data = nullptr;
+    // Consecutive tokens assigned to this request in the current scheduler step.
     int32_t scheduled_tokens = 0;
+    // Total valid sequence length after the scheduled tokens are written to KV cache.
     int32_t context_len = 0;
+    // Number of logical KV blocks needed to cover context_len.
     int32_t required_blocks = 0;
 };
 
@@ -595,11 +599,17 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput &out
         batch.scheduling_stats.prefill_tokens + batch.scheduling_stats.decode_tokens;
     batch.scheduling_stats.profiled_steps = batch.scheduling_stats.scheduled_tokens > 0 ? 1 : 0;
 
+    // Scheduled token IDs flattened in request-major order, shape [total_tokens].
     std::vector<int32_t> input_values(static_cast<size_t>(total_tokens), 0);
+    // Absolute zero-based token positions within each request, shape [total_tokens].
     std::vector<int32_t> position_values(static_cast<size_t>(total_tokens), 0);
+    // KV slot indices derived from the layer-0 block table, shape [total_tokens].
     std::vector<int32_t> slot_values(static_cast<size_t>(total_tokens), 0);
+    // Batch-local request index for each flattened token, shape [total_tokens].
     std::vector<int32_t> seq_index_values(static_cast<size_t>(total_tokens), 0);
+    // Computed context length after this step for each request, shape [request_count].
     std::vector<int32_t> context_values(static_cast<size_t>(request_count), 0);
+    // Dense [num_layers, request_count, max_blocks_per_seq] block table, padded with -1.
     std::vector<int32_t> block_table_values(static_cast<size_t>(num_layers * request_count * max_blocks_per_seq), -1);
 
     int64_t flat_token_index = 0;
@@ -625,6 +635,7 @@ ModelRunner::PreparedBatch ModelRunner::prepare_batch(const SchedulerOutput &out
 
         for (int32_t i = 0; i < info.scheduled_tokens; ++i)
         {
+            // Absolute token position within this request.
             const int32_t position = req_data.num_computed_tokens + i;
             const int32_t logical_block_index = position / kv_block_size_tokens_;
             const int32_t token_id = req_data.new_token_ids[static_cast<size_t>(i)];

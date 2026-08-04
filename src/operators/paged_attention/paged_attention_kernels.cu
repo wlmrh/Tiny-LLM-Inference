@@ -52,6 +52,7 @@ __device__ int32_t block_id_for_position(const int32_t *block_tables, int64_t nu
     {
         return -1;
     }
+    // [layer, sequence, logical block] -> physical block ID.
     const int64_t block_index = static_cast<int64_t>(layer_id) * num_seqs * max_blocks_per_seq +
                                 static_cast<int64_t>(seq_index) * max_blocks_per_seq + logical_block;
     return block_tables[block_index];
@@ -77,6 +78,7 @@ template <> __device__ __nv_bfloat16 float_to_kv<__nv_bfloat16>(float value)
     return __float2bfloat16(value);
 }
 
+// One block writes one flattened token row to the paged KV cache.
 template <typename KVType>
 __global__ void write_paged_kv_cache_kernel(const float *k, const float *v, const int32_t *positions,
                                             const int32_t *seq_indices, const int32_t *block_tables,
@@ -105,9 +107,11 @@ __global__ void write_paged_kv_cache_kernel(const float *k, const float *v, cons
     const int32_t token_offset = position % block_size_tokens;
     KVType *block = reinterpret_cast<KVType *>(reinterpret_cast<char *>(kv_pool_base) +
                                                static_cast<int64_t>(block_id) * block_size_bytes);
+    // Physical block layout: K[block_size_tokens, kv_size], then V[block_size_tokens, kv_size].
     KVType *key_dst = block + static_cast<int64_t>(token_offset) * kv_size;
     KVType *value_dst =
         block + static_cast<int64_t>(block_size_tokens) * kv_size + static_cast<int64_t>(token_offset) * kv_size;
+    // Split the K/V hidden dimension across threads.
     const int64_t row_offset = row * kv_size;
     for (int32_t dim = static_cast<int32_t>(threadIdx.x); dim < kv_size; dim += static_cast<int32_t>(blockDim.x))
     {
@@ -116,6 +120,7 @@ __global__ void write_paged_kv_cache_kernel(const float *k, const float *v, cons
     }
 }
 
+// One block computes one query row and head.
 template <typename KVType>
 __global__ void paged_attention_kernel(const float *q, float *out, const int32_t *positions, const int32_t *seq_indices,
                                        const int32_t *context_lens, const int32_t *block_tables,
@@ -125,8 +130,8 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
                                        int32_t num_key_value_heads, int32_t head_dim)
 {
     extern __shared__ float shared[];
-    float *reduce = shared;
-    float *aux = shared + blockDim.x;
+    float *reduce = shared;           // Block reduction buffer.
+    float *aux = shared + blockDim.x; // Scores or weighted-value accumulator.
 
     const int64_t row = static_cast<int64_t>(blockIdx.x);
     const int32_t q_head = static_cast<int32_t>(blockIdx.y);
@@ -137,6 +142,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
     }
 
     const int32_t kv_size = num_key_value_heads * head_dim;
+    // Map grouped query heads to their shared KV head.
     const int32_t group_size = num_attention_heads / num_key_value_heads;
     const int32_t kv_head = q_head / group_size;
     const int32_t seq_index = seq_indices[row];
@@ -149,7 +155,8 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
     const float scale = rsqrtf(static_cast<float>(head_dim));
     const int64_t q_row_offset = row * static_cast<int64_t>(num_attention_heads) * head_dim;
     const int64_t q_head_offset = q_row_offset + static_cast<int64_t>(q_head) * head_dim;
-    const int32_t context_tokens = position + 1;
+    const int32_t context_tokens = position + 1; // Causal range: [0, position].
+    // Cache short-context scores in shared memory.
     if (context_tokens <= kFastAttentionMaxContextTokens && head_dim <= static_cast<int32_t>(blockDim.x))
     {
         float local_score = -FLT_MAX;
@@ -174,6 +181,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
                 local_score = fmaxf(local_score, scaled_score);
             }
         }
+        // Softmax maximum.
         reduce[tid] = local_score;
         __syncthreads();
         for (int32_t stride = static_cast<int32_t>(blockDim.x) / 2; stride > 0; stride >>= 1)
@@ -186,6 +194,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
         }
         const float max_score = reduce[0];
 
+        // Softmax denominator.
         float local_sum = 0.0f;
         for (int32_t src_pos = tid; src_pos < context_tokens; src_pos += static_cast<int32_t>(blockDim.x))
         {
@@ -207,6 +216,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
             return;
         }
 
+        // One thread accumulates one output dimension.
         if (tid < head_dim)
         {
             float accum = 0.0f;
@@ -231,6 +241,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
         return;
     }
 
+    // Long-context path: recompute QK instead of storing all scores.
     float local_max = -FLT_MAX;
     for (int32_t src_pos = tid; src_pos <= position; src_pos += static_cast<int32_t>(blockDim.x))
     {
@@ -264,12 +275,14 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
     }
     const float max_score = reduce[0];
 
+    // Shared weighted-value accumulator.
     for (int32_t dim = tid; dim < head_dim; dim += static_cast<int32_t>(blockDim.x))
     {
         aux[dim] = 0.0f;
     }
     __syncthreads();
 
+    // Recompute QK and accumulate softmax-weighted V.
     float local_sum = 0.0f;
     for (int32_t src_pos = tid; src_pos <= position; src_pos += static_cast<int32_t>(blockDim.x))
     {
@@ -317,6 +330,7 @@ __global__ void paged_attention_kernel(const float *q, float *out, const int32_t
         return;
     }
 
+    // Normalize the weighted value sum.
     for (int32_t dim = tid; dim < head_dim; dim += static_cast<int32_t>(blockDim.x))
     {
         out[q_head_offset + dim] = aux[dim] / score_sum;
@@ -382,6 +396,7 @@ void launch_write_paged_kv_cache_f32(const float *k, const float *v, const int32
     {
         return;
     }
+    // One block handles one token row.
     write_paged_kv_cache_kernel<float><<<static_cast<unsigned int>(rows), kThreadsPerBlock, 0, stream>>>(
         k, v, positions, seq_indices, block_tables, kv_pool_base, rows, num_seqs, max_blocks_per_seq, num_blocks,
         block_size_bytes, block_size_tokens, layer_id, kv_size);

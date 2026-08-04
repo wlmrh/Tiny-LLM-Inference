@@ -17,8 +17,11 @@ enum class RequestStatus
 
 struct Request
 {
+    // Internal identifier assigned when the request enters the engine.
     uint64_t request_id = 0;
+    // Sampling configuration associated with this request.
     SamplingParams sampling_params;
+    // Current request lifecycle state.
     RequestStatus status = RequestStatus::WAITING;
     int32_t num_computed_tokens = 0;
     std::vector<int32_t> prompt_token_ids;
