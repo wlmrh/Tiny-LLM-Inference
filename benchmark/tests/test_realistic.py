@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,7 +20,7 @@ from suite.realistic import (
     select_trace_windows,
     sha256_text,
 )
-from run_realistic_benchmark import build_public_manifest
+from run_realistic_benchmark import build_public_manifest, build_reproduction_commands, parse_args
 from transformers_generate_benchmark import trim_generated_tokens_at_eos
 
 
@@ -35,6 +36,48 @@ class FakeTokenizer:
 
 
 class RealisticWorkloadTest(unittest.TestCase):
+    def test_realistic_cli_uses_current_python_unless_overridden(self):
+        required = ["run_realistic_benchmark.py", "--prepared-dir", "prepared", "--output-dir", "output"]
+        with patch.object(sys, "argv", required):
+            default_args = parse_args()
+        with patch.object(sys, "argv", [*required, "--vllm-python", "/opt/vllm/bin/python"]):
+            explicit_args = parse_args()
+
+        self.assertEqual(default_args.vllm_python, sys.executable)
+        self.assertEqual(explicit_args.vllm_python, "/opt/vllm/bin/python")
+
+    def test_reproduction_commands_use_portable_paths_and_resolved_options(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "config": "benchmark/configs/custom.json",
+                "config_data": {
+                    "sources": {
+                        "burstgpt": {"filename": "trace.csv"},
+                        "oasst1": {"filename": "trees.jsonl.gz"},
+                    }
+                },
+                "tinyllm_binary": "build/cuda-release/benchmark/llama_engine_benchmark",
+                "vllm_python": "/private/venvs/vllm/bin/python",
+                "artifact_checksum_file": "/private/artifacts/checksum.txt",
+                "phase": "all",
+                "resume": True,
+            },
+        )()
+
+        commands = build_reproduction_commands(args)
+
+        self.assertIn("benchmark/configs/custom.json", commands["prepare"])
+        self.assertIn("<dataset-root>/raw/burstgpt/trace.csv", commands["prepare"])
+        self.assertIn("<model-dir>", commands["run"])
+        self.assertIn("<python-with-vllm>", commands["run"])
+        self.assertIn("build/cuda-release/benchmark/llama_engine_benchmark", commands["run"])
+        self.assertIn("<artifact-checksum-file>", commands["run"])
+        self.assertIn("--resume", commands["run"])
+        self.assertNotIn("/private/", commands["prepare"] + commands["run"])
+        self.assertNotIn("/root/autodl-tmp", commands["prepare"] + commands["run"])
+
     def test_oasst_tree_reconstruction_ends_with_user(self):
         tree = {
             "message_id": "root",

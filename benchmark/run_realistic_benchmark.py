@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import shlex
 import statistics
 import subprocess
 import sys
@@ -58,7 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="benchmark/configs/qwen25_realistic_v1.json")
     parser.add_argument("--model-dir", default="/models/Qwen2.5-1.5B-Instruct")
     parser.add_argument("--tinyllm-binary", default="build/cuda-release/benchmark/llama_engine_benchmark")
-    parser.add_argument("--vllm-python", default="/root/autodl-tmp/venvs/vllm/bin/python")
+    parser.add_argument("--vllm-python", default=sys.executable)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--publish-dir")
     parser.add_argument("--artifact-checksum-file")
@@ -213,6 +214,49 @@ def build_public_manifest(
     }
     manifest.pop("model_dir", None)
     return manifest
+
+
+def build_reproduction_commands(args: argparse.Namespace) -> Dict[str, str]:
+    sources = args.config_data["sources"]
+    prepare_command = [
+        "python3",
+        "benchmark/prepare_realistic_workload.py",
+        "--config",
+        args.config,
+        "--burstgpt",
+        f"<dataset-root>/raw/burstgpt/{sources['burstgpt']['filename']}",
+        "--oasst",
+        f"<dataset-root>/raw/oasst1/{sources['oasst1']['filename']}",
+        "--model-dir",
+        "<model-dir>",
+        "--output-dir",
+        "<dataset-root>/generated",
+    ]
+    run_command = [
+        "python3",
+        "benchmark/run_realistic_benchmark.py",
+        "--prepared-dir",
+        "<dataset-root>/generated",
+        "--config",
+        args.config,
+        "--model-dir",
+        "<model-dir>",
+        "--tinyllm-binary",
+        args.tinyllm_binary,
+        "--vllm-python",
+        "<python-with-vllm>",
+        "--output-dir",
+        "<artifact-root>/run",
+        "--publish-dir",
+        "<publish-dir>",
+        "--phase",
+        args.phase,
+    ]
+    if args.artifact_checksum_file:
+        run_command.extend(["--artifact-checksum-file", "<artifact-checksum-file>"])
+    if args.resume:
+        run_command.append("--resume")
+    return {"prepare": shlex.join(prepare_command), "run": shlex.join(run_command)}
 
 
 def range_summary(values: List[float]) -> Dict[str, float]:
@@ -790,23 +834,7 @@ def publish(args: argparse.Namespace, prepared: Path, output: Path, trace: Dict[
         ["git", "rev-parse", "HEAD"], check=False, capture_output=True, text=True
     ).stdout.strip()
     manifest["configuration"] = args.config_data
-    manifest["commands"] = {
-        "prepare": (
-            "python3 benchmark/prepare_realistic_workload.py "
-            "--config benchmark/configs/qwen25_realistic_v1.json "
-            "--burstgpt <dataset-root>/raw/burstgpt/BurstGPT_without_fails_3.csv "
-            "--oasst <dataset-root>/raw/oasst1/2023-04-12_oasst_ready.trees.jsonl.gz "
-            "--model-dir /models/Qwen2.5-1.5B-Instruct --output-dir <dataset-root>/generated"
-        ),
-        "run": (
-            "python3 benchmark/run_realistic_benchmark.py --prepared-dir <dataset-root>/generated "
-            "--config benchmark/configs/qwen25_realistic_v1.json "
-            "--model-dir /models/Qwen2.5-1.5B-Instruct "
-            "--tinyllm-binary build/cuda-release/benchmark/llama_engine_benchmark "
-            "--vllm-python /root/autodl-tmp/venvs/vllm/bin/python "
-            "--output-dir <artifact-root>/run --publish-dir benchmark/reports/realistic-v1 --phase all --resume"
-        ),
-    }
+    manifest["commands"] = build_reproduction_commands(args)
     if args.artifact_checksum_file:
         checksum_text = Path(args.artifact_checksum_file).read_text(encoding="utf-8").strip()
         manifest["raw_artifact"] = {

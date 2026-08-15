@@ -1,7 +1,7 @@
 {
   "label": "qwen25_week1_open_loop",
   "model_dir": "/models/Qwen2.5-1.5B-Instruct",
-  "tinyllm_binary": "build-cuda/benchmark/llama_engine_benchmark",
+  "tinyllm_binary": "build/cuda-release/benchmark/llama_engine_benchmark",
   "device": "cuda:0",
   "backends": ["tinyllm"],
   "defaults": {

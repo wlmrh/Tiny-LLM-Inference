@@ -89,7 +89,13 @@ void print_tensor_digest(const tiny_llm::HFSafeTensorLoader &loader, const std::
 
 int main(int argc, char **argv)
 {
-    const std::string model_dir = (argc > 1) ? argv[1] : "/Users/tangqi/models/smollm2-135M";
+    if (argc < 2 || argc > 3)
+    {
+        std::cerr << "Usage: " << argv[0] << " <model_dir> [weight_file]" << std::endl;
+        return 2;
+    }
+
+    const std::string model_dir = argv[1];
     const std::string weight_file = (argc > 2) ? argv[2] : "model.safetensors";
 
     try

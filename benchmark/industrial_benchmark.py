@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 DEFAULT_MODEL_DIR = "/models/Qwen2.5-1.5B-Instruct"
-DEFAULT_TINYLLM_BINARY = "build-cuda/benchmark/llama_engine_benchmark"
+DEFAULT_TINYLLM_BINARY = "build/cuda-release/benchmark/llama_engine_benchmark"
 DEFAULT_DEVICE = "cuda:0"
 VALID_BACKENDS = ("tinyllm", "transformers", "vllm")
 

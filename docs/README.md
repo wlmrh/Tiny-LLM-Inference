@@ -5,9 +5,8 @@ This directory contains the current English documentation for the Tiny-LLM-Infer
 ## Core Documents
 
 - [Architecture](Architecture.md): end-to-end runtime architecture, ownership boundaries, fixed-layout SVG architecture map, execution flow, data flow, and build layout.
-- [Design Review Notes](Design_Review_Notes.md): implementation issues, redundant fields, and cleanup candidates found while documenting the current code.
 - [Project Status](Project_Status.md): supported platforms, explicit non-goals, and performance-claim boundaries.
-- [v0.1.0 Release Checklist](Release_Checklist.md): validation evidence and remaining release-operator actions.
+- [v0.2.0 Release Checklist](Release_Checklist.md): release-candidate static evidence and remaining validation/operator actions.
 - [v0.1.0 Benchmark Report](../benchmark/reports/v0.1.0/README.md): pinned-model correctness, three-backend offline results, open-loop latency, and reproduction evidence.
 - [Realistic-v1 Benchmark Report](../benchmark/reports/realistic-v1/README.md): completed BurstGPT/OASST1 workload construction, three-backend offline cohorts, three `C_ref` calibrations, twelve 1,000-request trace replays, grouped latency, interpretation, and limitations.
 - [v0.1.0 GitHub Release](https://github.com/wlmrh/Tiny-LLM-Inference/releases/tag/v0.1.0): signed source release and downloadable benchmark artifacts.
@@ -28,7 +27,3 @@ This directory contains the current English documentation for the Tiny-LLM-Infer
 - [Operators](modules/Operators.md): matmul, RMSNorm, LLaMA helper ops, RoPE, and paged attention backends.
 - [Device and Execution Context](modules/Device_and_Execution_Context.md): CPU/CUDA device selection, execution context, runtime context, and profiling.
 - [Tools, Tests, and Benchmarks](modules/Tools_Tests_and_Benchmarks.md): project executables, comparison scripts, CTest registration, and benchmark policy.
-
-## Historical Documents
-
-The older files in this directory are retained as historical implementation notes. Where a legacy file name overlaps a current module, it now points to the corresponding current module document.

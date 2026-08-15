@@ -67,10 +67,11 @@ Responsibilities:
 - `seq_indices`
 - `context_lens`
 - `block_tables`
-- `prefill_segments`
-- `prefill_segment_count`
+- `host_block_tables` and `host_block_table_count`
+- `query_segments` and `query_segment_count`
+- step-scoped `scratch`
 - `block_size_tokens`
-- `prefill_segments_valid`
+- `query_segments_valid`
 - `enabled`
 
 `LlamaAttentionParams` contains the tensor pointers, execution context, metadata pointer, layer ID, and attention dimensions needed for one attention call.
@@ -96,8 +97,8 @@ The attention path validates:
 
 For paged attention, keys and values are written into the physical KV block for each scheduled token, then causal attention reads previous positions through `block_tables`.
 
-The CPU paged backend is straightforward and correctness-oriented. CUDA builds include custom paged-attention kernels and a full-prefill SDPA path when segment metadata is valid; some unsupported paths remain torch-backed reference bridges.
+The CPU paged backend is straightforward and correctness-oriented. FP32 CUDA attention uses custom kernels for decode and small query segments and segmented SDPA for sufficiently large full or chunked-prefill segments. Chunked prefill gathers its cached prefix and uses an offset-causal mask. BF16 KV uses its dedicated paged CUDA kernel; unsupported dispatches retain torch-backed reference bridges.
 
 ## Runtime Metadata Direction
 
-The current model path passes attention metadata explicitly through `RuntimeContext`. The thread-local metadata API is retained for compatibility and should be considered legacy for new code.
+The current model path passes attention metadata explicitly through `RuntimeContext`. New operators must not introduce process-wide or thread-local request metadata.

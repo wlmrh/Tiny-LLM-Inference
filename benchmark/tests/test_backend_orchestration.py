@@ -7,7 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from run_benchmark_suite import collect_environment, resolve_backends, resolved_scenario
+from industrial_benchmark import DEFAULT_TINYLLM_BINARY as INDUSTRIAL_DEFAULT_TINYLLM_BINARY
+from run_benchmark_suite import DEFAULT_TINYLLM_BINARY, collect_environment, resolve_backends, resolved_scenario
 
 
 def make_args(**overrides):
@@ -23,6 +24,11 @@ def make_args(**overrides):
 
 
 class BackendOrchestrationTest(unittest.TestCase):
+    def test_default_binary_uses_cuda_release_preset(self):
+        expected = "build/cuda-release/benchmark/llama_engine_benchmark"
+        self.assertEqual(DEFAULT_TINYLLM_BINARY, expected)
+        self.assertEqual(INDUSTRIAL_DEFAULT_TINYLLM_BINARY, expected)
+
     def test_missing_requested_backend_fails_by_default(self):
         with self.assertRaisesRegex(RuntimeError, "requested backend unavailable"):
             resolve_backends(make_args(), {"backends": ["vllm"]}, {})

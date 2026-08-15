@@ -8,5 +8,5 @@ authors:
     alias: wlmrh
 repository-code: "https://github.com/wlmrh/Tiny-LLM-Inference"
 license: Apache-2.0
-version: 0.1.0
-date-released: 2026-07-18
+version: 0.2.0
+date-released: 2026-08-15
