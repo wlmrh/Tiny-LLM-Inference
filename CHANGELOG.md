@@ -2,11 +2,16 @@
 
 All notable changes are documented here. Semantic versioning starts with the first release.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-15
 
-- Publish the realistic-v1 benchmark with pinned BurstGPT/OASST1 sources, heterogeneous per-request lengths,
-  three-backend offline cohorts, and twelve 1,000-request trace replays with request-level latency evidence.
-- Continue performance work on fully BF16-resident model execution.
+- Add the realistic-v1 BurstGPT/OASST1 workload pipeline, three-backend offline cohorts, and twelve 1,000-request
+  trace replays with request-level latency evidence.
+- Accelerate sufficiently large full and chunked-prefill attention segments with SDPA, including cached-prefix
+  gathering and offset-causal masking.
+- Fix incremental UTF-8 output decoding across token boundaries.
+- Keep tokenizer special-token state behind its implementation boundary and clarify empty model-directory errors.
+- Refresh architecture, benchmark, status, release, and reproduction documentation against the current runtime.
+- Remove unbuilt legacy tensor/RMSNorm example sources and the unvalidated Docker packaging path.
 
 ## [0.1.0] - 2026-07-18
 

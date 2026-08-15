@@ -1,8 +1,7 @@
 {
   "label": "qwen25_week1_offline",
   "model_dir": "/models/Qwen2.5-1.5B-Instruct",
-  "tinyllm_binary": "build-cuda/benchmark/llama_engine_benchmark",
-  "vllm_python": "/root/autodl-tmp/venvs/vllm/bin/python",
+  "tinyllm_binary": "build/cuda-release/benchmark/llama_engine_benchmark",
   "device": "cuda:0",
   "backends": ["tinyllm", "transformers", "vllm"],
   "defaults": {

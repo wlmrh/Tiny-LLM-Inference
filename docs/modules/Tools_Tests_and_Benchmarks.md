@@ -20,13 +20,13 @@ The top-level CMake build creates:
 - `tiny_llm_core`, `tiny_llm_models`, `tiny_llm_operators`: compatibility aliases.
 - `offline_llm`: example executable.
 - benchmark targets under `benchmark/`.
-- test and debug-tool targets under `tests/`.
+- test targets under `tests/` and debug-tool targets under `tools/`.
 
 Torch is discovered first so `TORCH_CXX_FLAGS` can be propagated globally before third-party code builds. `tokenizers-cpp` is fetched with `FetchContent` and requires Rust `cargo`.
 
 ## Debug and Alignment Tools
 
-- `hf_safetensor_dump`: inspect safetensor keys, shapes, dtype, and metadata.
+- `hf_safetensor_dump`: validate selected FP32 LLaMA weights and emit key, shape, and numeric digests for PyTorch comparison.
 - `llama_logits_dump`: dump final logits for Python/Transformers comparison.
 - `llama_tensor_dump`: dump intermediate tensors for alignment.
 - `llama_engine_generate`: run deterministic `temperature=0` generation and print JSONL outputs.
@@ -38,6 +38,8 @@ Torch is discovered first so `TORCH_CXX_FLAGS` can be propagated globally before
 - `<model_dir> <max_new_tokens> <prompt> [prompt...]`
 
 It auto-estimates KV blocks when `--kv-num-blocks` is omitted.
+
+`hf_safetensor_dump` requires `<model_dir>` and accepts an optional `[weight_file]`, which defaults to `model.safetensors`.
 
 ## Tests
 
@@ -138,27 +140,26 @@ python3 benchmark/run_benchmark_suite.py \
 
 ## Common Commands
 
-CPU build and test:
+CPU CI-equivalent build and test:
 
 ```bash
-cmake -S . -B build -DTINYLLM_ENABLE_CUDA=OFF
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+cmake --preset ci-cpu
+cmake --build --preset ci-cpu --parallel 2
+ctest --preset ci-cpu
 ```
 
 CUDA build:
 
 ```bash
-cmake -S . -B build-cuda \
-  -DTINYLLM_ENABLE_CUDA=ON \
-  -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
-  -DCMAKE_PREFIX_PATH="$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')"
-cmake --build build-cuda -j
+cmake --preset cuda-release \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc \
+  -DCUDAToolkit_ROOT=/usr/local/cuda-12.8
+cmake --build --preset cuda-release -j
 ```
 
 Generation smoke:
 
 ```bash
-./build/tools/llama_engine_generate /models/smollm2-135M 8 hello
-./build-cuda/tools/llama_engine_generate --device cuda:0 /models/smollm2-135M 8 hello
+./build/cpu-release/tools/llama_engine_generate /models/smollm2-135M 8 hello
+./build/cuda-release/tools/llama_engine_generate --device cuda:0 /models/smollm2-135M 8 hello
 ```

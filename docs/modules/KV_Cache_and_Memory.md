@@ -110,15 +110,18 @@ Interfaces:
 
 ## KV Block Layout
 
-Each physical block stores keys followed by values:
+Each physical block stores keys followed by values in the configured runtime KV dtype:
 
 ```text
-K region: block_size_tokens * (num_key_value_heads * head_dim) floats
-V region: block_size_tokens * (num_key_value_heads * head_dim) floats
+K region: block_size_tokens * (num_key_value_heads * head_dim) elements
+V region: block_size_tokens * (num_key_value_heads * head_dim) elements
 ```
 
 The required block byte size is:
 
 ```text
-2 * block_size_tokens * (num_key_value_heads * head_dim) * sizeof(float)
+2 * block_size_tokens * (num_key_value_heads * head_dim)
+  * runtime_dtype_size(kv_cache_dtype)
 ```
+
+FP32 elements use four bytes and BF16 elements use two bytes; block sizing must not assume `sizeof(float)`.

@@ -85,7 +85,7 @@ block_tables  [num_layers, num_seqs, max_blocks_per_seq] int32
 
 These tensors are token-aligned except for `context_lens` and `block_tables`.
 
-`PreparedInputs` may also carry derived full-prefill segment descriptors for the current step. These descriptors summarize contiguous full-prefill rows and are valid only for full prefill from position zero. They let CUDA full-prefill attention select the SDPA path without rereading CUDA metadata on the CPU in every decoder layer; they do not change the scheduler output contract.
+`PreparedInputs` also carries `query_segments` derived for the current step. Each segment identifies one request's contiguous flattened row range, batch-local sequence index, absolute query start position, and query length. Valid segments cover every input row without gaps, including full prefill, chunked prefill with a cached prefix, and decode. CUDA can use sufficiently large segments for SDPA; chunked prefill gathers the paged prefix and applies an offset-causal mask. This metadata does not change the scheduler output contract.
 
 ## Scheduling Model
 
@@ -98,7 +98,7 @@ Each `schedule()` call consumes a per-step token budget. Running requests are co
 
 Request work is split into:
 
-- prefill chunks: one or more prompt/context tokens, limited by `max_prefill_tokens_per_step`;
+- prefill chunks: one or more prompt/context tokens that share the step-wide `max_prefill_tokens_per_step` budget with context catch-up and decode;
 - decode steps: one generated-token replay per running request.
 
 KV capacity is allocated before a request is added to the step output. If there is not enough KV capacity, the scheduler preempts a tail running request, releases its KV state, resets its `num_computed_tokens`, and pushes it back to the front of `waiting` so its full prompt plus generated context can be recomputed.
@@ -110,10 +110,11 @@ KV capacity is allocated before a request is added to the step output. If there 
 Each physical block stores both key and value data:
 
 ```text
-2 * block_size_tokens * (num_key_value_heads * head_dim) * sizeof(float)
+2 * block_size_tokens * (num_key_value_heads * head_dim)
+  * runtime_dtype_size(kv_cache_dtype)
 ```
 
-The attention runtime receives `slot_mapping`, `seq_indices`, `context_lens`, rank-3 `block_tables`, and optional derived prefill segments through `RuntimeContext::attention_metadata()`. This is the current preferred path. Legacy thread-local paged-attention metadata APIs still exist for compatibility.
+The attention runtime receives `slot_mapping`, `seq_indices`, `context_lens`, rank-3 `block_tables`, their optional CPU mirror, and derived query segments through `RuntimeContext::attention_metadata()`. Per-step request metadata is explicit; there is no process-wide or thread-local paged-attention metadata path.
 
 ## Model Runtime
 
@@ -132,7 +133,7 @@ The model path supports LLaMA-family and Qwen2-family checkpoints that match thi
 
 `ParallelConfig` selects CPU or one CUDA device. Tensor and allocator paths dispatch by actual tensor/device state, not compile flag alone. CPU tensors remain valid in CUDA builds.
 
-CUDA builds add CUDA kernels for selected operators while retaining torch or CPU implementations where appropriate. The paged attention CUDA path now includes custom paged-attention kernels and a full-prefill SDPA path when precomputed segment descriptors are valid; fallback/reference paths remain for unsupported cases. This is still an evolving implementation, not a final optimized kernel.
+CUDA builds add CUDA kernels for selected operators while retaining torch or CPU implementations where appropriate. FP32 paged attention uses custom kernels for decode and small query segments and may use segmented SDPA for sufficiently large full or chunked-prefill segments. BF16 KV uses its dedicated paged CUDA kernel. Fallback/reference paths remain for unsupported dispatches; this is still an evolving implementation, not a final optimized kernel.
 
 ## Build Layout
 
@@ -161,4 +162,4 @@ Current supported behavior:
 - single-file `model.safetensors` and sorted sharded `*.safetensors` in `ModelRunner`;
 - default greedy decoding, HuggingFace-style repetition penalty, seeded temperature/top-k/top-p sampling, and stop-token/max-length termination.
 
-Important current limitations are recorded in [Design Review Notes](Design_Review_Notes.md).
+Current support boundaries and architecture constraints are recorded in [Project Status](Project_Status.md).

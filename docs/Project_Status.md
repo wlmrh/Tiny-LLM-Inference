@@ -19,16 +19,17 @@ refer to the provider-exposed benchmark host rather than a standard retail card 
 
 ## realistic-v1 benchmark baseline
 
-The realistic-v1 benchmark extends the release evidence without changing runtime behavior. It combines three
+The realistic-v1 benchmark evaluates runtime candidate `c353eb43d54143c9eb29af2843a0a68d7d98c9f7`, including
+the chunked-prefill SDPA path. It combines three
 non-overlapping 1,000-request BurstGPT timing/length windows with length-matched OASST1 prompt content, calibrates
 an experiment-local `C_ref` for each window, and replays each trace at 0.25, 0.50, 0.75, and 0.90 of that reference.
 All 12 replays completed 1,000/1,000 requests with complete request metrics and zero reported errors. An eight-prompt
 EOS-aware cohort produced exact pairwise token-ID agreement across TinyLLM, Transformers, and vLLM.
 
 The offline results are workload-sensitive: TinyLLM exceeded the tested Transformers baseline for short chat,
-medium chat, and long decode, but reached only 0.356x its median E2E throughput for long prefill; vLLM led every
-performance cohort. Across the three replay windows, median relative good-request ratio declined from 0.998 at
-0.25C_ref to 0.716 at 0.90C_ref. These results identify long-prefill and higher-load tail latency as current limits;
+medium chat, and long decode, while long prefill reached 0.980x its median E2E throughput; vLLM led every
+performance cohort. Across the three replay windows, median relative good-request ratio declined from 1.000 at
+0.25C_ref to 0.617 at 0.90C_ref. These results identify long-prefill and higher-load tail latency as current limits;
 they do not establish production capacity or serving parity. See the
 [realistic-v1 benchmark report](../benchmark/reports/realistic-v1/README.md) for the bound commit, environment,
 source revisions, model hashes, workload composition, full per-window results, and limitations.
@@ -50,11 +51,17 @@ attention kernel. CPU BF16 requests fail explicitly and never silently fall back
 - FP16 execution, fully BF16-resident weights/activations, or quantization.
 - Tensor/pipeline parallelism, serving protocols, prefix caching, LoRA, or multimodal models.
 
+## Current architecture constraints
+
+`LlamaModel` preallocates reusable buffers from the resolved maximum batch/token capacity. A flattened scheduled
+batch that exceeds that capacity fails fast rather than reallocating dynamically. Keep
+`ModelRunner::resolve_model_max_batch_size()` aligned with scheduler token budgets when scheduling policy changes.
+
 Performance reports apply only to their recorded model, dtype, hardware, workload, and software environment. Results
 against Transformers and vLLM are baseline comparisons, not claims of production parity with vLLM or TensorRT-LLM.
 
 ## BF16 maturity
 
-BF16 is an experimental CUDA path in v0.1.0. It has correctness coverage for GEMM boundaries, paged KV prefill/decode,
+BF16 remains an experimental CUDA path in v0.2.0. It has correctness coverage for GEMM boundaries, paged KV prefill/decode,
 and end-to-end deterministic generation. The current implementation retains FP32 master weights and FP32 boundaries,
 so it can use more memory and run slower than FP32 for small models. Benchmark both modes on the target workload.

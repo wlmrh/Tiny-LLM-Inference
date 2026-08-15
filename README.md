@@ -1,7 +1,7 @@
 # Tiny-LLM-Inference
 
 [![CI](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/wlmrh/Tiny-LLM-Inference/actions/workflows/ci.yml?query=event%3Apull_request)
-[![Release v0.1.0](docs/release-badge.svg)](https://github.com/wlmrh/Tiny-LLM-Inference/releases/latest)
+[![Release v0.2.0](docs/release-badge.svg)](https://github.com/wlmrh/Tiny-LLM-Inference/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Tiny-LLM-Inference is a compact C++17/CUDA decoder-only LLM inference engine inspired by vLLM. It covers the path from Hugging Face checkpoint loading to scheduling, paged KV cache management, model execution, sampling, and correctness/performance evaluation.
@@ -85,6 +85,10 @@ Public CI runs model-independent CPU tests. Model-backed tests use `TINYLLM_HF_T
 See [Project Status](docs/Project_Status.md) for the support matrix, non-goals, and benchmark-claim policy.
 
 ## Performance
+
+### v0.2.0 release candidate
+
+v0.2.0 packages the realistic workload pipeline, incremental UTF-8 decoding fix, tokenizer-state cleanup, and chunked-prefill SDPA path added after v0.1.0. The current realistic-v1 performance evidence remains bound to runtime candidate `c353eb4`; the release-preparation changes do not introduce a new performance claim.
 
 ### v0.1.0 release baseline
 

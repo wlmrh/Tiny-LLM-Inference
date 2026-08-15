@@ -16,6 +16,7 @@ from suite.workloads import load_tokenizer, write_workload_jsonl
 
 
 DEFAULT_CONFIG = Path("benchmark/configs/qwen25_quick.json")
+DEFAULT_TINYLLM_BINARY = "build/cuda-release/benchmark/llama_engine_benchmark"
 
 
 def parse_csv(text: str) -> List[str]:
@@ -75,7 +76,7 @@ def resolve_backends(
     if traffic_mode == "open-loop" and requested != ["tinyllm"]:
         raise RuntimeError("open-loop scenarios must request only the TinyLLM backend")
 
-    tinyllm_binary = Path(args.tinyllm_binary or config.get("tinyllm_binary", "build-cuda/benchmark/llama_engine_benchmark"))
+    tinyllm_binary = Path(args.tinyllm_binary or config.get("tinyllm_binary", DEFAULT_TINYLLM_BINARY))
     vllm_python = str(args.vllm_python or config.get("vllm_python", sys.executable))
     unavailable: Dict[str, str] = {}
     if "tinyllm" in requested and not tinyllm_binary.is_file():
@@ -199,7 +200,7 @@ def command_for(
         sys.executable,
         str(Path(__file__).resolve().with_name("run_benchmark_comparison.py")),
         "--tinyllm-binary",
-        str(args.tinyllm_binary or config.get("tinyllm_binary", "build-cuda/benchmark/llama_engine_benchmark")),
+        str(args.tinyllm_binary or config.get("tinyllm_binary", DEFAULT_TINYLLM_BINARY)),
         "--backend",
         ",".join(backends),
         "--device",

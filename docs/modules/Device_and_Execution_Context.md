@@ -8,8 +8,6 @@ This module centralizes CPU/CUDA device selection and per-step execution resourc
 - `src/runtime/parallel_config.cpp`
 - `include/tiny_llm/core/context.h`
 - `src/core/execution_context.cpp`
-- `include/tiny_llm/runtime/execution_context.h`
-- `src/runtime/execution_context.cpp`
 - `include/tiny_llm/runtime/runtime_context.h`
 - `include/tiny_llm/runtime/runtime_stats.h`
 - `include/tiny_llm/runtime/profiling.h`
@@ -47,6 +45,7 @@ Attributes:
 - `ws_`: non-owning `StackAllocator*`.
 - `kv_`: non-owning `KVCache*`.
 - `parallel_config_`: selected runtime device.
+- `compute_dtype_`: compute dtype selected for this execution context.
 
 Interfaces:
 
@@ -55,21 +54,11 @@ Interfaces:
 - `kv()`
 - `parallel_config()`
 - `device()`
+- `compute_dtype()`
 - `begin_step()`
 - `step_guard()`
 
 `StepGuard` calls `begin_step()` on construction. This resets workspace allocations for the current model step.
-
-## Runtime Global Execution Context
-
-`include/tiny_llm/runtime/execution_context.h` exposes a small compatibility layer around an internal process-wide context:
-
-- `initialize_global_execution_context(args, kv)`
-- `require_global_execution_context(caller)`
-- `resolve_execution_context(fallback_ctx)`
-- `reset_global_execution_context()`
-
-`ModelRunner` initializes this context to access execution resources. New model/operator code should still prefer explicit `RuntimeContext` data where available.
 
 ## `RuntimeContext`
 
@@ -90,7 +79,7 @@ Interfaces:
 - `profiling_stats()`
 - `profile_detail_enabled()`
 
-This object is the preferred way to pass per-step runtime metadata through model code.
+This object is the only supported way to pass per-step attention metadata through model code. `ModelRunner` owns or binds an `ExecutionContext` explicitly; no process-wide execution-context compatibility layer is used.
 
 ## Profiling
 
